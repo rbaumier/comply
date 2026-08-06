@@ -21,15 +21,14 @@ impl TextCheck for Check {
             let has_role = has_attr(elem.attrs, "role");
             let has_tabindex = has_attr(elem.attrs, "tabindex");
             if has_handler && has_role && !has_tabindex {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-interactive-supports-focus".into(),
-                    message: "Element with interactive handler and `role` must have `tabindex` to be focusable.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-interactive-supports-focus",
+                    "Element with interactive handler and `role` must have `tabindex` to be focusable.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

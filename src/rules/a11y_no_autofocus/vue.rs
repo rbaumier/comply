@@ -15,16 +15,15 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             if has_attr(elem.attrs, "autofocus") {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-autofocus".into(),
-                    message: "Avoid `autofocus` — it is disorienting for screen reader users."
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.attr_span("autofocus"),
+                    "a11y-no-autofocus",
+                    "Avoid `autofocus` — it is disorienting for screen reader users."
                         .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics
@@ -50,5 +49,30 @@ mod tests {
     fn allows_no_autofocus() {
         let source = "<template>\n  <input type=\"text\" />\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn anchors_on_the_autofocus_attribute() {
+        // The oxc backend anchors on the offending attribute, not the element,
+        // so the Vue backend names the same construct: the reported bytes are
+        // `autofocus` itself.
+        let source = "<template>\n  <input type=\"text\" autofocus />\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        let (start, len) = diags[0].span.expect("the diagnostic carries a span");
+        assert_eq!(&source[start..start + len], "autofocus");
+        assert_eq!((diags[0].line, diags[0].column), (2, 22));
+    }
+
+    #[test]
+    fn anchors_on_the_shorthand_binding_of_autofocus() {
+        // `:autofocus` is the `v-bind` shorthand of the same attribute, so it
+        // is still named by the diagnostic.
+        let source = "<template>\n  <input :autofocus=\"shouldFocus\" />\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        let (start, len) = diags[0].span.expect("the diagnostic carries a span");
+        assert_eq!(&source[start..start + len], ":autofocus");
+        assert_eq!((diags[0].line, diags[0].column), (2, 10));
     }
 }

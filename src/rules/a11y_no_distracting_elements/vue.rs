@@ -17,18 +17,17 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         for elem in extract_elements(ctx.source) {
             if DISTRACTING.contains(&elem.tag) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-distracting-elements".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-no-distracting-elements",
+                    format!(
                         "Do not use `<{}>`. It is deprecated and distracting.",
                         elem.tag
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

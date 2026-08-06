@@ -77,17 +77,14 @@ impl TextCheck for Check {
                         || token.starts_with("section-")
                 });
                 if !all_valid {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-autocomplete-valid".into(),
-                        message: format!(
-                            "`autocomplete=\"{value}\"` is not a valid autocomplete value."
-                        ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.attr_span("autocomplete"),
+                        "a11y-autocomplete-valid",
+                        format!("`autocomplete=\"{value}\"` is not a valid autocomplete value."),
+                        Severity::Error,
+                    ));
                 }
             }
         }

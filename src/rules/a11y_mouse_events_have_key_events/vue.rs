@@ -22,30 +22,26 @@ impl TextCheck for Check {
             let has_blur = has_attr(elem.attrs, "@blur") || has_attr(elem.attrs, "v-on:blur");
 
             if has_mouseover && !has_focus {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-mouse-events-have-key-events".into(),
-                    message:
-                        "`@mouseover` must be accompanied by `@focus` for keyboard accessibility."
-                            .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-mouse-events-have-key-events",
+                    "`@mouseover` must be accompanied by `@focus` for keyboard accessibility."
+                        .into(),
+                    Severity::Error,
+                ));
             }
             if has_mouseout && !has_blur {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-mouse-events-have-key-events".into(),
-                    message:
-                        "`@mouseout` must be accompanied by `@blur` for keyboard accessibility."
-                            .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-mouse-events-have-key-events",
+                    "`@mouseout` must be accompanied by `@blur` for keyboard accessibility."
+                        .into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

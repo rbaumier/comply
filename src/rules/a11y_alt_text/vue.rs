@@ -23,42 +23,39 @@ impl TextCheck for Check {
                     let has_object_spread =
                         elem.attrs.contains("v-bind=\"") || elem.attrs.contains("v-bind='");
                     if !has_attr(elem.attrs, "alt") && !has_object_spread {
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: elem.line,
-                            column: 1,
-                            rule_id: "a11y-alt-text".into(),
-                            message: "`<img>` is missing an `alt` attribute.".into(),
-                            severity: Severity::Error,
-                            span: None,
-                        });
+                        diagnostics.push(Diagnostic::at_offset(
+                            std::sync::Arc::clone(&ctx.path_arc),
+                            ctx.source,
+                            elem.span(),
+                            "a11y-alt-text",
+                            "`<img>` is missing an `alt` attribute.".into(),
+                            Severity::Error,
+                        ));
                     }
                 }
                 "area" => {
                     if !has_attr(elem.attrs, "alt") {
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: elem.line,
-                            column: 1,
-                            rule_id: "a11y-alt-text".into(),
-                            message: "`<area>` is missing an `alt` attribute.".into(),
-                            severity: Severity::Error,
-                            span: None,
-                        });
+                        diagnostics.push(Diagnostic::at_offset(
+                            std::sync::Arc::clone(&ctx.path_arc),
+                            ctx.source,
+                            elem.span(),
+                            "a11y-alt-text",
+                            "`<area>` is missing an `alt` attribute.".into(),
+                            Severity::Error,
+                        ));
                     }
                 }
                 "input" => {
                     if elem.attrs.contains("type=\"image\"") && !has_attr(elem.attrs, "alt") {
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: elem.line,
-                            column: 1,
-                            rule_id: "a11y-alt-text".into(),
-                            message: "`<input type=\"image\">` is missing an `alt` attribute."
+                        diagnostics.push(Diagnostic::at_offset(
+                            std::sync::Arc::clone(&ctx.path_arc),
+                            ctx.source,
+                            elem.span(),
+                            "a11y-alt-text",
+                            "`<input type=\"image\">` is missing an `alt` attribute."
                                 .into(),
-                            severity: Severity::Error,
-                            span: None,
-                        });
+                            Severity::Error,
+                        ));
                     }
                 }
                 _ => {}
@@ -138,6 +135,70 @@ mod tests {
         // spread and, with no alt, still flags.
         let source = "<template>\n  <img v-bind:src=\"x\" />\n</template>";
         assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn anchors_on_the_img_tag_not_the_indentation() {
+        // The `.vue` half of issue #8375's repro. Its `.tsx` twin reports the
+        // `<img` at 5:9; this one must name the `<img` at 8:7, not the space
+        // the line starts with.
+        let source = concat!(
+            "<script setup lang=\"ts\">\n",
+            "const items = ['a.png']\n",
+            "</script>\n",
+            "\n",
+            "<template>\n",
+            "  <ul>\n",
+            "    <li>\n",
+            "      <img :src=\"items[0]\" width=\"320\" height=\"320\" loading=\"lazy\">\n",
+            "    </li>\n",
+            "  </ul>\n",
+            "</template>\n",
+        );
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (8, 7));
+        let (start, len) = diags[0].span.expect("the diagnostic carries a span");
+        assert!(source[start..].starts_with("<img "));
+        assert_eq!(
+            &source[start..start + len],
+            "<img :src=\"items[0]\" width=\"320\" height=\"320\" loading=\"lazy\">"
+        );
+    }
+
+    #[test]
+    fn anchors_on_the_tag_of_a_multi_line_img() {
+        // The opening tag spans three lines: the anchor is the `<img` itself,
+        // so it stays on the tag's own line and column.
+        let source = "<template>\n  <img\n    :src=\"x\"\n  >\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (2, 3));
+        let (start, _) = diags[0].span.expect("the diagnostic carries a span");
+        assert!(source[start..].starts_with("<img"));
+    }
+
+    #[test]
+    fn column_counts_characters_not_bytes() {
+        // The column goes through a char-counting conversion, so the multi-byte
+        // `é` earlier on the line must not push it right: `<img` is the 14th
+        // character of line 2, the 15th byte of it, and byte 25 of the file.
+        let source = "<template>\n  <p>café</p><img :src=\"x\">\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (2, 14));
+        let (start, _) = diags[0].span.expect("the diagnostic carries a span");
+        assert_eq!(start, 25);
+    }
+
+    #[test]
+    fn line_counting_is_unaffected_by_crlf() {
+        // A CRLF checkout reports the same position as an LF one: `\r\n` is one
+        // line break, not two.
+        let source = "<template>\r\n  <img :src=\"x\">\r\n</template>";
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (2, 3));
     }
 
     #[test]

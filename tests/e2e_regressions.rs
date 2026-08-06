@@ -193,3 +193,50 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
             .unwrap(),
         );
 }
+
+#[test]
+fn vue_and_tsx_backends_of_a_rule_anchor_on_the_same_construct() {
+    // One defect, one element, two file types: `a11y-alt-text` reports the
+    // `<img` opening tag in both, so moving a component from `.tsx` to `.vue`
+    // does not move the diagnostic to the left margin.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        dir.path().join("App.tsx"),
+        "export function Gallery({ items }: { items: string[] }) {\n\
+         \x20 return (\n\
+         \x20   <ul>\n\
+         \x20     <li>\n\
+         \x20       <img src={items[0]} width=\"320\" height=\"320\" loading=\"lazy\" />\n\
+         \x20     </li>\n\
+         \x20   </ul>\n\
+         \x20 )\n\
+         }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("App.vue"),
+        "<script setup lang=\"ts\">\n\
+         const items = ['a.png']\n\
+         </script>\n\
+         \n\
+         <template>\n\
+         \x20 <ul>\n\
+         \x20   <li>\n\
+         \x20     <img :src=\"items[0]\" width=\"320\" height=\"320\" loading=\"lazy\">\n\
+         \x20   </li>\n\
+         \x20 </ul>\n\
+         </template>\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg("rules")
+        .arg("a11y-alt-text")
+        .arg(dir.path())
+        .assert()
+        // The JSX path lands on the `<img`, at column 9.
+        .stdout(predicate::str::is_match(r"App\.tsx:5:9:").unwrap())
+        // The Vue path lands on its own `<img`, at column 7 — not column 1.
+        .stdout(predicate::str::is_match(r"App\.vue:8:7:").unwrap());
+}

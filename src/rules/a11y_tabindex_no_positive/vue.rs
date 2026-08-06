@@ -18,15 +18,14 @@ impl TextCheck for Check {
                 && let Ok(n) = val.parse::<i32>()
                 && n > 0
             {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-tabindex-no-positive".into(),
-                    message: "`tabindex` must not be positive — use `0` or `-1` only.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.attr_span("tabindex"),
+                    "a11y-tabindex-no-positive",
+                    "`tabindex` must not be positive — use `0` or `-1` only.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

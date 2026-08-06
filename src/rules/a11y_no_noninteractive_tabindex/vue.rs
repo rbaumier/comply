@@ -22,18 +22,17 @@ impl TextCheck for Check {
             if let Some(val) = attr_value(elem.attrs, "tabindex") {
                 // tabindex="-1" is OK
                 if val != "-1" {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "a11y-no-noninteractive-tabindex".into(),
-                        message: format!(
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "a11y-no-noninteractive-tabindex",
+                        format!(
                             "Non-interactive element `<{}>` should not have `tabindex`.",
                             elem.tag
                         ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                        Severity::Error,
+                    ));
                 }
             }
         }

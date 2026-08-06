@@ -86,15 +86,14 @@ impl TextCheck for Check {
             {
                 continue;
             }
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: elem.line,
-                column: 1,
-                rule_id: "a11y-control-has-associated-label".into(),
-                message: "Interactive element is missing an accessible label (`aria-label` or `aria-labelledby`).".into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            diagnostics.push(Diagnostic::at_offset(
+                std::sync::Arc::clone(&ctx.path_arc),
+                ctx.source,
+                elem.span(),
+                "a11y-control-has-associated-label",
+                "Interactive element is missing an accessible label (`aria-label` or `aria-labelledby`).".into(),
+                Severity::Error,
+            ));
         }
         diagnostics
     }

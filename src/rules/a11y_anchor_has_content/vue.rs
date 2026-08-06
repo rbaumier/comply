@@ -23,15 +23,14 @@ impl TextCheck for Check {
                 continue;
             }
             if elem.self_closing || !has_text_content(ctx.source, elem.line - 1, "a") {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-anchor-has-content".into(),
-                    message: "Anchor has no content — screen readers cannot announce it.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-anchor-has-content",
+                    "Anchor has no content — screen readers cannot announce it.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

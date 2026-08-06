@@ -48,18 +48,17 @@ impl TextCheck for Check {
             }
             let has_safe_rel = attr_value(elem.attrs, "rel").is_some_and(rel_is_safe);
             if !has_safe_rel {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-no-target-blank".into(),
-                    message: "`target=\"_blank\"` without `rel=\"noopener\"` (or `noreferrer`) \
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-no-target-blank",
+                    "`target=\"_blank\"` without `rel=\"noopener\"` (or `noreferrer`) \
                               allows the opened page to access `window.opener`. \
                               Add `rel=\"noopener\"`."
                         .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

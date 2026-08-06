@@ -32,18 +32,17 @@ impl TextCheck for Check {
             if let Some(role) = attr_value(elem.attrs, "role") {
                 for &(mapped_role, suggested) in ROLE_TO_TAG {
                     if role == mapped_role {
-                        diagnostics.push(Diagnostic {
-                            path: std::sync::Arc::clone(&ctx.path_arc),
-                            line: elem.line,
-                            column: 1,
-                            rule_id: "a11y-prefer-tag-over-role".into(),
-                            message: format!(
+                        diagnostics.push(Diagnostic::at_offset(
+                            std::sync::Arc::clone(&ctx.path_arc),
+                            ctx.source,
+                            elem.span(),
+                            "a11y-prefer-tag-over-role",
+                            format!(
                                 "Prefer `{suggested}` over `<{} role=\"{role}\">` for semantic HTML.",
                                 elem.tag
                             ),
-                            severity: Severity::Error,
-                            span: None,
-                        });
+                            Severity::Error,
+                        ));
                     }
                 }
             }

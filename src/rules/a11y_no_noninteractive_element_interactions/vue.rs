@@ -27,18 +27,17 @@ impl TextCheck for Check {
                 || has_attr(elem.attrs, "v-on:keydown");
             let has_role = has_attr(elem.attrs, "role");
             if has_handler && !has_role {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-noninteractive-element-interactions".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-no-noninteractive-element-interactions",
+                    format!(
                         "Non-interactive element `<{}>` has an event handler without a `role` attribute.",
                         elem.tag
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

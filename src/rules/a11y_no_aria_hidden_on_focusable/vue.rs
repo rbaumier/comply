@@ -23,15 +23,14 @@ impl TextCheck for Check {
             let is_focusable =
                 FOCUSABLE_TAGS.contains(&elem.tag) || has_attr(elem.attrs, "tabindex");
             if is_focusable {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-aria-hidden-on-focusable".into(),
-                    message: "`aria-hidden=\"true\"` must not be set on focusable elements.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-no-aria-hidden-on-focusable",
+                    "`aria-hidden=\"true\"` must not be set on focusable elements.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

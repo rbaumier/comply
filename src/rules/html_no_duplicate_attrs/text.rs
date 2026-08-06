@@ -28,18 +28,17 @@ impl TextCheck for Check {
                         continue;
                     }
                     reported.push(name);
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: elem.line,
-                        column: 1,
-                        rule_id: "html-no-duplicate-attrs".into(),
-                        message: format!(
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        ctx.source,
+                        elem.span(),
+                        "html-no-duplicate-attrs",
+                        format!(
                             "Duplicate attribute `{name}` on `<{tag}>`.",
                             tag = elem.tag
                         ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                        Severity::Error,
+                    ));
                 } else {
                     seen.push(name);
                 }

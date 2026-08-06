@@ -25,18 +25,17 @@ impl TextCheck for Check {
                 false
             };
             if !valid {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-button-has-type".into(),
-                    message: "`<button>` missing an explicit `type` attribute — \
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-button-has-type",
+                    "`<button>` missing an explicit `type` attribute — \
                               defaults to `submit`, which may cause unexpected \
                               form submissions."
                         .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

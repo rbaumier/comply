@@ -36,17 +36,16 @@ impl TextCheck for Check {
             if let Some(role) = attr_value(elem.attrs, "role")
                 && NON_INTERACTIVE_ROLES.contains(&role)
             {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-interactive-element-to-noninteractive-role".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-no-interactive-element-to-noninteractive-role",
+                    format!(
                         "Interactive element should not have non-interactive `role=\"{role}\"`."
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

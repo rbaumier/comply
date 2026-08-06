@@ -27,15 +27,14 @@ impl TextCheck for Check {
             let has_aria_or_role =
                 names.iter().any(|n| n.starts_with("aria-")) || has_attr(elem.attrs, "role");
             if has_aria_or_role {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-aria-unsupported-elements".into(),
-                    message: "ARIA attributes and `role` are not supported on this element.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-aria-unsupported-elements",
+                    "ARIA attributes and `role` are not supported on this element.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

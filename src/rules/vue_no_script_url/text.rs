@@ -21,17 +21,16 @@ impl TextCheck for Check {
             if let Some(href) = attr_value(elem.attrs, "href")
                 && href.to_ascii_lowercase().contains("javascript:")
             {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-no-script-url".into(),
-                    message: "`javascript:` URLs are an XSS vector. Use an \
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-no-script-url",
+                    "`javascript:` URLs are an XSS vector. Use an \
                               event handler instead."
                         .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

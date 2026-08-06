@@ -99,10 +99,56 @@ pub struct VueElement<'a> {
     pub attrs: &'a str,
     /// Whether this is a self-closing tag (`<br />`).
     pub self_closing: bool,
+    /// Source-relative byte offset of the opening tag's `<`.
+    offset: usize,
+    /// Source-relative byte offset of the first byte of [`Self::attrs`].
+    attrs_offset: usize,
     /// Source-relative byte offset of the character immediately after the
     /// opening tag's terminating `>`, so `source[open_end..]` is the text that
     /// follows the opening tag (a child's text, the next sibling, etc.).
     pub open_end: usize,
+}
+
+impl VueElement<'_> {
+    /// Byte span `(offset, length)` of the whole opening tag, from `<` through
+    /// its terminating `>`. This is the anchor for a finding about the element
+    /// itself — the same construct a JSX backend anchors on when it reports the
+    /// opening element.
+    #[must_use]
+    pub fn span(&self) -> (usize, usize) {
+        (self.offset, self.open_end - self.offset)
+    }
+
+    /// Byte span `(offset, length)` to anchor a finding about the attribute
+    /// `name` on this element: the span of the plain attribute when the element
+    /// writes it, else the span of its `v-bind` form (`:name`, `v-bind:name`),
+    /// else the opening tag's span. The fallback covers an attribute that
+    /// reaches the element through a `v-bind` spread or a dynamic argument: no
+    /// attribute span exists and the element is the narrowest construct that
+    /// certainly does.
+    ///
+    /// TODO(#8424): [`has_attr`] matches a name inside a longer one — `scope`
+    /// inside `slot-scope` — so a caller can ask for an attribute the element
+    /// does not write. Until that is fixed the fallback absorbs those too.
+    #[must_use]
+    pub fn attr_span(&self, name: &str) -> (usize, usize) {
+        attr_spans(self.attrs)
+            .find(|(attr, _)| *attr == name)
+            .or_else(|| attr_spans(self.attrs).find(|(attr, _)| attr_binds(attr, name)))
+            .map_or_else(
+                || self.span(),
+                |(attr, at)| (self.attrs_offset + at, attr.len()),
+            )
+    }
+}
+
+/// Whether the attribute spelled `attr` is a `v-bind` form of `name`: the
+/// shorthand or the long form, each optionally carrying a modifier chain
+/// (`:role`, `v-bind:role`, `:role.camel` for `role`).
+fn attr_binds(attr: &str, name: &str) -> bool {
+    attr.strip_prefix(':')
+        .or_else(|| attr.strip_prefix("v-bind:"))
+        .is_some_and(|bound| binding_matches(bound, name))
 }
 
 /// Extract all opening/self-closing HTML elements from a Vue SFC template.
@@ -118,9 +164,6 @@ pub fn extract_elements(source: &str) -> Vec<VueElement<'_>> {
     let template_offset = source.as_ptr() as usize;
     let content_offset = template.as_ptr() as usize;
     let byte_offset = content_offset - template_offset;
-
-    // Count lines before template content.
-    let lines_before = source[..byte_offset].matches('\n').count();
 
     let mut elements = Vec::new();
     let bytes = template.as_bytes();
@@ -176,21 +219,26 @@ pub fn extract_elements(source: &str) -> Vec<VueElement<'_>> {
 
             let self_closing = i > 0 && bytes[i - 1] == b'/';
             let attrs_end = if self_closing { i - 1 } else { i };
-            let attrs = template[attrs_start..attrs_end].trim();
+            let raw_attrs = &template[attrs_start..attrs_end];
+            let attrs = raw_attrs.trim();
+            // `trim` drops leading whitespace, so the kept slice starts that
+            // many bytes further into the source than `attrs_start`.
+            let leading_ws = raw_attrs.len() - raw_attrs.trim_start().len();
 
-            // Calculate line number
-            let tag_byte_pos = tag_start;
-            let line_num = lines_before + 1 + template[..tag_byte_pos].matches('\n').count();
-
-            // `i` indexes the terminating `>` within `template`; map it back to
-            // `source` and step past `>` to the start of the following content.
+            // `tag_start` and `i` index `template`; map both back to `source`.
+            // `i` is on the terminating `>`, so stepping past it gives the
+            // start of the following content.
+            let offset = byte_offset + tag_start;
             let open_end = byte_offset + i + 1;
+            let (line_num, _) = crate::oxc_helpers::byte_offset_to_line_col(source, offset);
 
             elements.push(VueElement {
                 line: line_num,
                 tag: tag_name,
                 attrs,
                 self_closing,
+                offset,
+                attrs_offset: byte_offset + attrs_start + leading_ws,
                 open_end,
             });
             i += 1; // skip '>'
@@ -443,64 +491,73 @@ pub fn is_obsolete_html_tag(tag: &str) -> bool {
 
 /// Collect all attribute names from an attributes string.
 pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let mut i = 0;
+    attr_spans(attrs).map(|(name, _)| name).collect()
+}
+
+/// Iterate every attribute name in an attributes string together with its byte
+/// offset inside `attrs`. Rules anchoring a diagnostic on the attribute it names
+/// read the offset here rather than searching for the name again, so the
+/// reported position is the one the tokenizer matched.
+fn attr_spans(attrs: &str) -> impl Iterator<Item = (&str, usize)> {
     let bytes = attrs.as_bytes();
     let len = bytes.len();
+    let mut i = 0;
 
-    while i < len {
-        // Skip whitespace
-        while i < len && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= len {
-            break;
-        }
-
-        // Vue directives: v-on:, v-bind:, @, :
-        // Standard attributes: name or name="value"
-        let name_start = i;
-        while i < len
-            && !bytes[i].is_ascii_whitespace()
-            && bytes[i] != b'='
-            && bytes[i] != b'>'
-            && bytes[i] != b'/'
-        {
-            i += 1;
-        }
-        if i > name_start {
-            names.push(&attrs[name_start..i]);
-        }
-
-        // Skip = and value
-        if i < len && bytes[i] == b'=' {
-            i += 1;
+    std::iter::from_fn(move || {
+        loop {
             // Skip whitespace
             while i < len && bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
-            if i < len && (bytes[i] == b'"' || bytes[i] == b'\'') {
-                let quote = bytes[i];
+            if i >= len {
+                return None;
+            }
+
+            // Vue directives: v-on:, v-bind:, @, :
+            // Standard attributes: name or name="value"
+            let name_start = i;
+            while i < len
+                && !bytes[i].is_ascii_whitespace()
+                && bytes[i] != b'='
+                && bytes[i] != b'>'
+                && bytes[i] != b'/'
+            {
                 i += 1;
-                while i < len && bytes[i] != quote {
+            }
+            let name = (i > name_start).then(|| (&attrs[name_start..i], name_start));
+
+            // Skip = and value
+            if i < len && bytes[i] == b'=' {
+                i += 1;
+                // Skip whitespace
+                while i < len && bytes[i].is_ascii_whitespace() {
                     i += 1;
                 }
-                if i < len {
-                    i += 1; // skip closing quote
+                if i < len && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                    let quote = bytes[i];
+                    i += 1;
+                    while i < len && bytes[i] != quote {
+                        i += 1;
+                    }
+                    if i < len {
+                        i += 1; // skip closing quote
+                    }
                 }
             }
-        }
 
-        // Guarantee forward progress: when the cursor is parked on a bare
-        // delimiter that no branch above consumed (a `>` or `/`, e.g. from an
-        // unquoted value like `src=/a.css`), advance past it so the scan always
-        // terminates instead of spinning in place.
-        if i == name_start && i < len {
-            i += 1;
-        }
-    }
+            // Guarantee forward progress: when the cursor is parked on a bare
+            // delimiter that no branch above consumed (a `>` or `/`, e.g. from
+            // an unquoted value like `src=/a.css`), advance past it so the scan
+            // always terminates instead of spinning in place.
+            if i == name_start && i < len {
+                i += 1;
+            }
 
-    names
+            if name.is_some() {
+                return name;
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -655,6 +712,272 @@ mod tests {
             source[elems[0].open_end..].starts_with("\n  <div>"),
             "open_end should be just after the opening tag `>`, got: {:?}",
             &source[elems[0].open_end..]
+        );
+    }
+
+    /// Byte offsets of every `start_tag` / `self_closing_tag` the Vue grammar
+    /// finds inside the root `<template>`, in source order. The reference the
+    /// text scan's own offsets are checked against.
+    fn tree_sitter_tag_offsets(source: &str) -> Vec<usize> {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_vue_updated::language())
+            .expect("vue grammar should load");
+        let tree = parser.parse(source, None).expect("parser produces a tree");
+        let mut cursor = tree.root_node().walk();
+        let template = tree
+            .root_node()
+            .children(&mut cursor)
+            .find(|c| c.kind() == "template_element")
+            .expect("fixture has a root <template>");
+        let mut offsets = Vec::new();
+        let mut stack = vec![template];
+        while let Some(node) = stack.pop() {
+            if matches!(node.kind(), "start_tag" | "self_closing_tag") {
+                offsets.push(node.start_byte());
+            }
+            let mut walk = node.walk();
+            stack.extend(node.children(&mut walk));
+        }
+        offsets.sort_unstable();
+        // The root `<template>`'s own start tag is not template *content*, so
+        // the text scan never reports it.
+        offsets.retain(|o| *o > template.start_byte());
+        offsets
+    }
+
+    #[test]
+    fn element_offsets_are_the_grammar_s_tag_node_offsets() {
+        // The anchor a rule reports must be the position of the element node,
+        // not a position the emit site invents. The text scan and the Vue
+        // grammar are two independent readers of the same markup: assert they
+        // agree byte-for-byte on where every tag starts.
+        let sources = [
+            "<template>\n  <img src=\"x\" />\n  <div class=\"a\">\n  </div>\n</template>",
+            "<template>\n  <ul>\n    <li>\n      <img :src=\"i\" width=\"320\">\n    </li>\n  </ul>\n</template>",
+            "<template>\n  <input\n    type=\"range\"\n    autofocus\n  >\n</template>",
+            "<template>\n  <a :href=\"u\" data-x=\"a>b\">t</a>\n</template>",
+            "<template>\n  <template v-if=\"x\">\n    <span>a</span>\n  </template>\n</template>",
+            "<template>\n  <p>{{ a < b ? 'x' : 'y' }}</p>\n</template>",
+        ];
+        for source in sources {
+            let elements = extract_elements(source);
+            let scanned: Vec<usize> = elements.iter().map(|e| e.offset).collect();
+            assert_eq!(
+                scanned,
+                tree_sitter_tag_offsets(source),
+                "tag offsets disagree for {source:?}"
+            );
+            for elem in &elements {
+                assert!(
+                    source[elem.offset..].starts_with('<'),
+                    "element offset must land on `<` in {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn element_offsets_land_on_the_tag_when_the_grammar_bails() {
+        // A bare `>` inside a directive value defeats `tree-sitter-vue-updated`:
+        // it produces no `template_element`, so the template comes from the text
+        // fallback. That path produces the offsets on precisely the files the
+        // grammar cannot read, so it needs its own coverage — and it is the
+        // reason detection is not moved onto the grammar.
+        // Mirrors element-plus `rate.vue`.
+        let source = concat!(
+            "<template>\n",
+            "  <el-icon>\n",
+            "    <component v-show=\"item > currentValue\" />\n",
+            "  </el-icon>\n",
+            "  <img src=\"x\">\n",
+            "</template>\n",
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_vue_updated::language())
+            .expect("vue grammar should load");
+        let tree = parser.parse(source, None).expect("parser produces a tree");
+        let mut cursor = tree.root_node().walk();
+        assert!(
+            !tree
+                .root_node()
+                .children(&mut cursor)
+                .any(|c| c.kind() == "template_element"),
+            "fixture must exercise the text fallback"
+        );
+        let elements = extract_elements(source);
+        let lines: Vec<usize> = elements.iter().map(|e| e.line).collect();
+        assert_eq!(lines, vec![2, 3, 5]);
+        for elem in &elements {
+            assert!(source[elem.offset..].starts_with('<'));
+        }
+    }
+
+    #[test]
+    fn element_line_is_the_tag_s_own_line() {
+        // The `<input>` opening tag spans three lines, so a `line` taken from
+        // the terminating `>` would report 5 instead of 3.
+        let source = "<template>\n  <div>\n    <input\n      type=\"text\"\n    >\n  </div>\n</template>";
+        let lines: Vec<usize> = extract_elements(source).iter().map(|e| e.line).collect();
+        assert_eq!(lines, vec![2, 3]);
+    }
+
+    #[test]
+    fn a_bare_less_than_in_an_interpolation_truncates_the_scan() {
+        // TODO(#8429): `{{ a < b }}` opens a candidate tag whose `>` search
+        // runs to the end of the template, so every element after the
+        // interpolation is dropped. Pinned here because the grammar reads the
+        // same source as `<p>` followed by `<img>`, which is why the
+        // interpolation fixture in the agreement test above stops at `</p>`.
+        let source = "<template>\n  <p>{{ a < b ? 'x' : 'y' }}</p>\n  <img src=\"x\">\n</template>";
+        let scanned: Vec<usize> = extract_elements(source).iter().map(|e| e.offset).collect();
+        assert_eq!(scanned, vec![13]);
+        assert_eq!(tree_sitter_tag_offsets(source), vec![13, 46]);
+    }
+
+    #[test]
+    fn element_span_covers_the_opening_tag() {
+        let source = "<template>\n  <img src=\"x\" />\n</template>";
+        let elem = &extract_elements(source)[0];
+        let (offset, len) = elem.span();
+        assert_eq!(&source[offset..offset + len], "<img src=\"x\" />");
+    }
+
+    #[test]
+    fn attr_span_lands_on_the_named_attribute() {
+        // Includes the `v-bind` shorthand and long form, and an attribute whose
+        // name also appears inside an earlier attribute's value.
+        let source = "<template>\n  <input placeholder=\"autofocus\" autofocus :role=\"r\" v-bind:scope=\"s\">\n</template>";
+        let elem = &extract_elements(source)[0];
+        for (name, expected) in [
+            ("autofocus", "autofocus"),
+            ("role", ":role"),
+            ("scope", "v-bind:scope"),
+        ] {
+            let (offset, len) = elem.attr_span(name);
+            assert_eq!(&source[offset..offset + len], expected, "for {name}");
+        }
+    }
+
+    #[test]
+    fn attr_span_falls_back_to_the_opening_tag() {
+        // No `alt` written by name: the anchor degrades to the element, which
+        // is the narrowest construct that exists.
+        let source = "<template>\n  <img v-bind=\"attrs\">\n</template>";
+        let elem = &extract_elements(source)[0];
+        assert_eq!(elem.attr_span("alt"), elem.span());
+    }
+
+    #[test]
+    fn attr_span_is_not_confused_by_a_name_that_is_a_suffix() {
+        // `data-role` must not answer a query for `role`.
+        let source = "<template>\n  <div data-role=\"x\" role=\"button\"></div>\n</template>";
+        let elem = &extract_elements(source)[0];
+        let (offset, len) = elem.attr_span("role");
+        assert_eq!(&source[offset..offset + len], "role");
+        assert_eq!(&source[offset - 1..offset], " ");
+    }
+
+    #[test]
+    fn attr_span_prefers_the_plain_attribute_over_a_binding() {
+        // An element may carry both forms. The plain one is the attribute the
+        // rule's message quotes, so it wins whatever the source order.
+        let source = "<template>\n  <div :id=\"dynamic\" id=\"static\"></div>\n</template>";
+        let elem = &extract_elements(source)[0];
+        let (offset, len) = elem.attr_span("id");
+        assert_eq!(&source[offset..offset + len], "id");
+        assert_eq!(&source[offset - 1..offset], " ");
+    }
+
+    #[test]
+    fn attr_span_matches_a_binding_with_a_modifier_chain() {
+        // `.camel` and `.prop` are `v-bind` modifiers, not part of the name.
+        let source = "<template>\n  <my-input :autofocus.prop=\"focus\"></my-input>\n</template>";
+        let elem = &extract_elements(source)[0];
+        let (offset, len) = elem.attr_span("autofocus");
+        assert_eq!(&source[offset..offset + len], ":autofocus.prop");
+    }
+
+    /// Whether `source` writes a `column: 1` field literal, in either spacing.
+    /// A longer column such as `column: 12` is a real position and is allowed,
+    /// and a longer field name such as `start_column: 1` is a different field.
+    fn hardcodes_column_one(source: &str) -> bool {
+        source.match_indices("column:").any(|(at, needle)| {
+            let is_own_field = source[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c != '_' && !c.is_alphanumeric());
+            let rest = source[at + needle.len()..].trim_start();
+            is_own_field
+                && rest
+                    .strip_prefix('1')
+                    .is_some_and(|after| !after.starts_with(|c: char| c.is_ascii_digit()))
+        })
+    }
+
+    #[test]
+    fn no_extract_elements_consumer_hardcodes_a_column() {
+        // Every rule reading elements through [`extract_elements`] knows where
+        // its finding is, so none of them may fall back to the literal column
+        // `1`. The unit is the rule directory, so a backend that emits the
+        // literal is caught even when a sibling file is the one calling
+        // `extract_elements`.
+        //
+        // Scope: only directories that read through [`extract_elements`]. A Vue
+        // rule with its own private scanner is out of reach here — see #8421 and
+        // #8422 for the rules that still hardcode the column. This is a lexical
+        // guard on the literal; it does not check that the offset handed to
+        // `at_offset` is the right one.
+        let rules_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/rules");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&rules_dir).expect("src/rules is readable") {
+            let dir = entry.expect("directory entry is readable").path();
+            // The walk visits rule directories only, so this module — which
+            // declares `extract_elements` and quotes the literal above — is not
+            // scanned by its own check.
+            if !dir.is_dir() {
+                continue;
+            }
+            let mut reads_elements = false;
+            let mut hardcoded = Vec::new();
+            for entry in std::fs::read_dir(&dir).expect("rule directory is readable") {
+                let path = entry.expect("directory entry is readable").path();
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("rule source is readable");
+                reads_elements |= source.contains("extract_elements(");
+                if hardcodes_column_one(&source) {
+                    hardcoded.push(path);
+                }
+            }
+            if reads_elements {
+                offenders.append(&mut hardcoded);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these rules locate an element but report column 1: {offenders:?}"
+        );
+    }
+
+    #[test]
+    fn hardcodes_column_one_reads_the_literal_not_a_longer_column() {
+        assert!(hardcodes_column_one("Diagnostic { line, column: 1, .. }"));
+        assert!(hardcodes_column_one("column:1,"));
+        assert!(!hardcodes_column_one("column: 12,"));
+        assert!(!hardcodes_column_one("column: col,"));
+        assert!(!hardcodes_column_one("column: pos.column + 1,"));
+        assert!(!hardcodes_column_one("start_column: 1,"));
+    }
+
+    #[test]
+    fn attr_spans_reports_each_name_offset() {
+        let attrs = "class=\"foo\" aria-label=\"bar\" disabled";
+        assert_eq!(
+            attr_spans(attrs).collect::<Vec<_>>(),
+            vec![("class", 0), ("aria-label", 12), ("disabled", 29)]
         );
     }
 

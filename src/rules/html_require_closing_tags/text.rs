@@ -43,8 +43,9 @@ impl TextCheck for Check {
             return Vec::new();
         };
 
-        // Collect every opening (non-self-closing, non-void) tag with its line.
-        let mut openings: Vec<(String, usize)> = Vec::new();
+        // Collect every opening (non-self-closing, non-void) tag with the span
+        // of the tag itself, which is what an unclosed-tag report names.
+        let mut openings: Vec<(String, (usize, usize))> = Vec::new();
         for elem in extract_elements(&source) {
             if elem.self_closing {
                 continue;
@@ -53,7 +54,7 @@ impl TextCheck for Check {
             if VOID_ELEMENTS.contains(&tag_lower.as_str()) {
                 continue;
             }
-            openings.push((tag_lower, elem.line));
+            openings.push((tag_lower, elem.span()));
         }
 
         // Count closing tags per name in the template.
@@ -63,20 +64,19 @@ impl TextCheck for Check {
         let mut diagnostics = Vec::new();
         let mut seen_per_tag: FxHashMap<String, usize> =
             FxHashMap::default();
-        for (tag, line) in &openings {
+        for (tag, span) in &openings {
             let n = seen_per_tag.entry(tag.clone()).or_insert(0);
             *n += 1;
             let closes = close_counts.get(tag).copied().unwrap_or(0);
             if *n > closes {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: *line,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: format!("Unclosed `<{tag}>` tag."),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    *span,
+                    super::META.id,
+                    format!("Unclosed `<{tag}>` tag."),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

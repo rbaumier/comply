@@ -33,18 +33,17 @@ impl TextCheck for Check {
                 }
             }
             if !has_track {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-media-has-caption".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-media-has-caption",
+                    format!(
                         "`<{}>` elements must have a `<track kind=\"captions\">` child for accessibility.",
                         elem.tag
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

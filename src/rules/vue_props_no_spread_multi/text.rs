@@ -19,15 +19,14 @@ impl TextCheck for Check {
             // Count `v-bind=` occurrences in attrs (spread binding in Vue).
             let spread_count = elem.attrs.matches("v-bind=").count();
             if spread_count > 1 {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "vue-props-no-spread-multi".into(),
-                    message: "Same `v-bind` spread used multiple times on this element.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "vue-props-no-spread-multi",
+                    "Same `v-bind` spread used multiple times on this element.".into(),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics

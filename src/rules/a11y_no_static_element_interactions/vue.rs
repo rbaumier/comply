@@ -22,18 +22,17 @@ impl TextCheck for Check {
             let has_click = has_attr(elem.attrs, "@click") || has_attr(elem.attrs, "v-on:click");
             let has_role = has_attr(elem.attrs, "role");
             if has_click && !has_role {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: elem.line,
-                    column: 1,
-                    rule_id: "a11y-no-static-element-interactions".into(),
-                    message: format!(
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    elem.span(),
+                    "a11y-no-static-element-interactions",
+                    format!(
                         "Static element `<{}>` has `@click` without a `role` attribute.",
                         elem.tag
                     ),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                    Severity::Error,
+                ));
             }
         }
         diagnostics
