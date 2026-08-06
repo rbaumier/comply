@@ -5,6 +5,25 @@
 //! attribute siblings for `#[serde(deny_unknown_fields)]`. If absent,
 //! flag the struct.
 //!
+//! Only *serde's* container option discharges the requirement.
+//! [`has_attribute_option`] matches it structurally: the attribute path must be
+//! `serde`, and `deny_unknown_fields` must name a meta item of its argument
+//! list. Another crate's helper attribute can spell the same word.
+//! `#[schemars(deny_unknown_fields)]` configures a generated JSON Schema
+//! document. It never reaches serde's `Deserialize` impl, so it does not count.
+//!
+//! The `#[cfg_attr(<predicate>, serde(deny_unknown_fields))]` form does count.
+//! The author declared serde's option. Which build configurations enable it is
+//! not decidable from the crate's own source: any consumer can pass
+//! `--no-default-features` and switch a `default` feature off. Crates gate the
+//! option deliberately, to be strict in one build and lenient in another.
+//! `#[cfg_attr(test, serde(deny_unknown_fields))]` on a mirror of an external
+//! tool's JSON output is the archetype. The test build detects upstream schema
+//! drift; the shipped build tolerates it. Accepting the gated form therefore
+//! gives up the typo detection this rule asks for, in the builds where the
+//! predicate is false. That price buys a decidable question — *which attribute
+//! is this* — in place of an undecidable one.
+//!
 //! A `Deserialize` derive whose derive list also contains `Archive` is
 //! rkyv's, not serde's (`Archive` is rkyv-exclusive; rkyv re-exports a
 //! `Deserialize` derive under the same bare name), so it is not flagged.
@@ -66,7 +85,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{enclosing_fn, is_in_test_context};
+use crate::rules::rust_helpers::{enclosing_fn, has_attribute_option, is_in_test_context};
 
 const KINDS: &[&str] = &["struct_item"];
 
@@ -124,7 +143,11 @@ impl AstCheck for Check {
         if attrs.iter().any(|a| has_sats_attr(a)) {
             return;
         }
-        if attrs.iter().any(|a| has_deny_unknown_fields(a)) {
+        // Only serde's own container option discharges the requirement. Another
+        // crate's helper attribute spelling the same word
+        // (`#[schemars(deny_unknown_fields)]`) configures that crate's output,
+        // never serde's `Deserialize` impl.
+        if has_attribute_option(node, source_bytes, "serde", "deny_unknown_fields") {
             return;
         }
         // Structs with a `#[serde(flatten)]` field cannot have
@@ -143,7 +166,7 @@ impl AstCheck for Check {
         // `#[serde(transparent)]` structs delegate all (de)serialization
         // to their single inner field, so they have no field-name map of
         // their own — `deny_unknown_fields` is inert there.
-        if attrs.iter().any(|a| has_transparent_attr(a)) {
+        if has_attribute_option(node, source_bytes, "serde", "transparent") {
             return;
         }
         // ORM structs (Diesel Queryable / Selectable) deserialize from
@@ -269,26 +292,6 @@ fn final_segment(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path).trim()
 }
 
-fn has_deny_unknown_fields(attr_text: &str) -> bool {
-    attr_text.contains("deny_unknown_fields")
-}
-
-/// True for a `#[serde(...)]` attribute whose argument list contains the
-/// `transparent` option. Scoped to the `serde(` argument list so an
-/// unrelated attribute (e.g. `#[cfg(feature = "transparent")]`) does not
-/// match.
-fn has_transparent_attr(attr_text: &str) -> bool {
-    attr_text
-        .split_once("serde(")
-        .and_then(|(_, rest)| rest.split_once(')'))
-        .is_some_and(|(inside, _)| {
-            inside
-                .split(',')
-                .map(str::trim)
-                .any(|opt| opt == "transparent")
-        })
-}
-
 /// True for the bare `#[non_exhaustive]` attribute. Matches on the
 /// attribute's meta path being exactly `non_exhaustive` (after stripping
 /// the `#[` / `]` delimiters and surrounding whitespace), so an unrelated
@@ -376,30 +379,10 @@ fn has_flatten_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     let mut cursor = body.walk();
-    body.children(&mut cursor)
-        .any(|field| field.kind() == "field_declaration" && field_has_flatten_attr(field, source))
-}
-
-/// True if `field` (a `field_declaration`) has a preceding `#[serde(flatten)]`
-/// attribute. Interleaved comments are skipped; the scan stops at the first
-/// non-attribute, non-comment sibling.
-fn field_has_flatten_attr(field: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = field.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && text.contains("flatten")
-                {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    body.children(&mut cursor).any(|field| {
+        field.kind() == "field_declaration"
+            && has_attribute_option(field, source, "serde", "flatten")
+    })
 }
 
 /// Walk up from `node` to the enclosing `source_file` root.
@@ -452,7 +435,7 @@ fn struct_flattens_type_named(struct_node: tree_sitter::Node, name: &str, source
     let mut cursor = body.walk();
     body.children(&mut cursor).any(|field| {
         field.kind() == "field_declaration"
-            && field_has_flatten_attr(field, source)
+            && has_attribute_option(field, source, "serde", "flatten")
             && field
                 .child_by_field_name("type")
                 .and_then(|ty| field_type_final_segment(ty, source))
@@ -1036,6 +1019,146 @@ mod tests {
         assert!(
             run_on(source).is_empty(),
             "FP: SATS `#[sats]` Deserialize (non-serde) flagged"
+        );
+    }
+
+    #[test]
+    fn flags_config_struct_whose_only_deny_is_schemars() {
+        // starship `src/configs/rust.rs`: the config types every user edits by
+        // hand in `starship.toml` carry `schemars(deny_unknown_fields)`, which
+        // configures the generated JSON Schema and never reaches serde's
+        // `Deserialize` impl. `symbl = "🦀 "` is still dropped silently.
+        // (Closes #8361)
+        let source = "#[derive(Clone, Deserialize, Serialize)]\n\
+                      #[cfg_attr(\n\
+                          feature = \"config-schema\",\n\
+                          derive(schemars::JsonSchema),\n\
+                          schemars(deny_unknown_fields)\n\
+                      )]\n\
+                      #[serde(default)]\n\
+                      pub struct RustConfig<'a> {\n\
+                          pub format: &'a str,\n\
+                          pub symbol: &'a str,\n\
+                          pub disabled: bool,\n\
+                      }";
+        let diags = run_on(source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "schemars' option must not discharge serde's requirement"
+        );
+        assert!(
+            diags[0].message.contains("`RustConfig`"),
+            "the flagged struct must be `RustConfig`, got: {}",
+            diags[0].message
+        );
+    }
+
+    #[test]
+    fn flags_despite_unqualified_schemars_deny_unknown_fields() {
+        // The same option applied directly, without a `cfg_attr` gate: the
+        // attribute path is still `schemars`, so serde's `Deserialize` impl
+        // accepts unknown keys.
+        let source = "#[derive(Deserialize)]\n\
+                      #[schemars(deny_unknown_fields)]\n\
+                      struct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: `schemars(deny_unknown_fields)` is not serde's"
+        );
+    }
+
+    #[test]
+    fn flags_despite_third_party_schema_attr_deny_unknown_fields() {
+        // utoipa's `#[schema(...)]` helper describes the OpenAPI document, not
+        // serde's field map.
+        let source = "#[derive(Deserialize)]\n\
+                      #[schema(deny_unknown_fields)]\n\
+                      struct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: `schema(deny_unknown_fields)` is not serde's"
+        );
+    }
+
+    #[test]
+    fn flags_despite_deny_unknown_fields_as_an_attribute_value() {
+        // The word appearing as a *value* rather than an option: neither a
+        // `#[doc = "…"]` string nor a serde rename enables the option.
+        let source = "#[doc = \"set deny_unknown_fields on this one day\"]\n\
+                      #[derive(Deserialize)]\n\
+                      #[serde(rename = \"deny_unknown_fields\")]\n\
+                      struct Config { rate: u32 }";
+        assert_eq!(
+            run_on(source).len(),
+            1,
+            "should still flag: the word is a value here, not a serde option"
+        );
+    }
+
+    #[test]
+    fn flags_struct_preceded_by_an_exempt_struct() {
+        // The attribute scan walks preceding siblings and must stop at the first
+        // one that is not an attribute or a comment. Otherwise the exemption of
+        // one struct leaks onto every struct declared after it.
+        let source = "#[derive(Deserialize)]\n\
+                      #[serde(deny_unknown_fields)]\n\
+                      struct Strict { rate: u32 }\n\
+                      #[derive(Deserialize)]\n\
+                      struct Loose { rate: u32 }";
+        let findings = run_on(source);
+        assert_eq!(
+            findings.len(),
+            1,
+            "the exemption on `Strict` must not carry over to `Loose`"
+        );
+        assert!(
+            findings[0].message.contains("`Loose`"),
+            "the flagged struct should be `Loose`, got `{}`",
+            findings[0].message
+        );
+    }
+
+    #[test]
+    fn allows_cfg_attr_gated_serde_deny_unknown_fields() {
+        // Real crates gate the option to be strict in one build and
+        // forward-compatible in another. The author declared serde's option; the
+        // build configurations that enable it are the crate's call, not the
+        // rule's. Both predicate spellings are locked because a `cfg` predicate
+        // and a `feature` predicate parse into different token shapes.
+        let sources = [
+            // taiki-e/cargo-llvm-cov `src/json.rs`: a mirror of `llvm-cov
+            // export`'s JSON, strict under `test` to detect upstream schema
+            // drift.
+            "#[derive(Deserialize)]\n\
+             #[cfg_attr(test, serde(deny_unknown_fields))]\n\
+             pub struct LlvmCovJsonExport { pub data: Vec<Export> }",
+            // cobalt-org/cobalt.rs `crates/config/src/config.rs`: strict under
+            // the `unstable` feature, forward-compatible otherwise.
+            "#[derive(Deserialize)]\n\
+             #[cfg_attr(feature = \"unstable\", serde(deny_unknown_fields))]\n\
+             pub struct Config { pub source: String }",
+        ];
+        for source in sources {
+            assert!(
+                run_on(source).is_empty(),
+                "FP: a cfg_attr-gated serde(deny_unknown_fields) declaration flagged in `{source}`"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_cfg_attr_gated_serde_transparent() {
+        // Optional-serde crates gate the whole serde surface on one feature; the
+        // `transparent` option is then declared through the same `cfg_attr`.
+        let source = "#[derive(Deserialize)]\n\
+                      #[cfg_attr(feature = \"serde\", serde(transparent))]\n\
+                      struct Wrapper { inner: u32 }";
+        assert!(
+            run_on(source).is_empty(),
+            "FP: cfg_attr-gated serde(transparent) struct flagged"
         );
     }
 
