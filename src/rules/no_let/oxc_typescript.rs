@@ -1,15 +1,14 @@
 //! no-let oxc backend — flag `let` declarations.
 //!
 //! Exempts cases where `const` is not a valid substitute: a for-loop index
-//! mutated by the loop's update expression, uninitialised module-scope state in
-//! test files, and lazy-memoization caches whose every write is a
-//! logical-assignment (`let cache: T; … cache ||= expensive()`).
+//! mutated by the loop's update expression, and an uninitialised binding whose
+//! value is written from a function nested below the declaration.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::BindingPattern;
-use oxc_semantic::ReferenceFlags;
+use oxc_semantic::{ReferenceFlags, ScopeId, Scoping};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -37,24 +36,15 @@ impl OxcCheck for Check {
         if decl.kind != oxc_ast::ast::VariableDeclarationKind::Let {
             return;
         }
-        // Exempt uninitialised module-scope `let` in test files — the standard
-        // pattern for state variables assigned inside beforeAll/beforeEach.
-        if ctx.file.path_segments.in_test_dir
-            && node.scope_id() == semantic.scoping().root_scope_id()
-            && decl.declarations.iter().all(|d| d.init.is_none())
-        {
-            return;
-        }
         // Exempt a C-style for-loop index whose value the loop mutates via its
         // update expression (`for (let i = 0; …; i++)`) — `const` is invalid there.
         if is_for_index_mutated_by_update(node, ctx, semantic) {
             return;
         }
-        // Exempt lazy-memoization caches: an uninitialised `let` whose every
-        // write is a logical-assignment (`||=`/`??=`/`&&=`) is populated on
-        // first access (`cache ||= expensive()`). It cannot become `const` —
-        // the declaration has no initialiser and `const x;` is a syntax error.
-        if is_logical_assignment_lazy_cache(decl, semantic) {
+        // Exempt an uninitialised binding written from a nested function — a
+        // write in another function body cannot be folded into the declaration's
+        // initialiser, and `const x;` is a syntax error.
+        if is_written_from_nested_function(decl, semantic) {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, decl.span.start as usize);
@@ -70,14 +60,20 @@ impl OxcCheck for Check {
     }
 }
 
-/// True when every declarator in `decl` is an uninitialised binding whose only
-/// writes are logical-assignments (`||=`/`??=`/`&&=`) — the lazy-memoization
-/// cache pattern (`let cache: T; … cache ||= expensive()`). Such a binding has
-/// no initialiser and is populated on first access, so it cannot become `const`.
-fn is_logical_assignment_lazy_cache(
+/// True when every declarator in `decl` is uninitialised and at least one write
+/// to it lives in a function body other than the declaring one —
+/// `let t; on('x', () => { t = 1; })`. Such a write cannot be folded into the
+/// declaration's initialiser, so there is no `const` form: `const t;` is a
+/// syntax error.
+///
+/// A declaration is exempt only when *all* of its declarators qualify: in
+/// `let a, b;` where a nested function writes `a` alone, `b` is ordinary
+/// deferred state and the declaration stays flagged.
+fn is_written_from_nested_function(
     decl: &oxc_ast::ast::VariableDeclaration,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    let scoping = semantic.scoping();
     decl.declarations.iter().all(|declarator| {
         if declarator.init.is_some() {
             return false;
@@ -88,35 +84,37 @@ fn is_logical_assignment_lazy_cache(
         let Some(symbol_id) = ident.symbol_id.get() else {
             return false;
         };
-        let mut has_logical_write = false;
-        for reference in semantic.symbol_references(symbol_id) {
-            if !reference.flags().contains(ReferenceFlags::Write) {
-                continue;
-            }
-            if is_logical_assignment_write(reference.node_id(), semantic) {
-                has_logical_write = true;
-            } else {
-                return false;
-            }
-        }
-        has_logical_write
+        let declaration_scope = scoping.symbol_scope_id(symbol_id);
+        semantic.symbol_references(symbol_id).any(|reference| {
+            reference.flags().contains(ReferenceFlags::Write)
+                && crosses_function_boundary(
+                    semantic.nodes().get_node(reference.node_id()).scope_id(),
+                    declaration_scope,
+                    scoping,
+                )
+        })
     })
 }
 
-/// True when the write reference at `node_id` is the target of an
-/// `AssignmentExpression` using a logical operator (`||=`/`??=`/`&&=`).
-fn is_logical_assignment_write(
-    node_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
+/// True when the scope chain from `write_scope` up to `declaration_scope` passes
+/// through a function scope. Every other scope kind — blocks, loops, `catch`
+/// clauses, class bodies, TS module blocks — is transparent; only a function body
+/// puts the write beyond the declaring scope's reach, so elsewhere the rule's
+/// ordinary remediation applies.
+///
+/// A resolved symbol's declaration scope is always an ancestor of the scope of
+/// each of its references, so the walk always terminates on the equality arm.
+fn crosses_function_boundary(
+    write_scope: ScopeId,
+    declaration_scope: ScopeId,
+    scoping: &Scoping,
 ) -> bool {
-    let nodes = semantic.nodes();
-    for kind in nodes.ancestor_kinds(node_id) {
-        match kind {
-            AstKind::AssignmentExpression(assign) => return assign.operator.is_logical(),
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::Program(_) => return false,
-            _ => {}
+    for scope in scoping.scope_ancestors(write_scope) {
+        if scope == declaration_scope {
+            return false;
+        }
+        if scoping.scope_flags(scope).is_function() {
+            return true;
         }
     }
     false
@@ -222,8 +220,20 @@ mod tests {
 
     #[test]
     fn ignores_uninit_module_scope_let_in_spec_file() {
-        // Regression for #986 — beforeAll/beforeEach deferred assignment pattern.
-        assert!(run_spec("let betaCommunity: CommunityView | undefined;").is_empty());
+        // Regression for #986 — the deferred-assignment fixture, with the write
+        // in the `beforeAll` callback that gives the binding its value.
+        let src = "let betaCommunity: CommunityView | undefined;\n\
+                   beforeAll(async () => {\n\
+                       betaCommunity = await resolveBetaCommunity(alpha);\n\
+                   });";
+        assert!(run_spec(src).is_empty());
+    }
+
+    #[test]
+    fn flags_uninit_module_scope_let_never_assigned_in_spec_file() {
+        // No write at all → no deferred-assignment pattern to protect. Sentinel:
+        // this fails the moment a path-based carve-out comes back.
+        assert_eq!(run_spec("let betaCommunity: CommunityView | undefined;").len(), 1);
     }
 
     #[test]
@@ -264,9 +274,8 @@ mod tests {
 
     #[test]
     fn ignores_lazy_memoization_via_logical_or_assign() {
-        // Regression for #1232 — uninitialised module-level `let` lazily
-        // populated via `||=` is a memoization cache; `const x;` is a syntax
-        // error so it cannot become `const`.
+        // Regression for #1232 — the write lives in `f`, so the declaration has
+        // no initialiser expression and `const one;` is a syntax error.
         let src = "let one: ValueNode;\n\
                    export function f() {\n\
                        return (one ||= ValueNode.createImmediate(1));\n\
@@ -276,7 +285,7 @@ mod tests {
 
     #[test]
     fn ignores_lazy_memoization_via_nullish_assign() {
-        // `??=` is the other lazy-init guard for nullable caches.
+        // The write operator is irrelevant — `get` is the nested function.
         let src = "let cache: T;\n\
                    export function get() { return (cache ??= expensive()); }";
         assert!(run(src).is_empty());
@@ -285,7 +294,7 @@ mod tests {
     #[test]
     fn ignores_kysely_multiline_lazy_singletons() {
         // The canonical issue #1232 case: several uninitialised module-level
-        // singletons each lazily populated via `||=`, including nested uses.
+        // singletons, each written inside `replace`.
         let src = "let contradiction: BinaryOperationNode;\n\
                    let eq: OperatorNode;\n\
                    let one: ValueNode;\n\
@@ -299,7 +308,8 @@ mod tests {
 
     #[test]
     fn ignores_lazy_memoization_via_logical_and_assign() {
-        // `&&=` is also a logical-assignment guard, never plain mutable state.
+        // A compound operator is neither necessary nor sufficient on its own;
+        // the write sitting inside `f` is what rules `const` out.
         let src = "let flag: boolean;\n\
                    export function f() { return (flag &&= recompute()); }";
         assert!(run(src).is_empty());
@@ -314,7 +324,8 @@ mod tests {
 
     #[test]
     fn flags_uninit_let_with_plain_reassignment() {
-        // A plain `=` write is ordinary mutable state, not lazy memoization.
+        // The write runs in the declaring scope, so `const x = compute()` is a
+        // real rewrite.
         assert_eq!(run("let x: number; x = compute();").len(), 1);
     }
 
@@ -322,5 +333,113 @@ mod tests {
     fn flags_initialized_let_never_reassigned() {
         // Initialised once, never reassigned → genuinely convertible to `const`.
         assert_eq!(run("let x = expensive();").len(), 1);
+    }
+
+    #[test]
+    fn ignores_uninit_let_written_from_arrow_callback() {
+        // Regression for #8410 — the value arrives when the callback runs, so
+        // the declaring scope has no expression to initialise the binding with.
+        let src = "export function capture(): void {\n\
+                       let received;\n\
+                       on('data', (v) => { received = v; });\n\
+                       assertEq(received, 'x');\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_uninit_module_scope_let_written_from_function_in_non_test_file() {
+        // Regression for #8410 (marked `docs/demo/worker.js:2`) — module scope,
+        // non-test file, plain `=` write inside a function, read from another.
+        let src = "let currentVersion;\n\
+                   export function setVersion(v: string): void { currentVersion = v; }\n\
+                   export function versionLabel(): string { return currentVersion; }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_uninit_function_scope_let_written_from_callback_in_spec_file() {
+        // Regression for #8410 (marked `test/unit/Hooks.test.js:367`) — a test
+        // file, but the declaration sits inside the `test(…)` callback.
+        let src = "test('hook sees the block', () => {\n\
+                       let receivedBlock;\n\
+                       use({ hook(t) { receivedBlock = t; return t; } });\n\
+                       assertEq(receivedBlock, 'block');\n\
+                   });";
+        assert!(run_spec(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_debounce_timer_handle_written_from_closure() {
+        // Regression for #8410 (marked `docs/js/index.js:274`) — the timer
+        // handle is reassigned by the returned closure on every call, and read
+        // by a second closure, so it has to live in `debounce`'s scope.
+        let src = "function debounce(func, wait) {\n\
+                       let timeout;\n\
+                       const debounced = (...args) => {\n\
+                           clearTimeout(timeout);\n\
+                           timeout = setTimeout(() => func(args), wait);\n\
+                       };\n\
+                       debounced.cancel = () => { clearTimeout(timeout); };\n\
+                       return debounced;\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_uninit_let_with_same_scope_branch_writes() {
+        // Regression for #8410 — every write runs in the declaring call, so
+        // `const x = flag ? 1 : 2` is a genuine rewrite.
+        let src = "export function local(flag: boolean): number {\n\
+                       let x;\n\
+                       if (flag) { x = 1; } else { x = 2; }\n\
+                       return x;\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_uninit_let_written_inside_a_plain_block() {
+        // A bare block is not a function scope: the write runs in the declaring
+        // call and folds into an initialiser.
+        assert_eq!(run("let x; { x = compute(); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_uninit_let_only_read_from_nested_function() {
+        // The closure reads the binding; the single write is in the declaring
+        // scope → still convertible.
+        let src = "export function f() {\n\
+                       let x;\n\
+                       x = compute();\n\
+                       return () => x;\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_initialised_let_mutated_from_a_closure() {
+        // An initialiser exists, so `reduce` or a pure function is a real
+        // rewrite — the nested-function exemption covers uninitialised
+        // declarations only.
+        let src = "export function f(xs) {\n\
+                       let count = 0;\n\
+                       xs.forEach(() => { count += 1; });\n\
+                       return count;\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_multi_declarator_when_only_one_has_a_nested_write() {
+        // `b` is ordinary deferred state, so the declaration stays flagged even
+        // though a nested function writes `a`.
+        let src = "export function f() {\n\
+                       let a, b;\n\
+                       on('x', () => { a = 1; });\n\
+                       b = 2;\n\
+                       return [a, b];\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
     }
 }
