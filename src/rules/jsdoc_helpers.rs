@@ -19,6 +19,52 @@
 
 use rustc_hash::FxHashSet;
 
+/// Every synonym of the JSDoc tag dictionary, paired with the tag it is a
+/// synonym of, ordered by synonym.
+///
+/// Source: the `synonyms` fields of `exports.jsdocTags` in
+/// `lib/jsdoc/tag/dictionary/definitions.js` of jsdoc 4.0.4. The separate
+/// Closure dictionary (`exports.closureTags`) declares synonyms of its own and
+/// is out of this table.
+///
+/// A synonym is a second spelling of the tag it names, never a neighbouring
+/// tag: `@constructor` documents a constructor the way `@class` does, whereas
+/// `@constructs` names the function that builds the instance. Reading a
+/// synonym as a misspelling of a nearby tag therefore renames the concept.
+pub const TAG_SYNONYMS: &[(&str, &str)] = &[
+    ("arg", "param"),
+    ("argument", "param"),
+    ("callback", "typedef"),
+    ("const", "constant"),
+    ("constructor", "class"),
+    ("defaultvalue", "default"),
+    ("desc", "description"),
+    ("emits", "fires"),
+    ("exception", "throws"),
+    ("extends", "augments"),
+    ("fileoverview", "file"),
+    ("func", "function"),
+    ("host", "external"),
+    ("memberof!", "memberof"),
+    ("method", "function"),
+    ("overview", "file"),
+    ("prop", "property"),
+    ("return", "returns"),
+    ("var", "member"),
+    ("virtual", "abstract"),
+    ("yield", "yields"),
+];
+
+/// The tag `name` is a synonym of, or `name` itself when it is not a synonym.
+///
+/// Matching ignores ASCII case, as the JSDoc dictionary does.
+pub fn canonical_tag(name: &str) -> &str {
+    TAG_SYNONYMS
+        .iter()
+        .find(|(synonym, _)| synonym.eq_ignore_ascii_case(name))
+        .map_or(name, |(_, canonical)| *canonical)
+}
+
 /// A single `/** ... */` block extracted from a source file.
 #[derive(Debug)]
 pub struct JsDocBlock<'a> {
@@ -129,25 +175,20 @@ impl JsDocTag {
     }
 }
 
-/// The JSDoc tags whose body opens with a `{...}` type expression, aliases
-/// included. A tag outside this set carries prose or a code sample, so a brace
-/// group in its body is not a type.
+/// The JSDoc tags whose body opens with a `{...}` type expression, canonical
+/// spellings only: a tag is looked up through [`canonical_tag`], so every
+/// synonym of an entry bears types like the entry itself. A tag outside this
+/// set carries prose or a code sample, so a brace group in its body is not a
+/// type.
 const TYPE_BEARING_TAGS: &[&str] = &[
-    "arg",
-    "argument",
     "augments",
-    "const",
     "constant",
     "enum",
-    "exception",
-    "extends",
     "implements",
     "member",
     "namespace",
     "param",
-    "prop",
     "property",
-    "return",
     "returns",
     "satisfies",
     "template",
@@ -155,8 +196,6 @@ const TYPE_BEARING_TAGS: &[&str] = &[
     "throws",
     "type",
     "typedef",
-    "var",
-    "yield",
     "yields",
 ];
 
@@ -172,7 +211,8 @@ pub fn type_name_references(source: &str) -> FxHashSet<String> {
     let mut names = FxHashSet::default();
     for block in scan_blocks(source) {
         for tag in block.tags() {
-            if !TYPE_BEARING_TAGS.contains(&tag.name.as_str()) {
+            let canonical = canonical_tag(&tag.name);
+            if !TYPE_BEARING_TAGS.iter().any(|t| t.eq_ignore_ascii_case(canonical)) {
                 continue;
             }
             if let Some(expr) = tag.type_expr() {
@@ -382,6 +422,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn synonym_table_transcribes_the_dictionary_whole() {
+        // The 18 tags `exports.jsdocTags` of jsdoc 4.0.4 gives a `synonyms`
+        // field, and the 21 names those fields hold. Both sides are spelled
+        // out: a count alone passes on a pair retargeted at the wrong tag, and
+        // a partially transcribed column reads as a set of unknown tags — one
+        // bug report at a time — rather than as one visible omission.
+        let mut canonicals: Vec<&str> = TAG_SYNONYMS.iter().map(|(_, c)| *c).collect();
+        canonicals.sort_unstable();
+        canonicals.dedup();
+        assert_eq!(
+            canonicals,
+            [
+                "abstract",
+                "augments",
+                "class",
+                "constant",
+                "default",
+                "description",
+                "external",
+                "file",
+                "fires",
+                "function",
+                "member",
+                "memberof",
+                "param",
+                "property",
+                "returns",
+                "throws",
+                "typedef",
+                "yields",
+            ]
+        );
+        assert_eq!(TAG_SYNONYMS.len(), 21);
+    }
+
+    #[test]
+    fn synonym_table_is_a_sorted_one_step_relation() {
+        // Sorted and duplicate-free so an addition lands in one obvious place.
+        let synonyms: Vec<&str> = TAG_SYNONYMS.iter().map(|(s, _)| *s).collect();
+        let mut sorted = synonyms.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(synonyms, sorted, "TAG_SYNONYMS must be sorted and unique");
+        // No synonym is itself a canonical tag, so resolution never chains.
+        for (synonym, canonical) in TAG_SYNONYMS {
+            assert_eq!(
+                canonical_tag(canonical),
+                *canonical,
+                "`@{synonym}` resolves to `@{canonical}`, which is itself a synonym"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_tag_resolves_synonyms_and_passes_others_through() {
+        assert_eq!(canonical_tag("arg"), "param");
+        assert_eq!(canonical_tag("constructor"), "class");
+        assert_eq!(canonical_tag("memberof!"), "memberof");
+        assert_eq!(canonical_tag("YIELD"), "yields");
+        // `@constructs` is a tag of its own, not a spelling of `@class`.
+        assert_eq!(canonical_tag("constructs"), "constructs");
+        assert_eq!(canonical_tag("priority"), "priority");
+    }
+
+    #[test]
     fn scans_single_block_with_tags() {
         let src = "/**\n * Hello.\n * @param x - note\n * @returns y\n */\nfn f() {}\n";
         let blocks = scan_blocks(src);
@@ -476,6 +581,61 @@ mod tests {
         // imported module rather than a local binding.
         assert!(type_names("/** @type {import('./batch.js').Batch} */").is_empty());
         assert_eq!(type_names("/** @type {{batch: Batch}} */"), ["Batch"]);
+    }
+
+    #[test]
+    fn reads_the_type_of_every_type_bearing_tag() {
+        // Spelled out rather than looped over TYPE_BEARING_TAGS, which would
+        // agree with itself whatever it holds. Dropping an entry narrows what
+        // counts as a type reference in silence — `@yields {T}` is a
+        // generator's only mention of `T`, and losing it makes
+        // `ts-no-unused-vars` ask for the import to be deleted.
+        for tag in [
+            "augments",
+            "constant",
+            "enum",
+            "implements",
+            "member",
+            "namespace",
+            "param",
+            "property",
+            "returns",
+            "satisfies",
+            "template",
+            "this",
+            "throws",
+            "type",
+            "typedef",
+            "yields",
+        ] {
+            assert_eq!(
+                type_names(&format!("/** @{tag} {{Batch}} x */")),
+                ["Batch"],
+                "`@{tag}` reads no type"
+            );
+        }
+        // A tag that carries prose keeps its brace group out of type space.
+        assert!(type_names("/** @summary {Batch} */").is_empty());
+        // Every entry is a canonical spelling, so `canonical_tag` resolving a
+        // tag before the lookup can never miss one.
+        for tag in TYPE_BEARING_TAGS {
+            assert_eq!(canonical_tag(tag), *tag, "`@{tag}` is a synonym, not a canonical tag");
+        }
+    }
+
+    #[test]
+    fn a_synonym_bears_types_exactly_as_its_canonical_tag_does() {
+        // `@arg {Batch}` is `@param {Batch}` under another spelling, so the
+        // two must contribute the same type names. Table-driven, so a
+        // canonical tag added to TYPE_BEARING_TAGS cannot leave its synonyms
+        // behind.
+        for (synonym, canonical) in TAG_SYNONYMS {
+            assert_eq!(
+                type_names(&format!("/** @{synonym} {{Batch}} x */")),
+                type_names(&format!("/** @{canonical} {{Batch}} x */")),
+                "`@{synonym}` and `@{canonical}` read type space differently"
+            );
+        }
     }
 
     #[test]
