@@ -326,7 +326,8 @@ impl OxcCheck for Check {
         if is_first
             && let Expression::Identifier(obj_ident) = &member.object
             && resolves_to_regex_match(node, obj_ident.name.as_str(), semantic)
-            && has_preceding_nullish_exit_guard(node, obj_ident.name.as_str(), semantic)
+            && let Some(symbol) = reference_symbol(obj_ident, semantic)
+            && has_preceding_nullish_exit_guard(node, symbol, semantic)
         {
             return;
         }
@@ -438,8 +439,9 @@ impl OxcCheck for Check {
         // its length (`[]` is truthy), so the same guard would not bound an array.
         if (is_first || is_last)
             && let Expression::Identifier(obj_ident) = &member.object
-            && binding_has_string_type(obj_ident, semantic)
-            && has_preceding_nullish_exit_guard(node, obj_ident.name.as_str(), semantic)
+            && let Some(symbol) = reference_symbol(obj_ident, semantic)
+            && binding_has_string_type(symbol, semantic)
+            && has_preceding_nullish_exit_guard(node, symbol, semantic)
         {
             return;
         }
@@ -1593,9 +1595,112 @@ fn find_after<'a>(haystack: &'a str, needle: &str) -> Option<&'a str> {
         .map(|idx| &haystack[idx + needle.len()..])
 }
 
+/// Calls `stmt_is_guard` on every statement that dominates the access — the
+/// statements before it in its own block, then before its enclosing statement in
+/// each enclosing block, the function body, and the `Program` — and returns true
+/// as soon as one answers true.
+///
+/// At every level the access is anchored on the statement whose span contains it,
+/// and only the statements before that one are offered. Each of those runs before
+/// the access on every path that reaches it, so a guard among them holds at the
+/// access however deeply the access is nested.
+///
+/// The walk stops at the enclosing `Function` / `ArrowFunctionExpression`, the one
+/// boundary where that dominance stops holding: a function body runs where the
+/// function is called, not where it is written, so a guard outside it says nothing
+/// about the state at the call.
+///
+/// A level whose statements do not contain the access ends the walk, so a
+/// position the anchoring cannot resolve stays unguarded.
+///
+/// Dominance is all this proves. A caller that reads a guard as a statement about
+/// a binding owns the rest: that the guard names the same binding, and that
+/// nothing wrote it in between (see [`has_preceding_nullish_exit_guard`]).
+fn any_dominating_stmt(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    mut stmt_is_guard: impl FnMut(&Statement<'_>) -> bool,
+) -> bool {
+    let nodes = semantic.nodes();
+    let node_span_start = node.kind().span().start;
+    let mut current_id = node.id();
+
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        let parent = nodes.get_node(parent_id);
+        let stmts: &[Statement] = match parent.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            AstKind::BlockStatement(block) => &block.body,
+            AstKind::FunctionBody(body) => &body.statements,
+            AstKind::Program(prog) => &prog.body,
+            _ => {
+                current_id = parent_id;
+                continue;
+            }
+        };
+        let our_idx = stmts
+            .iter()
+            .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
+        let Some(our_idx) = our_idx else { return false };
+        if stmts[..our_idx].iter().any(&mut stmt_is_guard) {
+            return true;
+        }
+        current_id = parent_id;
+    }
+}
+
+/// Returns the offset from which `kind` runs again on every iteration, when `kind` is
+/// a looping statement.
+///
+/// A `for` initializer and a `for…in`/`for…of` right-hand side run once, ahead of the
+/// first iteration, so they sit before that offset: a read placed there sees the same
+/// value every time the loop is entered.
+fn reentered_region_start(kind: AstKind) -> Option<u32> {
+    match kind {
+        AstKind::ForStatement(stmt) => Some(
+            stmt.init
+                .as_ref()
+                .map_or(stmt.span().start, |init| init.span().end),
+        ),
+        AstKind::ForInStatement(stmt) => Some(stmt.right.span().end),
+        AstKind::ForOfStatement(stmt) => Some(stmt.right.span().end),
+        AstKind::WhileStatement(stmt) => Some(stmt.span().start),
+        AstKind::DoWhileStatement(stmt) => Some(stmt.span().start),
+        _ => None,
+    }
+}
+
+/// Returns the symbol an identifier reference binds to, or `None` when the
+/// reference is unresolved — an undeclared global has no binding to reason about.
+fn reference_symbol(
+    ident: &IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::SymbolId> {
+    let reference_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(reference_id).symbol_id()
+}
+
+/// Returns true when `expr` is an identifier reference that resolves to `symbol`.
+fn expression_is_binding(
+    expr: &Expression,
+    symbol: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    matches!(expr, Expression::Identifier(id) if reference_symbol(id, semantic) == Some(symbol))
+}
+
 /// Returns true when a preceding sibling statement in the same block guards
 /// the array access via an early-exit pattern or a Vitest/Jest length assertion.
 /// Does not cross function boundaries.
+///
+/// Stays in the innermost block rather than using [`any_dominating_stmt`]:
+/// the early-exit pattern of [`scan_preceding_stmts`] accepts any `if` test whose
+/// text mentions `.length`, without tying it to `obj_text`. Among siblings in one
+/// block that stands in for "the same array"; across enclosing scopes an early
+/// exit on an unrelated array would vouch this access safe.
 fn has_preceding_guard(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -2587,18 +2692,12 @@ fn ts_type_is_glmatrix_fixed(ty: &TSType, semantic: &oxc_semantic::Semantic) -> 
 /// truthiness early-exit (`if (!word) return`) prove non-emptiness — array types,
 /// whose `[]` is truthy, never qualify.
 fn binding_has_string_type(
-    ident: &IdentifierReference,
+    symbol: oxc_semantic::SymbolId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
     let nodes = semantic.nodes();
-    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let decl_node_id = scoping.symbol_declaration(symbol);
     for kind in std::iter::once(nodes.kind(decl_node_id))
         .chain(nodes.ancestor_kinds(decl_node_id))
     {
@@ -3063,75 +3162,191 @@ fn first_param_is_name(params: &FormalParameters, name: &str) -> bool {
     )
 }
 
-/// Returns true when a preceding sibling statement in the same block exits early
-/// on `name` being nullish/falsy: `if (!name) return/throw`, `if (name === null)
-/// return/throw`, or `if (name == null) return/throw`. Does not cross function
-/// boundaries.
+/// Returns true when a statement preceding the access — in its own block or in
+/// any enclosing scope reached by [`any_dominating_stmt`] — exits early on
+/// `symbol` being nullish/falsy (`if (!m) return/throw`, `if (m === null)
+/// return/throw`, `if (m == null) return/throw`) AND the guard still holds at the
+/// access (see [`guard_survives_to`]).
+///
+/// The guard's identifier is matched by symbol, so a shadowing inner binding does
+/// not inherit a guard written for the outer one of the same name.
 fn has_preceding_nullish_exit_guard(
     node: &oxc_semantic::AstNode,
-    name: &str,
+    symbol: oxc_semantic::SymbolId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let nodes = semantic.nodes();
-    let mut current_id = node.id();
-    let node_span_start = node.kind().span().start;
-    loop {
-        let parent_id = nodes.parent_id(current_id);
-        if parent_id == current_id {
+    any_dominating_stmt(node, semantic, |stmt| {
+        let Statement::IfStatement(if_stmt) = stmt else {
             return false;
-        }
-        let parent = nodes.get_node(parent_id);
-        let stmts: &[Statement] = match parent.kind() {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
-            AstKind::BlockStatement(block) => &block.body,
-            AstKind::FunctionBody(body) => &body.statements,
-            AstKind::Program(prog) => &prog.body,
-            _ => {
-                current_id = parent_id;
-                continue;
-            }
         };
-        let our_idx = stmts
+        condition_is_nullish_check(&if_stmt.test, symbol, semantic)
+            && body_has_early_exit(&if_stmt.consequent)
+            && guard_survives_to(symbol, if_stmt.consequent.span().end, node, semantic)
+    })
+}
+
+/// Returns true when what the guard ending at `guard_end` proved about `symbol` still
+/// describes the binding at the access. Two kinds of write take that away:
+///   - one that definitely ran on the way — a dominating statement extending past the
+///     guard that writes `symbol` on every path leaving it (see [`stmt_must_write`]);
+///   - one anywhere inside a loop region that re-runs around the access and starts
+///     after the guard — the next iteration runs the write before it runs the access
+///     again, whichever of the two comes first in the source.
+///
+/// A write that merely sits between the two in the source proves nothing: it may be on
+/// a branch that exits, on the arm the access is not in, or in a callback that is
+/// stored rather than called. Those keep their guard.
+///
+/// `guard_end` ends at the guard's consequent, not at the whole `if`: the consequent is
+/// the branch that exits, so an `else` arm is on the path to the access.
+///
+/// Only writes count. A binding never written after its declaration — every `const` —
+/// keeps its guard through any amount of nesting.
+fn guard_survives_to(
+    symbol: oxc_semantic::SymbolId,
+    guard_end: u32,
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let mut writes = semantic
+        .scoping()
+        .get_resolved_references(symbol)
+        .filter(|reference| reference.flags().contains(oxc_semantic::ReferenceFlags::Write))
+        .peekable();
+    if writes.peek().is_none() {
+        return true;
+    }
+    if any_dominating_stmt(node, semantic, |stmt| {
+        stmt.span().end > guard_end && stmt_must_write(stmt, symbol, semantic)
+    }) {
+        return false;
+    }
+
+    // The walk stops at the enclosing function, so only loops inside it are reachable
+    // here; one enclosing the access from outside starts before the guard and is
+    // dropped by the `guard_end` filter anyway.
+    //
+    // The access has to sit in the part that re-runs, but a write counts anywhere in
+    // the loop: a head that runs once still runs before every read in the body.
+    let nodes = semantic.nodes();
+    let access_start = node.kind().span().start;
+    let loops_around_access: Vec<oxc_span::Span> = nodes
+        .ancestors(node.id())
+        .filter_map(|ancestor| {
+            let region_start = reentered_region_start(ancestor.kind())?;
+            let reruns_the_access = guard_end <= region_start && region_start <= access_start;
+            reruns_the_access.then(|| ancestor.kind().span())
+        })
+        .collect();
+    !writes.any(|reference| {
+        let write_start = nodes.kind(reference.node_id()).span().start;
+        loops_around_access
             .iter()
-            .position(|s| s.span().start <= node_span_start && node_span_start < s.span().end);
-        let Some(our_idx) = our_idx else { return false };
-        return stmts[..our_idx].iter().any(|stmt| {
-            matches!(stmt, Statement::IfStatement(if_stmt)
-                if condition_is_nullish_check(&if_stmt.test, name)
-                    && body_has_early_exit(&if_stmt.consequent))
-        });
+            .any(|span| span.start <= write_start && write_start < span.end)
+    })
+}
+
+/// Returns true when `stmt` writes `symbol` on every path that leaves it normally, so
+/// a read placed after it sees the new value.
+///
+/// An `if` qualifies when each of its arms either writes or exits: the arm that exits
+/// never reaches the read, so the arm that writes is the only one that does.
+///
+/// Expression statements, blocks and `if`s are the shapes recognized. A definite write
+/// buried in a `switch`, a `try` or a loop body reads as no write at all, which keeps
+/// the guard where a narrower answer would drop it.
+fn stmt_must_write(
+    stmt: &Statement,
+    symbol: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match stmt {
+        Statement::ExpressionStatement(expr_stmt) => {
+            expression_writes(&expr_stmt.expression, symbol, semantic)
+        }
+        Statement::BlockStatement(block) => block
+            .body
+            .iter()
+            .any(|inner| stmt_must_write(inner, symbol, semantic)),
+        Statement::IfStatement(if_stmt) => {
+            let arm_settles = |arm: &Statement| {
+                stmt_must_write(arm, symbol, semantic) || body_has_early_exit(arm)
+            };
+            arm_settles(&if_stmt.consequent)
+                && if_stmt.alternate.as_ref().is_some_and(arm_settles)
+        }
+        _ => false,
     }
 }
 
-/// Returns true when `expr` is a guard condition that holds whenever `name` is
-/// nullish/falsy: `!name`, `name === null` / `name == null`,
-/// `name === undefined` / `name == undefined`, or a compound `||` whose left or
-/// right arm is itself such a check (e.g. `!name || name === "/"`).
+/// Returns true when evaluating `expr` stores into `symbol` a value the guard never
+/// saw.
+///
+/// A plain `=` does, and so does `&&=`, which assigns its right-hand side whenever the
+/// left is truthy. Every other compound operator derives the new value from the current
+/// one: `||=` and `??=` are no-ops on a value already proven truthy or non-nullish, and
+/// of the arithmetic and bitwise forms only `+=` applies to the `string`-annotated
+/// binding this rule guards, where it can only lengthen the value.
+///
+/// Only a bare identifier target is recognized. `m++` and destructuring targets read as
+/// no write at all, which keeps the guard where a narrower answer would drop it.
+fn expression_writes(
+    expr: &Expression,
+    symbol: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match expr {
+        Expression::AssignmentExpression(assign) => matches!(
+            assign.operator,
+            AssignmentOperator::Assign | AssignmentOperator::LogicalAnd
+        ) && matches!(
+            &assign.left,
+            AssignmentTarget::AssignmentTargetIdentifier(id)
+                if reference_symbol(id, semantic) == Some(symbol)
+        ),
+        Expression::SequenceExpression(seq) => seq
+            .expressions
+            .iter()
+            .any(|inner| expression_writes(inner, symbol, semantic)),
+        _ => false,
+    }
+}
+
+/// Returns true when `expr` is a guard condition that holds whenever `symbol` is
+/// nullish/falsy: `!m`, `m === null` / `m == null`, `m === undefined` /
+/// `m == undefined`, or a compound `||` whose left or right arm is itself such a
+/// check (e.g. `!m || m === "/"`).
 ///
 /// The caller (`has_preceding_nullish_exit_guard`) only reaches the index access
 /// when this condition is *false* — the guard is `if (test) { early_exit }`. For
 /// `test = left || right`, fall-through means `!(left || right)`, i.e. both arms
-/// are false. If either arm is a nullish check for `name`, that arm being false
-/// proves `name` is non-nullish, so the access is safe. This is sound for `||`
-/// only: under `&&`, fall-through is `!left || !right`, which does not prove
-/// `name` is non-nullish even when one arm is `!name`, so `&&` is not recognized.
-fn condition_is_nullish_check(expr: &Expression, name: &str) -> bool {
+/// are false. If either arm is a nullish check for `symbol`, that arm being false
+/// proves the binding is non-nullish, so the access is safe. This is sound for `||`
+/// only: under `&&`, fall-through is `!left || !right`, which does not prove the
+/// binding non-nullish even when one arm is `!m`, so `&&` is not recognized.
+fn condition_is_nullish_check(
+    expr: &Expression,
+    symbol: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
     match expr {
         Expression::UnaryExpression(unary) => {
             matches!(unary.operator, UnaryOperator::LogicalNot)
-                && matches!(&unary.argument, Expression::Identifier(id) if id.name.as_str() == name)
+                && expression_is_binding(&unary.argument, symbol, semantic)
         }
         Expression::BinaryExpression(bin) => {
             matches!(
                 bin.operator,
                 BinaryOperator::StrictEquality | BinaryOperator::Equality
-            ) && binary_compares_identifier_to_nullish(&bin.left, &bin.right, name)
+            ) && binary_compares_to_nullish(&bin.left, &bin.right, |operand| {
+                expression_is_binding(operand, symbol, semantic)
+            })
         }
         Expression::LogicalExpression(logical)
             if logical.operator == LogicalOperator::Or =>
         {
-            condition_is_nullish_check(&logical.left, name)
-                || condition_is_nullish_check(&logical.right, name)
+            condition_is_nullish_check(&logical.left, symbol, semantic)
+                || condition_is_nullish_check(&logical.right, symbol, semantic)
         }
         _ => false,
     }
@@ -3145,16 +3360,26 @@ fn binary_compares_identifier_to_nullish(
     right: &Expression,
     name: &str,
 ) -> bool {
-    let is_name = |e: &Expression| matches!(e, Expression::Identifier(id) if id.name.as_str() == name);
+    binary_compares_to_nullish(left, right, |operand| {
+        matches!(operand, Expression::Identifier(id) if id.name.as_str() == name)
+    })
+}
+
+/// Returns true when one side of a binary comparison satisfies `is_target` and the
+/// other is the `null` literal or the `undefined` identifier (order-insensitive).
+fn binary_compares_to_nullish(
+    left: &Expression,
+    right: &Expression,
+    is_target: impl Fn(&Expression) -> bool,
+) -> bool {
     let is_nullish = |e: &Expression| {
         matches!(e, Expression::NullLiteral(_))
             || matches!(e, Expression::Identifier(id) if id.name.as_str() == "undefined")
     };
-    (is_name(left) && is_nullish(right)) || (is_nullish(left) && is_name(right))
+    (is_target(left) && is_nullish(right)) || (is_nullish(left) && is_target(right))
 }
 
-/// Returns true when a preceding `if`-statement in the same block (or an
-/// enclosing block/function/program, stopping at function boundaries) ensures
+/// Returns true when a preceding `if`-statement in the same block ensures
 /// `obj_text` is a non-empty array: its test detects `obj_text` being
 /// nullish/empty (see [`condition_is_nullish_or_empty_check`]) AND its consequent
 /// assigns a non-empty array literal to that same `obj_text` (see
@@ -3163,14 +3388,17 @@ fn binary_compares_identifier_to_nullish(
 /// non-empty, guard true ⇒ assigned a non-empty literal — so a following
 /// first/last read on `obj_text` is in-bounds.
 ///
-/// Mirrors [`has_preceding_nullish_exit_guard`]'s block walk: anchors on the
-/// statement containing the access in the innermost enclosing block/body/program
-/// and scans its preceding siblings. The "same base" identity is the text of the
-/// receiver of the `[0]` access (`obj_text`), matched against the test and the
-/// assignment target by source text — the convention the other text-based
-/// preceding-guard helpers (`scan_preceding_stmts`, `stmt_is_push_on`) use, so a
-/// member-expression base like `options.domains` is matched exactly and a
-/// different base (`options.commonName`) does not.
+/// The "same base" identity is the text of the receiver of the `[0]` access
+/// (`obj_text`), matched against the test and the assignment target by source
+/// text — the convention the other text-based preceding-guard helpers
+/// (`scan_preceding_stmts`, `stmt_is_push_on`) use, so a member-expression base
+/// like `options.domains` is matched exactly and a different base
+/// (`options.commonName`) does not.
+///
+/// Stays in the innermost block rather than using [`any_dominating_stmt`]:
+/// source text is not a binding, so there is nothing to resolve a shadowing
+/// re-declaration against, and nothing to ask for the writes that would invalidate
+/// the guard on the way out. Within one block, adjacency stands in for both.
 fn has_preceding_ensure_nonempty_guard(
     node: &oxc_semantic::AstNode,
     obj_text: &str,
@@ -3373,7 +3601,7 @@ fn all_references_guarded(
             continue;
         }
         saw_reference = true;
-        if !reference_is_guarded(reference.node_id(), name, semantic) {
+        if !reference_is_guarded(reference.node_id(), symbol_id, name, semantic) {
             return false;
         }
     }
@@ -3427,13 +3655,21 @@ fn reference_is_pure_condition(
 ///      bare `if`/ternary/`while` test (see [`reference_is_pure_condition`]);
 ///   1. it is the base of an optional chain — `name?.foo`, `name?.[i]`, `name?.()`;
 ///   2. a preceding early-exit nullish guard dominates it — `if (!name) return`
-///      earlier in its block (see [`has_preceding_nullish_exit_guard`]);
+///      earlier in its block or in any enclosing scope (see
+///      [`has_preceding_nullish_exit_guard`]);
 ///   3. it is the tested operand of a truthy guard whose consequent/expression it
 ///      stays within — `if (name) { … }`, `if (name && …) { … }`,
 ///      `name && name.foo`, `name ? name.foo : d`. The reference must sit inside
 ///      the guarded branch, so a use outside the narrowing is not vouched safe.
+///
+/// Both `symbol_id` and `name` are needed. Cases 0, 1 and 3 read the narrowing from
+/// the reference's own enclosing expression, where a same-named identifier is
+/// necessarily the same binding, and match it by text. Case 2 is the only one that
+/// leaves the reference's scope, where a re-declaration can shadow the name, so it
+/// asks for the symbol.
 fn reference_is_guarded(
     ref_node_id: oxc_semantic::NodeId,
+    symbol_id: oxc_semantic::SymbolId,
     name: &str,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
@@ -3466,10 +3702,10 @@ fn reference_is_guarded(
         }
         _ => {}
     }
-    // 2: an early-exit nullish guard preceding the reference in its block dominates
-    // it — `if (!name) return/throw` runs before the reference, so reaching the
-    // reference proves `name` was non-nullish.
-    if has_preceding_nullish_exit_guard(nodes.get_node(ref_node_id), name, semantic) {
+    // 2: an early-exit nullish guard preceding the reference, in its block or in an
+    // enclosing scope, dominates it — `if (!name) return/throw` runs before the
+    // reference, so reaching the reference proves `name` was non-nullish.
+    if has_preceding_nullish_exit_guard(nodes.get_node(ref_node_id), symbol_id, semantic) {
         return true;
     }
     // 3: the reference is dominated by a truthy guard on `name` — an enclosing
@@ -3614,7 +3850,8 @@ fn is_in_same_var_truthy_string_guard(
     if !reference_in_truthy_narrowed_branch(node.id(), node_span, name, nodes) {
         return false;
     }
-    binding_has_string_type(ident, semantic)
+    reference_symbol(ident, semantic)
+        .is_some_and(|symbol| binding_has_string_type(symbol, semantic))
         || branch_has_string_method_on(node, name, semantic)
 }
 
@@ -6400,6 +6637,205 @@ mod tests {
         // Negative control: the `!` applies to the outer `.foo` member, so `arr[0]`
         // itself is a value read that is NOT non-null-asserted and stays flagged.
         let src = "const y = arr[0].foo!;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_from_nested_block_issue_8409() {
+        // The issue's minimal repro: `if (!m) return` at the top of the function
+        // dominates every later statement, nested blocks included.
+        let src = "function o(): string { const m = re.exec(src); if (!m) return ''; if (src) { return m[0]; } return ''; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_three_blocks_deep_issue_8409() {
+        // The guard stays visible however deep the read sits, as long as no
+        // function or loop boundary separates them.
+        let src = "function f(): string { const m = re.exec(src); if (!m) return ''; if (a) { if (b) { if (c) { return m[0]; } } } return ''; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_read_in_loop_body_below_the_guard_issue_8409() {
+        // The loop rebinds `m` before the read, so the guard above the loop does
+        // not describe the state inside the body.
+        let src = "function f() { let m = re.exec(src); if (!m) return; while (c) { m = re.exec(other); use(m[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_loop_read_when_the_loop_rebinds_after_it_issue_8409() {
+        // The write follows the read in the source but precedes it on the second
+        // iteration, so the guard above the loop does not describe the read.
+        let src = "function f() { let m = re.exec(src); if (!m) return; while (c) { use(m[0]); m = re.exec(other); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_read_in_unwritten_loop_body_issue_8409() {
+        // Nothing in the loop writes `m`, so the guard above it still describes
+        // the binding on every iteration — including a braceless body.
+        let src = "function f() { const m = re.exec(src); if (!m) return; while (c) use(m[0]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_read_in_for_initializer_issue_8409() {
+        // A `for` initializer runs once, before the first iteration, so the guard
+        // above the loop still describes the state there.
+        let src = "function f() { const m = re.exec(src); if (!m) return -1; for (let p = idx(m[0]); p !== -1; p = next(p)) { use(p); } return 0; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_read_when_a_shadowing_binding_is_unguarded_issue_8409() {
+        // The inner `m` is a different binding; the guard above names the outer one,
+        // so it says nothing about the read.
+        let src = "function f(): string { const m = re.exec(a); if (!m) return ''; if (c) { const m = re.exec(b); return m[0]; } return ''; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_read_after_a_rebinding_issue_8409() {
+        // The rebinding between the guard and the read may be null, so reaching the
+        // read no longer proves the binding non-nullish.
+        let src = "function f() { let m = re.exec(a); if (!m) return; if (c) { m = re.exec(b); use(m[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_read_guarded_on_other_identifier_issue_8409() {
+        // Both bindings are exec results, so both reach the guard lookup; the only
+        // preceding guard names `m`, so it says nothing about `n`.
+        let src = "function f(): string { const m = re.exec(a); const n = re.exec(b); if (!m) return ''; if (c) { return n[0]; } return ''; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_nested_read_when_guard_is_in_outer_function_issue_8409() {
+        // The walk stops at the function boundary: the outer guard says nothing
+        // about the state when the inner callback runs.
+        let src = "function f() { const m = re.exec(src); if (!m) return; run(() => { if (a) { return m[0]; } }); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_after_a_rebinding_in_the_guard_else_arm_issue_8409() {
+        // Only the consequent exits, so the `else` arm is on the path to the read and
+        // the rebinding it performs may be null.
+        let src = "function f() { let m = re.exec(a); if (!m) { return; } else { m = re.exec(b); } use(m[0]); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_below_a_rebinding_in_an_outer_block_issue_8409() {
+        // The rebinding sits one level above the read, still between it and the guard,
+        // so the read is reached with the rebound value.
+        let src = "function f() { let m = re.exec(a); if (!m) return; if (c) { m = re.exec(b); if (d) { use(m[0]); } } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_loop_body_read_when_the_loop_head_rebinds_issue_8409() {
+        // The initializer runs once, but it still runs before every read in the body.
+        let src = "function f() { let m = re.exec(x); if (!m) return; for (m = re.exec(a); c;) { use(m[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_after_a_compound_string_assignment_issue_8409() {
+        // `+=` derives its value from the current one: a non-empty string stays
+        // non-empty, so the guard still holds.
+        let src = "function f(word: string): string { if (!word) return ''; word += 'x'; return word[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_read_after_a_logical_and_assignment_issue_8409() {
+        // `&&=` assigns its right-hand side exactly when the left is truthy, so it
+        // stores a value the guard never saw.
+        let src = "function f(word: string): string { if (!word) return ''; word &&= other(); return word[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_string_guard_from_nested_block_issue_8409() {
+        // The string-typed call site shares the walk: `if (!s) return` proves the
+        // string non-empty for a read nested below it.
+        let src = "function f(s: string): string { if (!s) return ''; if (c) { return s[0]; } return ''; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_result_binding_guard_from_nested_block_issue_8409() {
+        // The result-binding call site shares it too: every use of `first` is either
+        // the guard's own test or dominated by it.
+        let src = "function f(xs) { const first = xs[0]; if (!first) return; if (c) { use(first.id); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_read_in_a_rebinding_do_while_body_issue_8409() {
+        let src = "function f() { let m = re.exec(s); if (!m) return; do { use(m[0]); m = re.exec(t); } while (c); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_in_a_rebinding_for_in_body_issue_8409() {
+        let src = "function f() { let m = re.exec(s); if (!m) return; for (const k in o) { use(m[0]); m = re.exec(t); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_in_a_rebinding_for_of_body_issue_8409() {
+        let src = "function f() { let m = re.exec(s); if (!m) return; for (const v of xs) { use(m[0]); m = re.exec(t); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_in_a_loop_that_rebinds_in_its_test_issue_8409() {
+        // marked's `Tokenizer.ts` shape: the loop condition itself rebinds, so the
+        // guard above the loop describes only the first iteration's value.
+        let src = "function f() { let m = re.exec(s); if (!m) return; while ((m = re.exec(t)) !== null) { use(m[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_read_in_for_initializer_of_a_rebinding_loop_issue_8409() {
+        // The initializer runs once, ahead of the first iteration, so a rebinding in
+        // the body it precedes can never have run before it.
+        let src = "function f() { let m = re.exec(src); if (!m) return -1; for (let p = idx(m[0]); p !== -1; p = next(p)) { m = re.exec(other); } return 0; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_when_the_rebinding_branch_exits_issue_8409() {
+        // The branch that rebinds also returns, so no path reaches the read with the
+        // rebound value.
+        let src = "function f() { let m = re.exec(a); if (!m) return; if (retry) { m = re.exec(b); return; } use(m[0]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_when_the_rebinding_is_on_the_other_arm_issue_8409() {
+        // The read sits in the `else` arm; the rebinding on the `then` arm never ran.
+        let src = "function f() { let m = re.exec(a); if (!m) return; if (c) { m = re.exec(b); } else { use(m[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_nullish_exit_guard_when_the_rebinding_is_deferred_to_a_callback_issue_8409() {
+        // The callback is stored, not called, so its write has not happened at the read.
+        let src = "function f() { let m = re.exec(a); if (!m) return; onDispose(() => { m = null; }); return m[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_nested_read_placed_before_the_guard_issue_8409() {
+        // At each level only the statements strictly before the one holding the
+        // read count, so a guard written after it does not vouch it safe.
+        let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
         assert_eq!(run_on(src).len(), 1);
     }
 }
