@@ -808,10 +808,28 @@ pub fn any_outer_attribute(item: Node, source: &[u8], predicate: impl Fn(&str) -
 /// path test macro, or a `cfg`/`cfg_attr` whose predicate activates `test`
 /// (positively, outside any `not(…)`). See `has_test_attribute`.
 fn attr_marks_test(text: &str) -> bool {
+    attr_is_test_macro(text) || cfg_predicate_activates_test(text)
+}
+
+/// True if a single attribute's source text is the test macro itself: rustc's
+/// built-in `#[test]`, or a runtime re-export of it that expands to the same
+/// thing. See `is_in_test_macro_fn`.
+fn attr_is_test_macro(text: &str) -> bool {
     text.contains("#[test]")
         || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
         || text.contains("::test(")   // #[tokio::test(flavor = "multi_thread")], …
-        || cfg_predicate_activates_test(text)
+}
+
+/// True when `node` sits inside a function carrying the test macro itself —
+/// `#[test]` or a runtime re-export such as `#[tokio::test]`.
+///
+/// Narrower than [`is_in_test_context`], which also counts `#[cfg(test)]` and
+/// `#[cfg_attr(test, …)]`. Rules asking "does rustc drop this item unless the
+/// crate is compiled with `--test`" want this one: the test macro expands to
+/// nothing without `--test`, whereas `#[cfg_attr(test, …)]` leaves the item
+/// compiled unconditionally.
+pub fn is_in_test_macro_fn(node: Node, source: &[u8]) -> bool {
+    enclosing_item_has_attribute(node, source, attr_is_test_macro)
 }
 
 /// True when an enclosing scope carries `#[allow(clippy::<lint>)]` or
@@ -9920,6 +9938,37 @@ mod tests {
                 has_test_attribute(item, src.as_bytes()),
                 expected,
                 "has_test_attribute mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn is_in_test_macro_fn_accepts_only_the_test_macro_itself() {
+        let test_cases = [
+            ("#[test]\nfn f() { let x = 1; }", true),
+            ("#[tokio::test]\nasync fn f() { let x = 1; }", true),
+            (
+                "#[actix_rt::test(flavor = \"multi_thread\")]\nasync fn f() { let x = 1; }",
+                true,
+            ),
+            // Nested in a helper declared inside the test function.
+            ("#[test]\nfn f() { fn h() { let x = 1; } }", true),
+            // Negative space: gates that leave the item compiled, or compile it
+            // out for another reason, are a different question. `#[cfg(test)]`
+            // belongs to `cfg_test_gates_compilation`.
+            ("#[cfg(test)]\nfn f() { let x = 1; }", false),
+            ("#[cfg_attr(test, allow(dead_code))]\nfn f() { let x = 1; }", false),
+            ("#[cfg(not(test))]\nfn f() { let x = 1; }", false),
+            ("fn f() { let x = 1; }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "let_declaration")
+                .expect("snippet should contain a let declaration");
+            assert_eq!(
+                is_in_test_macro_fn(node, src.as_bytes()),
+                expected,
+                "is_in_test_macro_fn mismatch for `{src}`"
             );
         }
     }
