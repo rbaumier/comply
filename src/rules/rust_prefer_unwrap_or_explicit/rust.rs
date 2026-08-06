@@ -18,6 +18,10 @@
 //! value.
 //!
 //! Tests are exempted via `is_in_test_context`.
+//!
+//! The diagnostic is anchored on the `unwrap_or_default` method-name node
+//! rather than on the enclosing `call_expression`, for the tree-sitter
+//! grammar reason `rust-no-unwrap`'s module docs give.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -144,20 +148,17 @@ impl AstCheck for Check {
                 return;
             }
         }
-        let pos = node.start_position();
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "rust-prefer-unwrap-or-explicit".into(),
-            message: "`.unwrap_or_default()` hides the fallback value from the reader. \
-                      Write it explicitly: `.unwrap_or(<value>)` or \
-                      `.unwrap_or_else(|| <expr>)`. The goal is that a reader should \
-                      see what the code does on None/Err without looking up trait impls."
+        diagnostics.push(Diagnostic::at_node(
+            std::sync::Arc::clone(&ctx.path_arc),
+            &field,
+            "rust-prefer-unwrap-or-explicit",
+            "`.unwrap_or_default()` hides the fallback value from the reader. \
+             Write it explicitly: `.unwrap_or(<value>)` or \
+             `.unwrap_or_else(|| <expr>)`. The goal is that a reader should \
+             see what the code does on None/Err without looking up trait impls."
                 .into(),
-            severity: Severity::Error,
-            span: None,
-        });
+            Severity::Error,
+        ));
     }
 }
 
@@ -248,5 +249,63 @@ mod tests {
     fn flags_bare_unwrap_or_default() {
         // No `.map()` receiver at all — still flags.
         assert_eq!(run_on("fn f() { let _ = opt.unwrap_or_default(); }").len(), 1);
+    }
+
+    /// Issue #8360 repro, verbatim: a chain rustfmt broke over several lines
+    /// (A, two calls), a chain with the receiver on an earlier line (B), and a
+    /// single-line call (C). Every diagnostic must land on the line and column
+    /// of its own `unwrap_or_default`, not on the head of the receiver chain.
+    const MULTILINE_CHAINS: &str = r#"use std::fs;
+use std::path::Path;
+
+/// A - two `.unwrap_or_default()` in one chain.
+pub fn looks_like_log(file: &Path) -> bool {
+    !file
+        .file_name()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default()
+        .starts_with("session_")
+}
+
+/// B - one call, receiver on an earlier line.
+pub fn read(path: &Path) -> String {
+    fs::read_to_string(path)
+        .ok()
+        .unwrap_or_default()
+}
+
+/// C - one call, all on one line.
+pub fn count(x: Option<u32>) -> u32 {
+    x.unwrap_or_default()
+}
+"#;
+
+    #[test]
+    fn anchors_each_chained_call_on_its_own_method_name() {
+        let diagnostics = run_on(MULTILINE_CHAINS);
+        let mut positions: Vec<(usize, usize)> =
+            diagnostics.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        // A's two calls are on lines 8 and 10, B's on 18, C's on 23. Their
+        // receiver chains start on lines 6, 16 and 23 — one position for both
+        // of A's calls, and two lines that hold no `unwrap_or_default`.
+        assert_eq!(positions, vec![(8, 10), (10, 10), (18, 10), (23, 7)]);
+    }
+
+    #[test]
+    fn spans_the_method_name_not_the_receiver_chain() {
+        let diagnostics = run_on(MULTILINE_CHAINS);
+        assert_eq!(diagnostics.len(), 4);
+        for diagnostic in diagnostics {
+            let (offset, len) = diagnostic.span.expect("native rules carry a span");
+            assert_eq!(
+                &MULTILINE_CHAINS[offset..offset + len],
+                "unwrap_or_default",
+                "diagnostic at {}:{} spans the wrong bytes",
+                diagnostic.line,
+                diagnostic.column
+            );
+        }
     }
 }
