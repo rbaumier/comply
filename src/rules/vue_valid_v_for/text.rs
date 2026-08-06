@@ -8,6 +8,10 @@
 //! that do not themselves iterate over a parent variable.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::vue_directive_ast::{
+    binding_argument, bound_expression, child_of_kind, directive_name, directive_value,
+    enclosing_tag, is_id_char, key_directive, split_for, tuple_parts,
+};
 
 const MSG_ARGUMENT: &str = "The v-for directive does not accept an argument.";
 const MSG_MODIFIER: &str = "The v-for directive does not support modifiers.";
@@ -18,91 +22,8 @@ const MSG_MISSING_KEY: &str =
 const MSG_KEY_NO_VARS: &str =
     "This v-bind:key directive does not use any variables from the v-for directive.";
 
-/// Find the first child of `node` whose kind is in `kinds`.
-fn child_of_kind<'a>(node: tree_sitter::Node<'a>, kinds: &[&str]) -> Option<tree_sitter::Node<'a>> {
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .find(|c| kinds.contains(&c.kind()))
-}
-
-/// Read the `directive_name` text of a `directive_attribute`.
-fn directive_name<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    child_of_kind(directive, &["directive_name"]).and_then(|n| n.utf8_text(source).ok())
-}
-
-/// Read the `attribute_value` (expression) text of a `directive_attribute`,
-/// descending through a `quoted_attribute_value` wrapper. `None` when the
-/// directive has no value or an empty quoted value.
-fn directive_value<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    let mut cursor = directive.walk();
-    for child in directive.children(&mut cursor) {
-        match child.kind() {
-            "attribute_value" => return child.utf8_text(source).ok(),
-            "quoted_attribute_value" => {
-                return child_of_kind(child, &["attribute_value"])
-                    .and_then(|n| n.utf8_text(source).ok());
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The `directive_argument`/`directive_dynamic_argument` text of a binding
-/// directive (`:foo`, `v-bind:foo`), e.g. `key` for `:key`.
-fn binding_argument<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    child_of_kind(directive, &["directive_argument", "directive_dynamic_argument"])
-        .and_then(|n| n.utf8_text(source).ok())
-}
-
-/// Whether a binding directive uses the Vue 3.5+ same-name shorthand: it carries
-/// an argument but no value node at all (`:key`, as opposed to `:key="x"` or an
-/// empty `:key=""`, both of which have a value node).
-fn is_same_name_shorthand(directive: tree_sitter::Node) -> bool {
-    let mut cursor = directive.walk();
-    !directive
-        .children(&mut cursor)
-        .any(|c| matches!(c.kind(), "attribute_value" | "quoted_attribute_value"))
-}
-
-/// Whether a `directive_attribute` is a `:key` / `v-bind:key` binding.
-fn is_key_binding(directive: tree_sitter::Node, source: &[u8]) -> bool {
-    matches!(directive_name(directive, source), Some(":") | Some("v-bind"))
-        && binding_argument(directive, source) == Some("key")
-}
-
-/// Split a `v-for` value into its `(alias, iterable)` halves on the top-level
-/// `in`/`of` keyword (outside any bracket nesting).
-fn split_for(value: &str) -> Option<(&str, &str)> {
-    let bytes = value.as_bytes();
-    let mut depth: i32 = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b'i' | b'o' if depth == 0 => {
-                let after = i + 2;
-                let kw = &value[i..after.min(value.len())];
-                let prev_boundary = i == 0 || !is_id_char(bytes[i - 1]);
-                let next_boundary = after >= bytes.len() || !is_id_char(bytes[after]);
-                if (kw == "in" || kw == "of") && prev_boundary && next_boundary {
-                    return Some((value[..i].trim(), value[after..].trim()));
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
 fn is_id_start(b: u8) -> bool {
     b.is_ascii_alphabetic() || b == b'_' || b == b'$'
-}
-
-fn is_id_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 /// Whether `expr` contains `ident` as a whole identifier token (not as a
@@ -150,33 +71,6 @@ fn collect_identifiers(alias: &str) -> Vec<&str> {
     idents
 }
 
-/// The alias is a parenthesised tuple `(a, b, c)`. Return its top-level
-/// comma-separated parts (trimmed), or `None` when it is not a tuple.
-fn tuple_parts(alias: &str) -> Option<Vec<&str>> {
-    let trimmed = alias.trim();
-    if !(trimmed.starts_with('(') && trimmed.ends_with(')')) {
-        return None;
-    }
-    let inner = &trimmed[1..trimmed.len() - 1];
-    let bytes = inner.as_bytes();
-    let mut parts = Vec::new();
-    let mut depth: i32 = 0;
-    let mut start = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        match b {
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' | b'}' => depth -= 1,
-            b',' if depth == 0 => {
-                parts.push(inner[start..i].trim());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(inner[start..].trim());
-    Some(parts)
-}
-
 /// Whether a tuple part is a destructuring pattern rather than a plain
 /// identifier (the secondary/tertiary aliases must be identifiers).
 fn is_destructuring(part: &str) -> bool {
@@ -189,12 +83,6 @@ fn has_invalid_secondary_alias(alias: &str) -> bool {
         Some(parts) => parts.iter().skip(1).any(|p| is_destructuring(p)),
         None => false,
     }
-}
-
-/// The enclosing `start_tag` / `self_closing_tag` of a directive.
-fn enclosing_tag(directive: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    let tag = directive.parent()?;
-    matches!(tag.kind(), "start_tag" | "self_closing_tag").then_some(tag)
 }
 
 /// The `tag_name` text of a `start_tag` / `self_closing_tag`.
@@ -228,13 +116,6 @@ fn has_is_attribute(tag: tree_sitter::Node, source: &[u8]) -> bool {
     })
 }
 
-/// The `:key` binding directive on a tag, if present.
-fn key_directive<'a>(tag: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
-    let mut cursor = tag.walk();
-    tag.children(&mut cursor)
-        .find(|c| c.kind() == "directive_attribute" && is_key_binding(*c, source))
-}
-
 /// The `v-for` directive on a tag, if present.
 fn v_for_directive<'a>(tag: tree_sitter::Node<'a>, source: &[u8]) -> Option<tree_sitter::Node<'a>> {
     let mut cursor = tag.walk();
@@ -252,16 +133,7 @@ fn key_violation<'a>(
     bindings: &[&str],
 ) -> Option<(tree_sitter::Node<'a>, &'static str)> {
     if let Some(key) = key_directive(tag, source) {
-        // The expression the `:key` binds. A valueless `:key` / `v-bind:key` is
-        // the Vue 3.5+ same-name shorthand (`:key` is equivalent to `:key="key"`)
-        // and binds to its own argument name. An empty `:key=""` has a value node
-        // and is not the shorthand, so it references no iteration variable.
-        let bound = directive_value(key, source).or_else(|| {
-            is_same_name_shorthand(key)
-                .then(|| binding_argument(key, source))
-                .flatten()
-        });
-        let uses_binding = bound.is_some_and(|expr| {
+        let uses_binding = bound_expression(key, source).is_some_and(|expr| {
             bindings
                 .iter()
                 .any(|binding| contains_identifier(expr, binding))

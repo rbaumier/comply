@@ -60,6 +60,7 @@ pub mod test_helpers;
 pub mod test_methods;
 pub mod test_validation_rejection;
 pub mod throw_assertion;
+pub mod vue_directive_ast;
 pub mod vue_sfc;
 pub mod vue_sfc_oxc;
 pub mod vue_shadow_scope;
@@ -269,11 +270,12 @@ mod tests {
         }
 
         // (canonical id kept) → (former alias ids that must NOT be registered).
-        let groups: [(&str, &[&str]); 4] = [
+        let groups: [(&str, &[&str]); 5] = [
             ("ts-no-explicit-any", &["typescript/no-explicit-any", "no-explicit-any"]),
             ("ts-no-inferrable-types", &["no-inferrable-types"]),
             ("promise-prefer-await-to-then", &["promise/prefer-await-to-then"]),
             ("consistent-type-imports", &["typescript/consistent-type-imports"]),
+            ("vue-no-array-index-key", &["vue-v-for-needs-stable-key"]),
         ];
         for (canonical, aliases) in groups {
             assert!(
