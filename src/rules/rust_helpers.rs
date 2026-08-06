@@ -786,22 +786,9 @@ pub fn has_test_attribute(item: Node, source: &[u8]) -> bool {
 /// immediately preceding it. Doc comments (`///`, `/** … */`) may interleave them
 /// in any order; they are skipped, not treated as the end of the attribute block.
 pub fn any_outer_attribute(item: Node, source: &[u8], predicate: impl Fn(&str) -> bool) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && predicate(text)
-                {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {}
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(item, |attribute_item| {
+        attribute_item.utf8_text(source).is_ok_and(&predicate)
+    })
 }
 
 /// True if a single attribute's source text marks test code: a `#[test]` /
@@ -2015,20 +2002,121 @@ fn attribute_path_is(attribute_item: Node, source: &[u8], attr_path: &str) -> bo
 /// attributes are traversed, so the marker need not be the attribute nearest the
 /// item.
 pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attr_paths.iter().any(|p| attribute_path_is(s, source, p)) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
+    any_preceding_attribute_item(item, |attribute_item| {
+        attr_paths
+            .iter()
+            .any(|p| attribute_path_is(attribute_item, source, p))
+    })
+}
+
+/// True if `item` carries an outer attribute `#[<attr_path>(… <option> …)]`,
+/// where `option` names a meta item of the attribute's argument list. That is
+/// the shape of a derive helper's container option: `#[serde(deny_unknown_fields)]`,
+/// `#[serde(default, transparent)]`, a field's `#[serde(flatten)]`.
+///
+/// Both halves are read from the AST, never from the attribute's raw text:
+///
+/// - the `attribute` node's path child must equal `attr_path`, so another
+///   crate's helper attribute spelling the same option
+///   (`#[schemars(deny_unknown_fields)]`) does not match;
+/// - `option` must be a direct-child token of the argument `token_tree` whose
+///   text equals `option`. That covers the bare word and the key of a
+///   `key = value` meta item, since `#[serde(default = "make_x")]` enables the
+///   same option. The word as a *value* (`#[serde(rename =
+///   "deny_unknown_fields")]`), inside a nested group (`#[serde(bound(…))]`), or
+///   in a `#[doc = "…"]` string does not match. Node kind is not constrained:
+///   Rust keywords are anonymous tokens, so `#[serde(default)]` matches.
+///
+/// `#[cfg_attr(<predicate>, <attr_path>(… <option> …))]` counts too, including a
+/// `cfg_attr` nested in a `cfg_attr`, because the author did declare the option.
+/// Which build configurations enable it is not decidable from the crate's own
+/// source. Any consumer can pass `--no-default-features` and switch a `default`
+/// feature off. The conditionally-applied attribute must still name `attr_path`,
+/// so a `cfg_attr` applying *another* crate's attribute does not match. Only
+/// `cfg_attr` arguments are traversed this way.
+pub fn has_attribute_option(item: Node, source: &[u8], attr_path: &str, option: &str) -> bool {
+    any_preceding_attribute_item(item, |attribute_item| {
+        attribute_declares_option(attribute_item, source, attr_path, option)
+    })
+}
+
+/// True if the `attribute_item` declares `<attr_path>(… <option> …)`, either as
+/// the attribute itself or applied through a `cfg_attr` argument list.
+fn attribute_declares_option(
+    attribute_item: Node,
+    source: &[u8],
+    attr_path: &str,
+    option: &str,
+) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    // An argument-less `#[marker]` or a `#[key = "value"]` attribute has no
+    // `arguments` field, so it can declare no option.
+    let (Some(path), Some(arguments)) = (
+        attribute.named_child(0),
+        attribute.child_by_field_name("arguments"),
+    ) else {
+        return false;
+    };
+    match path.utf8_text(source) {
+        Ok(p) if p == attr_path => token_tree_names_option(arguments, source, option),
+        Ok("cfg_attr") => token_tree_applies_attribute_option(arguments, source, attr_path, option),
+        _ => false,
     }
-    false
+}
+
+/// True if `token_tree` holds a direct-child token whose text is `option` — the
+/// bare-word meta item of an argument list such as `(default,
+/// deny_unknown_fields)`, or the key of a `key = value` one.
+///
+/// Nested groups are not searched: a word inside `bound(…)` is an argument of
+/// that inner attribute, not of this one. A word inside a string literal cannot
+/// match either, because the literal's text carries its quotes.
+fn token_tree_names_option(token_tree: Node, source: &[u8], option: &str) -> bool {
+    let mut cursor = token_tree.walk();
+    token_tree
+        .children(&mut cursor)
+        .any(|tok| tok.kind() != "token_tree" && tok.utf8_text(source) == Ok(option))
+}
+
+/// True if `token_tree` — a `cfg_attr` argument list — applies
+/// `<attr_path>(… <option> …)`: a token equal to `attr_path` immediately
+/// followed by a `token_tree` naming `option`.
+///
+/// Inside a `cfg_attr` the conditionally-applied attributes are plain tokens,
+/// not `attribute` nodes, so the path is read as the token preceding its
+/// argument group. Only a group introduced by `cfg_attr` is searched
+/// recursively, which reaches a `cfg_attr` nested in a `cfg_attr` and nothing
+/// else. The predicate expression and any other applied attribute's arguments
+/// are left alone.
+fn token_tree_applies_attribute_option(
+    token_tree: Node,
+    source: &[u8],
+    attr_path: &str,
+    option: &str,
+) -> bool {
+    let mut cursor = token_tree.walk();
+    token_tree.children(&mut cursor).any(|token| {
+        if token.kind() != "token_tree" {
+            return false;
+        }
+        let introduced_by = token
+            .prev_sibling()
+            .filter(|previous| previous.kind() != "token_tree")
+            .and_then(|previous| previous.utf8_text(source).ok());
+        match introduced_by {
+            Some(path) if path == attr_path => token_tree_names_option(token, source, option),
+            Some("cfg_attr") => {
+                token_tree_applies_attribute_option(token, source, attr_path, option)
+            }
+            _ => false,
+        }
+    })
 }
 
 /// True if `node` is covered by an `#[allow(<scope>::<lint>)]` or
@@ -2123,6 +2211,36 @@ const ATTRIBUTE_OWNER_KINDS: &[&str] = &[
     "shorthand_field_initializer",
 ];
 
+/// True if any `attribute_item` preceding `item` as a named sibling satisfies
+/// `matches`.
+///
+/// In tree-sitter-rust an item's outer attributes are the `attribute_item` nodes
+/// immediately before it. Doc comments (`///`, `/** … */`) may interleave them in
+/// any order, and are skipped rather than read as the end of the attribute
+/// block. Unrelated attributes are traversed, so the wanted one need not be the
+/// nearest to `item`.
+///
+/// The preceding-sibling counterpart of [`any_owned_attribute`].
+fn any_preceding_attribute_item<'tree>(
+    item: Node<'tree>,
+    matches: impl Fn(Node<'tree>) -> bool,
+) -> bool {
+    let mut sibling = item.prev_named_sibling();
+    while let Some(s) = sibling {
+        match s.kind() {
+            "line_comment" | "block_comment" => {}
+            "attribute_item" => {
+                if matches(s) {
+                    return true;
+                }
+            }
+            _ => break,
+        }
+        sibling = s.prev_named_sibling();
+    }
+    false
+}
+
 /// True if any `attribute_item` child of `node` satisfies `matches`.
 ///
 /// Reaches the attributes an [`ATTRIBUTE_OWNER_KINDS`] node holds as children,
@@ -2140,20 +2258,9 @@ fn any_owned_attribute<'tree>(node: Node<'tree>, matches: impl Fn(Node<'tree>) -
 /// attribute naming `lint`, skipping interleaved comments and traversing past
 /// unrelated attributes.
 fn attribute_allows_lint_in_siblings(node: Node, source: &[u8], lint: &str) -> bool {
-    let mut sibling = node.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attribute_allows_lint(s, source, lint) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(node, |attribute_item| {
+        attribute_allows_lint(attribute_item, source, lint)
+    })
 }
 
 /// True if `attribute_item` is an `allow`/`expect` attribute whose argument list
@@ -10005,6 +10112,162 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn has_attribute_option_keys_on_the_attribute_path_and_the_bare_word() {
+        let test_cases = [
+            ("#[serde(deny_unknown_fields)]\nstruct S { a: u32 }", true),
+            (
+                "#[serde(default, rename_all = \"kebab-case\", deny_unknown_fields)]\nstruct S { a: u32 }",
+                true,
+            ),
+            // Traversed past an unrelated attribute and an interleaved comment.
+            (
+                "#[serde(deny_unknown_fields)]\n/// doc\n#[derive(Deserialize)]\nstruct S { a: u32 }",
+                true,
+            ),
+            // `cfg_attr`-applied, including nested and multi-attribute lists.
+            (
+                "#[cfg_attr(test, serde(deny_unknown_fields))]\nstruct S { a: u32 }",
+                true,
+            ),
+            (
+                "#[cfg_attr(feature = \"serde\", derive(Deserialize), serde(deny_unknown_fields))]\nstruct S { a: u32 }",
+                true,
+            ),
+            (
+                "#[cfg_attr(unix, cfg_attr(test, serde(deny_unknown_fields)))]\nstruct S { a: u32 }",
+                true,
+            ),
+            (
+                "#[cfg_attr(all(unix, test), serde(deny_unknown_fields))]\nstruct S { a: u32 }",
+                true,
+            ),
+            // Negative space: the `cfg_attr` predicate is not searched, so a
+            // predicate named after the option does not enable it. The bare-word
+            // spelling is the discriminating one — a string-literal predicate
+            // could not match anyway, its text carrying its quotes.
+            (
+                "#[cfg_attr(deny_unknown_fields, serde(default))]\nstruct S { a: u32 }",
+                false,
+            ),
+            (
+                "#[cfg_attr(feature = \"deny_unknown_fields\", serde(default))]\nstruct S { a: u32 }",
+                false,
+            ),
+            // Negative space: another crate's helper attribute spelling the same
+            // word, directly or through a `cfg_attr`.
+            (
+                "#[schemars(deny_unknown_fields)]\nstruct S { a: u32 }",
+                false,
+            ),
+            (
+                "#[cfg_attr(feature = \"config-schema\", derive(schemars::JsonSchema), schemars(deny_unknown_fields))]\nstruct S { a: u32 }",
+                false,
+            ),
+            // Negative space: the word as a value, not an option.
+            (
+                "#[serde(rename = \"deny_unknown_fields\")]\nstruct S { a: u32 }",
+                false,
+            ),
+            (
+                "#[doc = \"deny_unknown_fields\"]\nstruct S { a: u32 }",
+                false,
+            ),
+            // Negative space: nested inside another option's group, so an
+            // argument of that inner attribute rather than of `serde`.
+            (
+                "#[serde(bound(deserialize = \"T: deny_unknown_fields\"))]\nstruct S { a: u32 }",
+                false,
+            ),
+            // Negative space: only `cfg_attr` arguments are read as applied
+            // attributes. Any other attribute owns its whole argument list,
+            // at the top level and nested inside a `cfg_attr` alike.
+            (
+                "#[custom_derive(serde(deny_unknown_fields))]\nstruct S { a: u32 }",
+                false,
+            ),
+            (
+                "#[cfg_attr(test, custom_derive(serde(deny_unknown_fields)))]\nstruct S { a: u32 }",
+                false,
+            ),
+            ("#[derive(Deserialize)]\nstruct S { a: u32 }", false),
+            ("struct S { a: u32 }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                has_attribute_option(item, src.as_bytes(), "serde", "deny_unknown_fields"),
+                expected,
+                "has_attribute_option mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_attribute_option_matches_an_option_spelled_as_a_rust_keyword() {
+        // `default` is a Rust keyword, which tree-sitter-rust tokenizes as an
+        // anonymous node inside a `token_tree` rather than as an `identifier`.
+        // Matching on token text rather than node kind keeps it visible.
+        let test_cases = [
+            ("#[serde(default)]\nstruct S { a: u32 }", true),
+            (
+                "#[serde(rename_all = \"kebab-case\", default)]\nstruct S { a: u32 }",
+                true,
+            ),
+            ("#[cfg_attr(nightly, serde(default))]\nstruct S { a: u32 }", true),
+            // The key of a `key = value` meta item enables the same option.
+            (
+                "#[serde(default = \"make_config\")]\nstruct S { a: u32 }",
+                true,
+            ),
+            ("#[serde(rename = \"default\")]\nstruct S { a: u32 }", false),
+            ("#[serde(deny_unknown_fields)]\nstruct S { a: u32 }", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                has_attribute_option(item, src.as_bytes(), "serde", "default"),
+                expected,
+                "has_attribute_option mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_attribute_option_reads_field_level_attributes() {
+        // The same walk serves a `field_declaration`, whose outer attributes are
+        // its preceding siblings inside the struct body.
+        let test_cases = [
+            (
+                "struct S {\n    #[serde(flatten)]\n    extra: Map,\n}",
+                true,
+            ),
+            (
+                "struct S {\n    #[cfg_attr(feature = \"serde\", serde(flatten))]\n    extra: Map,\n}",
+                true,
+            ),
+            (
+                "struct S {\n    #[serde(rename = \"flatten\")]\n    extra: Map,\n}",
+                false,
+            ),
+            ("struct S {\n    extra: Map,\n}", false),
+        ];
+        for (src, expected) in test_cases {
+            let tree = parse(src);
+            let field = first_of_kind(tree.root_node(), "field_declaration")
+                .expect("snippet should contain a field_declaration");
+            assert_eq!(
+                has_attribute_option(field, src.as_bytes(), "serde", "flatten"),
+                expected,
+                "has_attribute_option mismatch for `{src}`"
+            );
+        }
     }
 
     #[test]
