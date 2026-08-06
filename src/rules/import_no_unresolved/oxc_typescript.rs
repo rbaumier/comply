@@ -221,15 +221,17 @@ pub(super) fn is_existing_source_import(importer: &Path, specifier: &str) -> boo
     directory_resolves_via_package_json(&raw)
 }
 
-/// True when `dir` is a directory whose `package.json` declares a `main` or
-/// `exports` entry that points to an existing file. Mirrors Node/TypeScript
-/// directory resolution: `require('../..')` / `import x from '../'` resolves to
-/// the target directory's package entry point. [`PackageJson::entry_files`]
-/// already collects the `main` value and every `exports` target (including the
-/// conditional `import`/`require` variants), manifest-dir-relative with forward
-/// slashes, so each entry joins directly onto `dir`. A directory with no
-/// `package.json`, an unparseable one, or one whose entries name no on-disk
-/// file returns `false`.
+/// True when `dir` is a directory whose `package.json` declares an entry that
+/// points to an existing file. Mirrors Node/TypeScript directory resolution:
+/// `require('../..')` / `import x from '../'` resolves to the target
+/// directory's package entry point. [`PackageJson::entry_files`] collects every
+/// declared target — `main`, `module`, `types`, `typings`, each `exports`
+/// subpath (including the conditional `import`/`require` variants), `browser`,
+/// `react-native` and `bin` — manifest-dir-relative with forward slashes, so
+/// each entry joins directly onto `dir`. That is wider than what Node consults
+/// for a directory import, which makes the answer err toward "resolves" and the
+/// rule toward silence. A directory with no `package.json`, an unparseable one,
+/// or one whose entries name no on-disk file returns `false`.
 ///
 /// [`PackageJson::entry_files`]: crate::project::PackageJson::entry_files
 fn directory_resolves_via_package_json(dir: &Path) -> bool {
