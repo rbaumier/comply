@@ -266,8 +266,6 @@ pub struct CallSite {
 pub struct BareSpecifierInfo {
     /// Every import from this package is `import type` — no runtime dependency.
     pub type_only: bool,
-    /// Files that import this package.
-    pub importers: Vec<PathBuf>,
 }
 
 /// Snapshot of exports, imports, and cross-file symbol usages for the input
@@ -1148,14 +1146,10 @@ fn collect_bare_specifiers(
     imports: &FxHashMap<PathBuf, Vec<ImportedSymbol>>,
 ) -> FxHashMap<String, BareSpecifierInfo> {
     let mut result: FxHashMap<String, BareSpecifierInfo> = FxHashMap::default();
-    // Per-package importer dedup. The previous `entry.importers.contains(file)`
-    // scan was O(importers²) per package — quadratic for a dependency imported
-    // by thousands of files. A `HashSet` makes the membership test O(1) while
-    // preserving the first-seen insertion order into the `Vec`.
-    let mut seen: FxHashMap<String, FxHashSet<PathBuf>> = FxHashMap::default();
     for (file, imps) in imports {
         // Rust external crates that weren't resolved by RustModuleGraph are
-        // not npm packages — skip them to avoid "unlisted-dependency" FPs.
+        // not npm packages — skip them so the npm-manifest rules that read this
+        // map (`unused-dependency`, `type-only-dependency`) never see them.
         if file.extension().is_some_and(|e| e == "rs") {
             continue;
         }
@@ -1163,8 +1157,10 @@ fn collect_bare_specifiers(
             // Skip imports resolved to a local file and any specifier that is
             // not a bare package name (relative/absolute paths, URL imports).
             // `extract_package_name` splits on `/`, so a URL like
-            // `https://cdn/pkg.js` would otherwise yield the bogus package
-            // `https:` and surface as an unlisted dependency.
+            // `https://cdn/pkg.js` would otherwise key this map under the bogus
+            // package `https:`. Consumers match these keys against declared
+            // dependency names, so every key must be a name a `package.json`
+            // could carry.
             if imp.source_path.is_some() || !is_bare_specifier(&imp.specifier) {
                 continue;
             }
@@ -1172,16 +1168,9 @@ fn collect_bare_specifiers(
             if pkg.is_empty() || is_builtin_module(&pkg) {
                 continue;
             }
-            let is_new_importer = seen.entry(pkg.clone()).or_default().insert(file.clone());
-            let entry = result.entry(pkg).or_insert(BareSpecifierInfo {
-                type_only: true,
-                importers: Vec::new(),
-            });
+            let entry = result.entry(pkg).or_insert(BareSpecifierInfo { type_only: true });
             if !imp.is_type_only {
                 entry.type_only = false;
-            }
-            if is_new_importer {
-                entry.importers.push(file.clone());
             }
         }
     }

@@ -1,6 +1,13 @@
-//! no-implicit-deps oxc backend — flag bare `import` specifiers that are not
-//! declared in the nearest ancestor `package.json` and are not Node.js
-//! builtins.
+//! no-implicit-deps oxc backend — flag bare specifiers that are not declared in
+//! the nearest ancestor `package.json` and are not Node.js builtins.
+//!
+//! The module edges checked are: a static `import` declaration, a re-export
+//! (`export … from`, `export * from`), a dynamic `import()`, a CommonJS
+//! `require()`, and TypeScript's `import X = require()`. Each is reported at
+//! the byte offset of the construct that carries the specifier, so the
+//! diagnostic lands on the import that references the named package. A
+//! specifier that is not a literal (`import(path)`, `require(name)`) resolves
+//! only at runtime and carries no package name to check.
 //!
 //! Implied Nuxt peers (`vue`, `vue-router`, `h3`, `nitropack`, …) are exempt in
 //! projects depending on `nuxt` or `@nuxt/kit`: Nuxt hard-depends on and provides
@@ -39,31 +46,162 @@ const NUXT_IMPLIED_PEERS: &[&str] = &[
 
 pub struct Check;
 
+/// The literal specifier of a dynamic `import()` / `require()` argument, or
+/// `None` when the argument is computed. A computed specifier is only known at
+/// runtime, so no package name can be read from it.
+fn static_specifier<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> Option<&'a str> {
+    match expr {
+        oxc_ast::ast::Expression::StringLiteral(s) => Some(s.value.as_str()),
+        oxc_ast::ast::Expression::TemplateLiteral(t)
+            if t.expressions.is_empty() && t.quasis.len() == 1 =>
+        {
+            Some(t.quasis[0].value.raw.as_str())
+        }
+        _ => None,
+    }
+}
+
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::ImportDeclaration]
+        &[
+            AstType::ImportDeclaration,
+            AstType::ImportExpression,
+            AstType::CallExpression,
+            AstType::TSImportEqualsDeclaration,
+            AstType::ExportNamedDeclaration,
+            AstType::ExportAllDeclaration,
+        ]
     }
 
     fn run<'a>(
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let AstKind::ImportDeclaration(import) = node.kind() else {
-            return;
+        // Every module edge that loads a package at runtime, each anchored on
+        // the construct that carries the specifier.
+        let (spec, anchor) = match node.kind() {
+            AstKind::ImportDeclaration(import) => {
+                // Declaration-level type-only imports (`import type { X } from
+                // "pkg"`) are erased at compile time and perform no runtime
+                // module resolution, so they can never be a missing *runtime*
+                // dependency — the rule's entire concern. Their types are
+                // frequently provided transitively through a declared package's
+                // bundled declarations (e.g. `eslint` ships `estree` types),
+                // which `package.json` never lists. Exempt them. Only the
+                // declaration-level form is erased: any other shape stays
+                // `import_kind == Value` and remains checked, including one
+                // whose specifiers are all inline `type`
+                // (`import { type X } from "pkg"`).
+                if import.import_kind.is_type() {
+                    return;
+                }
+                (import.source.value.as_str(), import.span.start)
+            }
+            AstKind::ImportExpression(import) => {
+                let Some(spec) = static_specifier(&import.source) else {
+                    return;
+                };
+                (spec, import.span.start)
+            }
+            AstKind::CallExpression(call) => {
+                let oxc_ast::ast::Expression::Identifier(callee) = &call.callee else {
+                    return;
+                };
+                // The CommonJS loader is the ambient `require`, which resolves to
+                // no binding. A `require` bound in the file — a UMD/AMD wrapper
+                // parameter, a `createRequire` result — is an ordinary function
+                // whose argument this rule cannot read as a package name.
+                if callee.name.as_str() != "require" {
+                    return;
+                }
+                let is_ambient = callee.reference_id.get().is_some_and(|ref_id| {
+                    semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+                });
+                if !is_ambient {
+                    return;
+                }
+                let Some(spec) = call
+                    .arguments
+                    .first()
+                    .and_then(|arg| arg.as_expression())
+                    .and_then(static_specifier)
+                else {
+                    return;
+                };
+                (spec, call.span.start)
+            }
+            // TypeScript's CommonJS-interop form. `import type X = require(…)` is
+            // erased, like a type-only `import` declaration.
+            AstKind::TSImportEqualsDeclaration(decl) => {
+                if decl.import_kind.is_type() {
+                    return;
+                }
+                let oxc_ast::ast::TSModuleReference::ExternalModuleReference(module) =
+                    &decl.module_reference
+                else {
+                    return;
+                };
+                (module.expression.value.as_str(), decl.span.start)
+            }
+            // A re-export names the package in its `from` clause and loads it at
+            // runtime, exactly as an `import` declaration does.
+            AstKind::ExportNamedDeclaration(export) => {
+                if export.export_kind.is_type() {
+                    return;
+                }
+                let Some(source) = &export.source else {
+                    return;
+                };
+                (source.value.as_str(), export.span.start)
+            }
+            AstKind::ExportAllDeclaration(export) => {
+                if export.export_kind.is_type() {
+                    return;
+                }
+                (export.source.value.as_str(), export.span.start)
+            }
+            _ => return,
         };
+        Self::check_specifier(spec, anchor as usize, ctx, diagnostics);
+    }
+}
 
-        // Declaration-level type-only imports (`import type { X } from "pkg"`)
-        // are erased at compile time and perform no runtime module resolution,
-        // so they can never be a missing *runtime* dependency — the rule's
-        // entire concern. Their types are frequently provided transitively
-        // through a declared package's bundled declarations (e.g. `eslint`
-        // ships `estree` types), which `package.json` never lists. Exempt them.
-        // A mixed import (`import { type X, y }`) keeps a value binding (`y`)
-        // and stays `import_kind == Value`, so it remains checked.
-        if import.import_kind.is_type() {
+impl Check {
+    /// Report `spec` when no manifest, alias, builtin or virtual-module rule
+    /// accounts for it. `anchor` is the byte offset of the construct that
+    /// carries the specifier, so the diagnostic lands on the import that
+    /// references the package the message names.
+    fn check_specifier(
+        spec: &str,
+        anchor: usize,
+        ctx: &CheckCtx,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        // Specifier shapes that can never name an npm package, decided from the
+        // string alone. They come first: every relative `require('./x')` and
+        // `import('./x')` in the file reaches this function, and the manifest and
+        // tsconfig lookups below walk the filesystem.
+        if !is_bare_specifier(spec) {
+            return;
+        }
+        if is_node_builtin(spec) {
+            return;
+        }
+        if is_subpath_import(spec) {
+            return;
+        }
+        // `~/…` and `@/…` are path aliases (Vite/webpack `resolve.alias`,
+        // tsconfig `paths`, or framework defaults), never npm packages: a name
+        // cannot start with `~`, and `@/` is a scoped name with an empty scope.
+        // Exempt them structurally so an alias used without a parsed tsconfig
+        // `paths` entry is not reported as a missing dependency.
+        if is_path_alias_prefix(spec) {
+            return;
+        }
+        if is_virtual_module(spec) {
             return;
         }
 
@@ -111,28 +249,6 @@ impl OxcCheck for Check {
             .map(|t| t.alias_prefixes())
             .unwrap_or_default();
 
-        let spec = import.source.value.as_str();
-
-        if !is_bare_specifier(spec) {
-            return;
-        }
-        if is_node_builtin(spec) {
-            return;
-        }
-        if is_subpath_import(spec) {
-            return;
-        }
-        // `~/…` and `@/…` are path aliases (Vite/webpack `resolve.alias`,
-        // tsconfig `paths`, or framework defaults), never npm packages: a name
-        // cannot start with `~`, and `@/` is a scoped name with an empty scope.
-        // Exempt them structurally so an alias used without a parsed tsconfig
-        // `paths` entry is not reported as a missing dependency.
-        if is_path_alias_prefix(spec) {
-            return;
-        }
-        if is_virtual_module(spec) {
-            return;
-        }
         if matches_alias(spec, &alias_prefixes) {
             return;
         }
@@ -284,8 +400,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        let (line, column) =
-            byte_offset_to_line_col(ctx.source, import.span.start as usize);
+        let (line, column) = byte_offset_to_line_col(ctx.source, anchor);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
@@ -314,6 +429,13 @@ mod tests {
         crate::oxc_helpers::reset_file_caches();
         let allocator = Allocator::default();
         let parse_ret = OxcParser::new(&allocator, source, SourceType::ts()).parse();
+        // A recovered parse still yields a program, so a fixture with a typo
+        // would run the rule over a truncated AST and pass for the wrong reason.
+        assert!(
+            parse_ret.errors.is_empty(),
+            "test source failed to parse: {:?}",
+            parse_ret.errors
+        );
         let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
         let ctx = CheckCtx::for_test(path, source);
         let mut diagnostics = Vec::new();
@@ -2281,5 +2403,311 @@ export default {
             1,
             "`vue` import without a Nuxt dependency must still fire, got {diags:?}"
         );
+    }
+
+    /// The source line a diagnostic points at. The anchor is a location claim,
+    /// so a test asserts what stands on that line, not only its number.
+    fn line_at(source: &str, diag: &Diagnostic) -> String {
+        source
+            .lines()
+            .nth(diag.line - 1)
+            .unwrap_or_else(|| panic!("diagnostic line {} is past end of source", diag.line))
+            .to_string()
+    }
+
+    fn package_named_in(diag: &Diagnostic) -> String {
+        let (_, rest) = diag.message.split_once('`').expect("message names a package");
+        let (pkg, _) = rest.split_once('`').expect("message names a package");
+        pkg.to_string()
+    }
+
+    // Regression for #8354: every diagnostic must land on the import that
+    // references the package its message names. The reported file mixes a
+    // declared import with two undeclared ones, and neither undeclared import is
+    // first, so an anchor that defaulted to the file head would land on the
+    // declared `lodash` line and accuse correct code.
+    #[test]
+    fn anchors_each_diagnostic_on_the_import_it_names_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"r239","dependencies":{"lodash":"^4"},"devDependencies":{"rete-cli":"^2"}}"#,
+        )
+        .unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("a.ts");
+        let source = "import { debounce } from 'lodash';\n\
+                      import copy from 'rollup-plugin-copy';\n\
+                      import tseslint from 'typescript-eslint';\n\
+                      export const x = [debounce, copy, tseslint];\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 2, "both undeclared imports fire, got {diags:?}");
+        for diag in &diags {
+            let pkg = package_named_in(diag);
+            let line = line_at(source, diag);
+            assert!(
+                line.contains(&pkg),
+                "anchor line {} is {line:?}, which does not import `{pkg}`",
+                diag.line,
+            );
+        }
+        let mut lines: Vec<usize> = diags.iter().map(|d| d.line).collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![2, 3], "anchors are the two undeclared imports");
+    }
+
+    // Regression for #8354, the retejs/rete case: `rete.config.ts` imports the
+    // declared `rete-cli` on line 1 and the undeclared `rollup-plugin-copy` on
+    // line 2. The diagnostic names `rollup-plugin-copy`, so it must point at
+    // line 2 — line 1 is a declared, correct import.
+    #[test]
+    fn anchors_rete_config_on_the_undeclared_import_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"rete","devDependencies":{"rete-cli":"^2.1.0"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("rete.config.ts");
+        let source = "import { ReteOptions } from 'rete-cli'\n\
+                      import copy from 'rollup-plugin-copy'\n\
+                      export default <ReteOptions>{ input: 'src/index.ts' }\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only the undeclared import fires, got {diags:?}");
+        assert_eq!(diags[0].line, 2, "anchor is the `rollup-plugin-copy` import");
+        assert!(
+            line_at(source, &diags[0]).contains("rollup-plugin-copy"),
+            "anchor line does not import the named package",
+        );
+    }
+
+    // Regression for #8354: a leading hashbang and comment block shift the first
+    // import away from line 1, so the anchor must follow the import.
+    #[test]
+    fn anchors_past_leading_hashbang_and_comments_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"cli"}"#).unwrap();
+        let file = dir.path().join("cli.ts");
+        let source = "#!/usr/bin/env node\n\
+                      // Entry point.\n\
+                      \n\
+                      import kleur from 'kleur';\n\
+                      export const c = kleur;\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "the undeclared import fires, got {diags:?}");
+        assert_eq!(diags[0].line, 4, "anchor is the import, not the file head");
+    }
+
+    // Regression for #8354: a CommonJS `require` resolves a package at runtime
+    // exactly like an `import`, so an undeclared one is an implicit dependency.
+    // The anchor is the call, mid-line, not the start of the statement.
+    #[test]
+    fn flags_undeclared_require_call_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"express":"^4"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("server.js");
+        let source = "'use strict'\n\
+                      var express = require('express');\n\
+                      var redis = require('redis');\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only the undeclared require fires, got {diags:?}");
+        assert_eq!(diags[0].line, 3, "anchor is the `redis` require");
+        assert_eq!(diags[0].column, 13, "anchor is the call, not the line start");
+        assert!(line_at(source, &diags[0]).contains("redis"));
+    }
+
+    // Regression for #8354: a dynamic `import()` loads the package at runtime,
+    // so an undeclared specifier is an implicit dependency.
+    #[test]
+    fn flags_undeclared_dynamic_import_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"lodash":"^4"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("lazy.ts");
+        let source = "export const light = () => import('lodash');\n\
+                      export const heavy = () => import('sharp');\n\
+                      export const local = () => import('./util');\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only the undeclared import fires, got {diags:?}");
+        assert_eq!(diags[0].line, 2, "anchor is the `sharp` import");
+        assert_eq!(diags[0].column, 28, "anchor is the import expression");
+        assert!(line_at(source, &diags[0]).contains("sharp"));
+    }
+
+    // Negative space for #8354: a computed specifier resolves only at runtime and
+    // carries no package name, so neither form can be checked. Node builtins and
+    // relative paths stay exempt through the same call path as `import`.
+    #[test]
+    fn ignores_computed_and_exempt_specifiers_in_require_and_dynamic_import_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let file = dir.path().join("dyn.ts");
+        let source = "declare const name: string;\n\
+                      export const a = require(name);\n\
+                      export const b = () => import(name);\n\
+                      export const c = require('node:fs');\n\
+                      export const d = require('./local');\n\
+                      export const e = () => import('#internal/alias');\n\
+                      export const f = require('sharp');\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the literal npm specifier is checkable, got {diags:?}"
+        );
+        assert!(diags[0].message.contains("sharp"));
+        assert_eq!(diags[0].line, 7, "the checkable call is on the last line");
+    }
+
+    // Regression for #8354: TypeScript's CommonJS-interop `import X = require("pkg")`
+    // resolves the package at runtime, so an undeclared one is an implicit
+    // dependency. The alias forms of the same syntax name an in-scope binding,
+    // not a module, and the type-only form is erased.
+    #[test]
+    fn flags_undeclared_import_equals_require_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"express":"^4"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("legacy.ts");
+        let source = "import express = require('express');\n\
+                      namespace Outer { export const V = 1; }\n\
+                      import Alias = Outer.V;\n\
+                      import type Erased = require('ts-only-pkg');\n\
+                      import chalk = require('chalk');\n\
+                      export const app = [express, Alias, chalk];\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only undeclared `chalk` fires, got {diags:?}");
+        assert_eq!(diags[0].line, 5, "anchor is the `chalk` declaration");
+        assert!(line_at(source, &diags[0]).contains("chalk"));
+    }
+
+    // Regression for #8354: a re-export names the package in its `from` clause
+    // and loads it at runtime, so an undeclared one is an implicit dependency.
+    // A type-only re-export is erased, a relative source names no package, and
+    // a declaration without a `from` clause carries no specifier at all.
+    #[test]
+    fn flags_undeclared_reexport_sources_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"app","dependencies":{"express":"^4"}}"#,
+        )
+        .unwrap();
+        let file = dir.path().join("barrel.ts");
+        let source = "export { Router } from 'express';\n\
+                      export type { Options } from 'ts-only-pkg';\n\
+                      export type * from 'ts-only-star';\n\
+                      export * from './local';\n\
+                      export const own = 1;\n\
+                      export { json } from 'body-parser';\n\
+                      export * from 'ramda';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 2, "only the two undeclared re-exports fire, got {diags:?}");
+        assert_eq!(diags[0].line, 6);
+        assert!(line_at(source, &diags[0]).contains("body-parser"));
+        assert_eq!(diags[1].line, 7);
+        assert!(line_at(source, &diags[1]).contains("ramda"));
+    }
+
+    // Regression for #8354: a no-substitution template literal is a literal
+    // specifier, so `require(`pkg`)` names a package exactly as `require('pkg')`
+    // does. An interpolated one resolves only at runtime.
+    #[test]
+    fn flags_template_literal_require_specifier_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let file = dir.path().join("load.ts");
+        let source = "declare const part: string;\n\
+                      const a = require(`sharp`);\n\
+                      const b = require(`plugin-${part}`);\n\
+                      export const loaded = [a, b];\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only the literal specifier fires, got {diags:?}");
+        assert_eq!(diags[0].line, 2);
+        assert!(line_at(source, &diags[0]).contains("sharp"));
+    }
+
+    // Negative space for #8354: the CommonJS loader is the ambient `require`.
+    // A `require` bound inside the file — a UMD wrapper parameter — is an
+    // ordinary function, and its argument is not a package name.
+    #[test]
+    fn ignores_locally_bound_require_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let file = dir.path().join("umd.ts");
+        // Both `require` shapes live in one file, so the assert holds only if
+        // each reference is resolved on its own.
+        let source = "export function factory(require: (id: string) => unknown) {\n\
+                      \x20 return require('not-a-package');\n\
+                      }\n\
+                      export const real = require('undeclared-pkg');\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the ambient `require` names a package, got {diags:?}"
+        );
+        assert!(diags[0].message.contains("undeclared-pkg"));
+        assert_eq!(diags[0].line, 4);
+    }
+
+    // Regression for #8354: the Bun runtime provides the bare `bun` specifier and
+    // the `bun:` protocol modules; neither is installable from npm. Real npm
+    // packages whose name merely starts with `bun` stay subject to the rule.
+    #[test]
+    fn allows_bun_runtime_builtins_and_flags_bun_prefixed_packages_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        let file = dir.path().join("t.ts");
+        let source = "import { serve } from 'bun';\n\
+                      import { test } from 'bun:test';\n\
+                      import { Database } from 'bun:sqlite';\n\
+                      import logger from 'bunyan';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(diags.len(), 1, "only `bunyan` is an npm package, got {diags:?}");
+        assert!(diags[0].message.contains("bunyan"));
+    }
+
+    // Regression for #8354: `cloudflare:` names Workers runtime modules and
+    // `https://` names a CDN import; neither is an npm package.
+    #[test]
+    fn allows_cloudflare_protocol_and_url_imports_issue_8354() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("package.json"), r#"{"name":"worker"}"#).unwrap();
+        let file = dir.path().join("t.ts");
+        let source = "import { WorkerEntrypoint } from 'cloudflare:workers';\n\
+                      import { connect } from 'cloudflare:sockets';\n\
+                      import confetti from 'https://cdn.skypack.dev/canvas-confetti';\n\
+                      import { Hono } from 'hono';\n";
+        fs::write(&file, source).unwrap();
+        let diags = run_oxc_in_project(&file, source);
+        assert_eq!(
+            diags.len(),
+            1,
+            "only the npm specifier `hono` is subject to the rule, got {diags:?}"
+        );
+        assert!(diags[0].message.contains("hono"));
     }
 }

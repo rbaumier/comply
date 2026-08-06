@@ -240,3 +240,65 @@ fn vue_and_tsx_backends_of_a_rule_anchor_on_the_same_construct() {
         // The Vue path lands on its own `<img`, at column 7 — not column 1.
         .stdout(predicate::str::is_match(r"App\.vue:8:7:").unwrap());
 }
+
+#[test]
+fn undeclared_dependency_reports_once_per_import_site_at_the_import() {
+    // Regression for rbaumier/comply#8354, the `retejs/rete` case. One id
+    // covers undeclared packages, and each diagnostic sits on the construct
+    // that names the package: `rete.config.ts` imports the declared `rete-cli`
+    // on line 1 and the undeclared `rollup-plugin-copy` on line 2, so the
+    // report must not land on line 1. `require` and dynamic `import()` reach
+    // the rule through the engine's per-node dispatch, like a static import.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"rete","devDependencies":{"rete-cli":"^2.1.0"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("rete.config.ts"),
+        "import { ReteOptions } from 'rete-cli'\n\
+         import copy from 'rollup-plugin-copy'\n\
+         export default <ReteOptions>{ plugins: [copy()] }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("test")).unwrap();
+    fs::write(
+        dir.path().join("test/index.test.ts"),
+        "import { expect } from '@jest/globals'\n\
+         export const check = expect\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("test/perf.ts"),
+        "import { it } from '@jest/globals'\n\
+         export const bench = it\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("postinstall.js"),
+        "'use strict'\n\
+         const shell = require('shelljs')\n\
+         module.exports = () => import('open').then(() => shell)\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg("rules")
+        .arg("no-implicit-deps")
+        .arg(dir.path())
+        .assert()
+        // The undeclared import, not the declared `rete-cli` on line 1.
+        .stdout(predicate::str::is_match(r"rete\.config\.ts:2:1:").unwrap())
+        .stdout(predicate::str::is_match(r"rete\.config\.ts:1:").unwrap().not())
+        // One report per import site, each on its own file.
+        .stdout(predicate::str::is_match(r"index\.test\.ts:1:1:").unwrap())
+        .stdout(predicate::str::is_match(r"perf\.ts:1:1:").unwrap())
+        // `require` anchors on the call, dynamic `import()` on the expression.
+        .stdout(predicate::str::is_match(r"postinstall\.js:2:15:").unwrap())
+        .stdout(predicate::str::is_match(r"postinstall\.js:3:24:").unwrap())
+        // Five import sites, five diagnostics. Pins the granularity: a return to
+        // per-package reporting, or a double-visited edge, moves this number.
+        .stderr(predicate::str::contains("comply: 5 violations found"));
+}

@@ -2951,8 +2951,8 @@ pub struct ProjectCtx {
 
     // Workspace member package names, read+parsed from each workspace root's
     // package.json. Project-wide and constant, but queried once per import by
-    // `no-implicit-deps` / `unlisted-dependency` — memoized so the disk read +
-    // JSON parse of every member manifest happens once, not once per import.
+    // `no-implicit-deps` — memoized so the disk read + JSON parse of every
+    // member manifest happens once, not once per import.
     workspace_package_names_cache: OnceLock<Vec<String>>,
 
     // Union of every dependency name declared in every `package.json` under the
@@ -3993,9 +3993,9 @@ impl ProjectCtx {
     /// substantive non-overlay manifest, so a real (non-private) package or a
     /// workspace root (`private` + `workspaces`) does not inherit parent deps.
     ///
-    /// Dependency-membership rules (`unlisted-dependency`, `no-implicit-deps`)
-    /// consult this chain instead of only the nearest manifest, so a parent
-    /// dependency imported from a nested overlay is correctly resolved.
+    /// `no-implicit-deps` consults this chain instead of only the nearest
+    /// manifest, so a parent dependency imported from a nested overlay is
+    /// correctly resolved.
     ///
     /// [`PackageJson::is_private_overlay`]: PackageJson::is_private_overlay
     pub fn effective_package_jsons(&self, path: &Path) -> Vec<Arc<PackageJson>> {
@@ -5242,7 +5242,7 @@ impl ProjectCtx {
         self.drizzle_config.get_or_init(|| None).as_ref()
     }
 
-    /// Package names from all workspace members. Used by `unlisted-dependency`
+    /// Package names from all workspace members. Used by `no-implicit-deps`
     /// to recognize cross-workspace imports as valid.
     pub fn workspace_package_names(&self) -> &[String] {
         self.workspace_package_names_cache.get_or_init(|| {

@@ -15,11 +15,11 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-implicit-deps",
-    description: "Import of a bare specifier that is not a known Node.js builtin — may be an unlisted dependency.",
+    description: "Bare import of an npm package that is not declared in package.json.",
     remediation: "Ensure the package is listed in `package.json` dependencies. Bare specifier imports that are neither relative paths nor Node.js builtins may break when not explicitly installed.",
     severity: Severity::Error,
     doc_url: None,
-    categories: &["code-quality"],
+    categories: &["imports", "dependencies"],
 
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
@@ -142,7 +142,7 @@ const VIRTUAL_CSS_MODULES: &[&str] = &["uno.css", "windi.css"];
 ///   - an exact virtual-CSS-module name (`uno.css`, `windi.css`) injected by
 ///     the UnoCSS/WindiCSS Vite plugin. Matched exactly so real npm packages
 ///     such as `normalize.css` stay subject to the rule.
-pub(crate) fn is_virtual_module(spec: &str) -> bool {
+pub(super) fn is_virtual_module(spec: &str) -> bool {
     if VIRTUAL_PREFIXES.iter().any(|p| spec.starts_with(p)) {
         return true;
     }
@@ -220,7 +220,7 @@ pub(super) fn root_package_name(spec: &str) -> &str {
 /// double underscore). A project that lists only `@types/X` in its
 /// `(dev|peer)dependencies` can still `import … from "X"`, since TypeScript
 /// resolves the bare specifier to those declarations.
-pub(crate) fn types_package_name(spec: &str) -> String {
+pub(super) fn types_package_name(spec: &str) -> String {
     if let Some(scoped) = spec.strip_prefix('@') {
         return format!("@types/{}", scoped.replacen('/', "__", 1));
     }
@@ -228,7 +228,7 @@ pub(crate) fn types_package_name(spec: &str) -> String {
 }
 
 /// True if `spec` matches any alias prefix (exact or `prefix/...`).
-pub(crate) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
+pub(super) fn matches_alias(spec: &str, alias_prefixes: &[String]) -> bool {
     alias_prefixes.iter().any(|p| {
         if p.is_empty() {
             return false;
