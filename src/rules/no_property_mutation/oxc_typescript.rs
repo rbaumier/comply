@@ -458,11 +458,7 @@ fn is_function_declaration_binding(
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[
-            AstType::AssignmentExpression,
-            AstType::UpdateExpression,
-            AstType::UnaryExpression,
-        ]
+        &[AstType::AssignmentExpression, AstType::UpdateExpression]
     }
 
     fn run<'a>(
@@ -719,57 +715,6 @@ impl OxcCheck for Check {
                     }
                     _ => {}
                 }
-            }
-            AstKind::UnaryExpression(unary) => {
-                if unary.operator != UnaryOperator::Delete {
-                    return;
-                }
-                match &unary.argument {
-                    Expression::StaticMemberExpression(m) => {
-                        // Own instance state: `delete this.cache.key` — see the AssignmentExpression arm.
-                        if is_rooted_at_this(&m.object) { return; }
-                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
-                        if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_vue_directive_hook_element_param(id, semantic)
-                                || is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)
-                                || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
-                                || is_reduce_accumulator_param(id, semantic)
-                                || is_rtk_reducer_draft_param(id, semantic)
-                                || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)
-                                || is_unist_visitor_node_param(id, semantic)) { return; }
-                        if has_dom_write_intermediary(&m.object) { return; }
-                    }
-                    Expression::ComputedMemberExpression(m) => {
-                        // Own instance state: `delete this.cache[id]` — see the AssignmentExpression arm.
-                        if is_rooted_at_this(&m.object) { return; }
-                        if is_inside_sentry_hook(node, semantic) || is_inside_mutation_hook_method(node, semantic) { return; }
-                        if let Some(id) = root_identifier_of_expr(&m.object)
-                            && (is_vue_directive_hook_element_param(id, semantic)
-                                || is_created_dom_element(id, semantic)
-                                || is_local_object_builder_binding(id, semantic)
-                                || is_reassigned_fresh_copy_at(id, unary.span.start, semantic)
-                                || is_reduce_accumulator_param(id, semantic)
-                                || is_rtk_reducer_draft_param(id, semantic)
-                                || is_valtio_proxy_binding(id, semantic)
-                                || is_get_context_call_binding(id, semantic)
-                                || is_unist_visitor_node_param(id, semantic)) { return; }
-                        if has_dom_write_intermediary(&m.object) { return; }
-                    }
-                    _ => return,
-                }
-
-                let (line, column) = byte_offset_to_line_col(ctx.source, unary.span.start as usize);
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line,
-                    column,
-                    rule_id: "no-property-mutation".into(),
-                    message: "Property deletion — use destructuring or immutable patterns.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
             }
             _ => {}
         }
@@ -1875,72 +1820,12 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
-    // delete on a freshly-spread local object — issue #1336
-
     #[test]
-    fn allows_delete_on_local_object_spread_builder_issue_1336() {
-        // Regression for rbaumier/comply#1336 — zod registries: `pm` is a fresh
-        // local spread copy; `delete pm.id` omits a key while constructing the
-        // returned value, the exact equivalent of the rule's suggested
-        // destructuring rest.
-        let src = r#"
-            function get(p, schema) {
-                const pm: any = { ...(this.get(p) ?? {}) };
-                delete pm.id;
-                return { ...pm, ...this._map.get(schema) };
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_delete_on_local_let_object_spread_builder() {
-        let src = r#"
-            function build(obj) {
-                let copy = { ...obj };
-                delete copy.secret;
-                return copy;
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_delete_on_function_parameter() {
-        // A function parameter is external state, not a local object builder.
-        let src = r#"
-            function f(obj) {
-                delete obj.id;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_delete_on_const_from_external_call() {
-        // A `const` initialized from a function call (not an object literal /
-        // spread) references external state — deleting from it is still flagged.
-        let src = r#"
-            function f() {
-                const x = makeObj();
-                delete x.id;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn allows_delete_on_this_member_chain() {
-        // Deleting from the object's own instance state is self-state management,
-        // not the external/shared mutation this rule targets.
-        let src = r#"
-            class Foo {
-                clear() {
-                    delete this.cache.key;
-                }
-            }
-        "#;
-        assert!(run(src).is_empty());
+    fn leaves_the_delete_operator_to_no_delete_issue_8356() {
+        // Boundary for rbaumier/comply#8356 — one operator, one rule: `no-delete`
+        // decides every `delete` on a property. Not subscribing to the kind is
+        // what makes that true; the engine never dispatches it here.
+        assert!(!Check.interested_kinds().contains(&AstType::UnaryExpression));
     }
 
     // Array.reduce() accumulator — issue #2239
@@ -3152,6 +3037,103 @@ mod tests {
     }
 
     #[test]
+    fn allows_property_assignment_on_an_object_rest_element_of_a_fresh_copy() {
+        // The rest operator allocates an object of its own, so `rest` is a fresh
+        // local object even though the pattern reads the copy's properties.
+        let src = r#"
+            function f(props) {
+                const { a, ...rest } = { ...props };
+                rest.extra = 1;
+                return rest;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_on_an_object_rest_element_of_a_parameter() {
+        // The rest operator allocates whatever it reads from, so `rest` is fresh
+        // even though `props` belongs to the caller.
+        let src = r#"
+            function f(props) {
+                const { id, ...rest } = props;
+                rest.extra = 1;
+                return rest;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_property_assignment_on_a_destructured_property_of_a_parameter() {
+        // `nested` names a property of `props`, which the caller still holds.
+        let src = r#"
+            function f(props) {
+                const { nested } = props;
+                nested.extra = 1;
+                return nested;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_property_assignment_on_a_structured_clone() {
+        // `structuredClone` allocates a new object graph, so the write touches
+        // nothing the caller holds.
+        let src = r#"
+            function f(o) {
+                const copy = structuredClone(o);
+                copy.x = 1;
+                return copy;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_after_a_conditional_fresh_reassignment() {
+        // A fresh copy one branch builds is enough for this rule, which asks
+        // only what writes the binding takes. `no-delete` reads the same
+        // classification at full strength and flags the same shape, because the
+        // other path writes to the caller's object
+        // (`flags_delete_on_a_parameter_conditionally_reassigned_to_a_copy`).
+        let src = r#"
+            function f(o, c) {
+                if (c) { o = { ...o }; }
+                o.x = 1;
+                return o;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_property_assignment_after_a_module_scope_fresh_reassignment() {
+        // Reading writes needs no enclosing function: the program bounds the
+        // source-order walk, so a module-level binding is classified like any
+        // other.
+        let src = r#"
+            let options = getDefaults();
+            options = { ...options };
+            options.x = 1;
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_module_scope_reassignment_to_external_state() {
+        // Strong positive: at module level too, a write that does not build a
+        // fresh copy disqualifies the binding.
+        let src = r#"
+            let shared = getInitial();
+            shared = loadConfig();
+            shared.x = 1;
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
     fn still_flags_object_assign_into_existing_object() {
         // Strong positive: `Object.assign(existing, src)` mutates `existing` in
         // place — the receiver is NOT reassigned to a fresh object, so a later
@@ -3179,9 +3161,9 @@ mod tests {
 
     #[test]
     fn still_flags_mutation_after_reassignment_to_external_state() {
-        // Strong positive: even after a fresh-copy reassignment, a *later*
-        // reassignment to external state (`options = getConfig()`) becomes the
-        // nearest preceding write, so the subsequent mutation is still flagged.
+        // Strong positive: a write that does not build a fresh copy disqualifies
+        // the binding, so the second mutation stays flagged; the first still
+        // sees the fresh copy, because that write comes after it.
         let src = r#"
             function f(options) {
                 options = Object.assign({}, options);

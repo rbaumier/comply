@@ -10,7 +10,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-delete",
-    description: "Disallow the `delete` operator — it mutates objects in place.",
+    description: "Disallow `delete` except on a local copy the function solely owns — removing a key mutates the object in place.",
     remediation: "Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`.",
     severity: Severity::Error,
     doc_url: None,

@@ -1526,26 +1526,38 @@ fn is_named_type_reference(ty: &oxc_ast::ast::TSType) -> bool {
 }
 
 /// True when `ident` resolves to a local binding declared with `const` or `let`
-/// whose initializer constructs a fresh local object (`is_fresh_copy_expression`):
-/// an object literal / object-spread (`{ key: val }` / `{ ...other }`) or
-/// `Object.assign(<fresh>, …)` / `Object.assign(Object.create(null), …)`. Such a
-/// binding is a freshly-created local builder, not a reference to shared state:
-/// assigning its properties (`value.x = ...`) or deleting them (`delete value.x`)
-/// before returning it is the object analogue of the `const items = [];
-/// items.push(x)` accumulator pattern, and mutates no external state.
+/// that names a freshly allocated object. Such a binding is a local builder, not
+/// a reference to shared state: assigning its properties (`value.x = ...`) or
+/// deleting them (`delete value.x`) before returning it is the object analogue
+/// of the `const items = []; items.push(x)` accumulator pattern, and mutates no
+/// external state.
+///
+/// Two declarators allocate:
+/// - the whole initializer, when it constructs a fresh object
+///   (`is_fresh_copy_expression`): an object literal / object-spread
+///   (`{ key: val }` / `{ ...other }`), `Object.assign(<fresh>, …)`, or
+///   `structuredClone(…)`;
+/// - the rest element of an object pattern (`const { a, ...rest } = props`),
+///   whatever the initializer, because the rest operator builds a new object
+///   from the properties it collects.
+///
+/// Any other destructured binding is rejected: `const { data } = { ...props }`
+/// names a *property* of the initializer, and a spread copies properties by
+/// reference, so `data` is the source object's own value and mutating it is
+/// visible to the source.
 ///
 /// Resolves the binding via `reference_id` → symbol → declaration node, then
 /// inspects the `VariableDeclarator` (whose `kind` carries the declaration
 /// keyword). A function parameter, imported binding, or `this` resolves to a
-/// non-`VariableDeclarator` declaration; a `var` binding or a non-fresh-copy
-/// initializer is rejected, so any mutation through it is still flagged.
+/// non-`VariableDeclarator` declaration, and a `var` binding is rejected, so any
+/// mutation through it is still flagged.
 #[must_use]
 pub fn is_local_object_builder_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::AstKind;
-    use oxc_ast::ast::VariableDeclarationKind;
+    use oxc_ast::ast::{BindingPattern, VariableDeclarationKind};
 
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
@@ -1560,13 +1572,468 @@ pub fn is_local_object_builder_binding(
         std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
-            return matches!(
-                decl.kind,
-                VariableDeclarationKind::Const | VariableDeclarationKind::Let
-            ) && decl.init.as_ref().is_some_and(is_fresh_copy_expression);
+            let allocates = match &decl.id {
+                BindingPattern::BindingIdentifier(_) => {
+                    decl.init.as_ref().is_some_and(is_fresh_copy_expression)
+                }
+                BindingPattern::ObjectPattern(pattern) => {
+                    pattern.rest.as_ref().is_some_and(|rest| {
+                        matches!(&rest.argument, BindingPattern::BindingIdentifier(rest_id)
+                            if rest_id.symbol_id.get() == Some(sym_id))
+                    })
+                }
+                _ => false,
+            };
+            return allocates
+                && matches!(
+                    decl.kind,
+                    VariableDeclarationKind::Const | VariableDeclarationKind::Let
+                );
         }
     }
     false
+}
+
+/// True when `receiver` names a binding that, at the mutation rooted at
+/// `mutation_id`, holds an object nothing else can observe: it is a local
+/// fresh-object builder (`is_local_object_builder_binding`) declared inside a
+/// function, and no reference hands the object out before the mutation runs.
+/// Mutating such an object is invisible, so it is not a mutation of shared
+/// state:
+///
+/// ```ts
+/// function omit(o: Record<string, unknown>, k: string) {
+///   const copy = { ...o };
+///   delete copy[k];   // `copy` is the caller's only future view of this object
+///   return copy;
+/// }
+/// ```
+///
+/// `receiver` is peeled of its value-preserving wrappers first, so a cast the
+/// type-checker forces (`delete (copy as Partial<T>)[k]`) names the same binding
+/// as the bare identifier.
+///
+/// The fresh object comes either from the binding's own declarator
+/// (`is_local_object_builder_binding`) or from a reassignment before the
+/// mutation — the `options = { ...options }` normalisation idiom.
+/// `fresh_origin_before` decides which, and rejects a binding any write may hand
+/// an object the function did not build. Either way the object is born at one
+/// offset, and every reference that ends before it names the value the binding
+/// held earlier.
+///
+/// The binding must be declared inside a call scope, because only a lifetime
+/// bounded to one invocation makes the set of holders knowable: an exported
+/// module-level binding is read by importers this scan cannot see, and two
+/// function bodies at module level have no order between them. The rejection is
+/// wider than that reason — a binding declared in a module-level block or loop
+/// body is rejected too, though nothing outside that block can name it — and
+/// mutating it stays flagged.
+///
+/// A reference keeps the object private only when it consumes the object without
+/// keeping it (`reference_consumes_without_retaining`) in the declaring scope
+/// itself. Any other position — a call argument, an assignment source, a
+/// `return`, an element of another value — gives the reference to code that can
+/// keep it, so the mutation becomes observable unless the reference runs after
+/// it (`reference_runs_after_mutation`).
+///
+/// A consumption inside a function below the declaring scope is such a position
+/// too: the closure holds the object and runs at a time source order does not
+/// give. So `list.map(x => copy[x])` leaves the deletion flagged whichever side
+/// of it the `map` call sits on, and so does a closure built after it. That is
+/// the same limit the mutation side carries — a synchronous `forEach` callback
+/// and a stored `setTimeout` callback are indistinguishable without a name
+/// allowlist — and it is the direction that reports rather than the one that
+/// stays silent.
+#[must_use]
+pub fn is_sole_owned_fresh_object_at(
+    receiver: &oxc_ast::ast::Expression,
+    mutation_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let Expression::Identifier(ident) = peel_value_wrappers(receiver) else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let declaration_id = scoping.symbol_declaration(sym_id);
+    let mutation_span = nodes.kind(mutation_id).span();
+
+    let Some(scope_id) = enclosing_call_scope(declaration_id, nodes) else {
+        return false;
+    };
+
+    // Where the fresh object is built, and the offset from which the binding
+    // holds it. A declarator holds it from its own start; a reassignment only
+    // once it has run, so its own operands still name the earlier value.
+    let fresh = match fresh_origin_before(sym_id, mutation_span, scope_id, semantic) {
+        FreshOrigin::Foreign => return false,
+        FreshOrigin::Assignment(assignment_id) => {
+            let span = nodes.kind(assignment_id).span();
+            FreshObject { origin: span, owned_from: span.end }
+        }
+        FreshOrigin::Declarator | FreshOrigin::BranchAssignment => {
+            if !is_local_object_builder_binding(ident, semantic) {
+                return false;
+            }
+            let span = nodes.kind(declaration_id).span();
+            FreshObject { origin: span, owned_from: span.start }
+        }
+    };
+
+    scoping.get_resolved_references(sym_id).all(|reference| {
+        let ref_span = nodes.kind(reference.node_id()).span();
+        // A reference that ends before the binding owns the object names the
+        // value it held earlier — unless it sits in a function below, which
+        // captures the binding rather than its value and so reads whatever the
+        // binding names when the closure runs.
+        (ref_span.end <= fresh.owned_from
+            && !runs_in_nested_call_scope(reference.node_id(), scope_id, nodes))
+            // The receiver the mutation acts on is the mutation itself, not a
+            // second holder of the object.
+            || ref_span == ident.span
+            // A write replaces what the binding names; it hands out nothing.
+            || (reference.flags().contains(oxc_semantic::ReferenceFlags::Write)
+                && !reference.flags().contains(oxc_semantic::ReferenceFlags::Read))
+            // A consumption below the declaring scope is a capture, not a
+            // consumption — see the docblock.
+            || (reference_consumes_without_retaining(reference.node_id(), nodes)
+                && !runs_in_nested_call_scope(reference.node_id(), scope_id, nodes))
+            || reference_runs_after_mutation(
+                reference.node_id(),
+                mutation_id,
+                &fresh,
+                scope_id,
+                nodes,
+            )
+    })
+}
+
+/// A freshly-built object a binding holds: where it is built, and the offset
+/// from which the binding names it rather than the value it held before.
+struct FreshObject {
+    origin: oxc_span::Span,
+    owned_from: u32,
+}
+
+/// Where the object a binding holds at a mutation was built.
+enum FreshOrigin {
+    /// No write before the mutation builds a fresh object, so the mutation acts
+    /// on the declarator's object.
+    Declarator,
+    /// This assignment built it, on every path that reaches the mutation.
+    Assignment(oxc_semantic::NodeId),
+    /// A write before the mutation builds a fresh object, but it does not
+    /// dominate the mutation, so the mutation may still act on the declarator's
+    /// object — including when the write sits in a branch the mutation can
+    /// never follow.
+    BranchAssignment,
+    /// A write may hand the binding an object the function did not build.
+    Foreign,
+}
+
+/// Classify what the binding `sym_id` holds where the mutation at
+/// `mutation_span` runs, by reading every write to it. A declarator is a
+/// declaration node, not a write reference, so the declarator's own initializer
+/// never reaches this scan.
+///
+/// Only a plain `binding = <fresh copy>` inside the declaring scope provably
+/// builds a fresh object: a compound or logical assignment (`options ??= {}`)
+/// runs conditionally, and a destructuring or `for…of` target takes its value
+/// from a source this scan does not read. Any other write may hand the binding
+/// an object the caller owns, so it disqualifies the binding — unless a fresh
+/// write that reaches the mutation runs after it and replaces its value on
+/// every path. A write in a function below the declaring scope disqualifies
+/// unconditionally, because it runs at a time source order does not give and no
+/// later write can be said to replace it.
+///
+/// When no write disqualifies, the nearest fresh write that reaches the mutation
+/// (`assignment_reaches_mutation`) is the origin. A fresh write that does not
+/// dominate the mutation is `BranchAssignment`: it tells a caller that the
+/// binding is normalised somewhere without claiming the mutation sees the
+/// result.
+fn fresh_origin_before(
+    sym_id: oxc_semantic::SymbolId,
+    mutation_span: oxc_span::Span,
+    scope_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> FreshOrigin {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{AssignmentOperator, AssignmentTarget};
+    use oxc_semantic::ReferenceFlags;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let mut nearest: Option<(u32, oxc_semantic::NodeId)> = None;
+    let mut any_fresh = false;
+    let mut last_unclassified: Option<u32> = None;
+    for reference in semantic.scoping().get_resolved_references(sym_id) {
+        if !reference.flags().contains(ReferenceFlags::Write) {
+            continue;
+        }
+        if runs_in_nested_call_scope(reference.node_id(), scope_id, nodes) {
+            return FreshOrigin::Foreign;
+        }
+        let write_start = nodes.kind(reference.node_id()).span().start;
+        if write_start >= mutation_span.start {
+            continue;
+        }
+        let assignment = nodes.parent_node(reference.node_id());
+        let builds_fresh_object = matches!(assignment.kind(), AstKind::AssignmentExpression(assign)
+            if assign.operator == AssignmentOperator::Assign
+                && matches!(assign.left, AssignmentTarget::AssignmentTargetIdentifier(_))
+                && is_fresh_copy_expression(&assign.right));
+        if !builds_fresh_object {
+            last_unclassified = last_unclassified.max(Some(write_start));
+            continue;
+        }
+        any_fresh = true;
+        if assignment_reaches_mutation(assignment.id(), mutation_span, scope_id, nodes)
+            && nearest.is_none_or(|(start, _)| write_start > start)
+        {
+            nearest = Some((write_start, assignment.id()));
+        }
+    }
+    let unclassified_write_is_dead = match (nearest, last_unclassified) {
+        (_, None) => true,
+        (Some((fresh_start, _)), Some(foreign_start)) => fresh_start > foreign_start,
+        (None, Some(_)) => false,
+    };
+    if !unclassified_write_is_dead {
+        return FreshOrigin::Foreign;
+    }
+    match nearest {
+        Some((_, id)) => FreshOrigin::Assignment(id),
+        None if any_fresh => FreshOrigin::BranchAssignment,
+        None => FreshOrigin::Declarator,
+    }
+}
+
+/// True when `kind` is a node whose body runs once per call — the scope that
+/// bounds a binding's lifetime to a single invocation.
+fn is_call_scope(kind: oxc_ast::AstKind) -> bool {
+    use oxc_ast::AstKind;
+    matches!(
+        kind,
+        AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::StaticBlock(_)
+    )
+}
+
+/// The nearest call scope (`is_call_scope`) around `node_id`, or `None` when the
+/// node sits at module level.
+fn enclosing_call_scope(
+    node_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> Option<oxc_semantic::NodeId> {
+    nodes
+        .ancestors(node_id)
+        .find(|node| is_call_scope(node.kind()))
+        .map(|node| node.id())
+}
+
+/// True when the assignment at `assignment_id` runs on every path that reaches
+/// `mutation_span`. A branch or loop that holds the assignment but not the
+/// mutation makes the assignment conditional, so the mutation can still act on
+/// the value the binding held before it. Comparison is per branch, not per
+/// statement: an `if` consequent and its `alternate` share an enclosing span
+/// yet never run together.
+fn assignment_reaches_mutation(
+    assignment_id: oxc_semantic::NodeId,
+    mutation_span: oxc_span::Span,
+    scope_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let mut branch_span = nodes.kind(assignment_id).span();
+    for node in nodes.ancestors(assignment_id) {
+        if node.id() == scope_id {
+            break;
+        }
+        let kind = node.kind();
+        let branches = matches!(
+            kind,
+            AstKind::IfStatement(_)
+                | AstKind::SwitchStatement(_)
+                | AstKind::TryStatement(_)
+                | AstKind::ConditionalExpression(_)
+                | AstKind::LogicalExpression(_)
+                | AstKind::ForStatement(_)
+                | AstKind::ForInStatement(_)
+                | AstKind::ForOfStatement(_)
+                | AstKind::WhileStatement(_)
+                | AstKind::DoWhileStatement(_)
+                // A labelled block is the one same-level early exit: `break
+                // outer` skips the rest of the block and still reaches a
+                // mutation below it.
+                | AstKind::LabeledStatement(_)
+        );
+        // Only the branch that holds the assignment runs it, so the mutation
+        // must sit in that same branch to see its result.
+        if branches && !branch_span.contains_inclusive(mutation_span) {
+            return false;
+        }
+        branch_span = kind.span();
+    }
+    true
+}
+
+/// True when the reference at `ref_node_id` reads the value it names and keeps
+/// no reference to it, so the value stays private to its declaring scope:
+/// - the *object* of a member access (`value.foo`, `value[i]`, `value.foo = 1`) —
+///   a property read, or a method call whose callee is assumed not to retain the
+///   receiver it is given as `this`;
+/// - the iterated expression of a `for…of` / `for…in` head, which the loop
+///   enumerates and discards;
+/// - the single argument of an `Object` static that only inspects its argument
+///   (`is_inspecting_object_static`).
+fn reference_consumes_without_retaining(
+    ref_node_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let ref_span = nodes.kind(ref_node_id).span();
+    match nodes.parent_kind(ref_node_id) {
+        AstKind::StaticMemberExpression(member) => member.object.span() == ref_span,
+        AstKind::ComputedMemberExpression(member) => member.object.span() == ref_span,
+        AstKind::ForOfStatement(stmt) => stmt.right.span() == ref_span,
+        AstKind::ForInStatement(stmt) => stmt.right.span() == ref_span,
+        AstKind::CallExpression(call) => is_inspecting_object_static(call, ref_span),
+        _ => false,
+    }
+}
+
+/// True when `call` applies an `Object` static that reads the properties of its
+/// only argument and returns a new array — `Object.keys` / `Object.values` /
+/// `Object.entries` / `Object.getOwnPropertyNames` — to the reference at
+/// `ref_span`. These keep no reference to the object they inspect.
+fn is_inspecting_object_static(
+    call: &oxc_ast::ast::CallExpression,
+    ref_span: oxc_span::Span,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(object) = &member.object else {
+        return false;
+    };
+    if object.name.as_str() != "Object"
+        || !matches!(
+            member.property.name.as_str(),
+            "keys" | "values" | "entries" | "getOwnPropertyNames"
+        )
+    {
+        return false;
+    }
+    call.arguments.len() == 1
+        && call
+            .arguments
+            .first()
+            .and_then(oxc_ast::ast::Argument::as_expression)
+            .is_some_and(|arg| arg.span() == ref_span)
+}
+
+/// True when the reference at `ref_node_id` runs after the mutation at
+/// `mutation_id`, so it sees the mutated object and the mutation stays invisible.
+///
+/// Source order decides, which holds only inside one run of `scope_id`, the
+/// call scope that declares the binding. A reference nested in a function below
+/// that scope runs at a time the source does not give: a hoisted declaration
+/// below the mutation can be called above it, and a callback can run any number
+/// of times. The same applies to the mutation: a function or a loop between the
+/// mutation and the declaration replays the mutation, so a reference it also
+/// encloses sees an object an earlier pass already mutated.
+///
+/// The walk stops at the first node that encloses `origin_span`, the expression
+/// that builds the object, because a loop above it builds a new object each pass
+/// — unless the origin sits in the loop *head*, which runs once
+/// (`declares_binding_in_head`).
+fn reference_runs_after_mutation(
+    ref_node_id: oxc_semantic::NodeId,
+    mutation_id: oxc_semantic::NodeId,
+    fresh: &FreshObject,
+    scope_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let ref_span = nodes.kind(ref_node_id).span();
+    let mutation_span = nodes.kind(mutation_id).span();
+    if ref_span.start < mutation_span.end
+        || runs_in_nested_call_scope(ref_node_id, scope_id, nodes)
+    {
+        return false;
+    }
+    for kind in nodes.ancestor_kinds(mutation_id) {
+        let span = kind.span();
+        if span.contains_inclusive(fresh.origin) {
+            return !(declares_binding_in_head(kind, fresh.origin)
+                && span.contains_inclusive(ref_span));
+        }
+        if is_call_scope(kind) {
+            return false;
+        }
+        let repeats = matches!(
+            kind,
+            AstKind::ForStatement(_)
+                | AstKind::ForInStatement(_)
+                | AstKind::ForOfStatement(_)
+                | AstKind::WhileStatement(_)
+                | AstKind::DoWhileStatement(_)
+        );
+        if repeats && span.contains_inclusive(ref_span) {
+            return false;
+        }
+    }
+    // Unreachable while the mutation sits inside the binding's scope, which the
+    // caller guarantees by resolving both from the same symbol. If it is ever
+    // reached, the reference is not ordered against the mutation, so it does not
+    // exempt.
+    false
+}
+
+/// True when the reference at `ref_node_id` sits inside a function nested below
+/// `scope_id`, the call scope that declares the binding.
+fn runs_in_nested_call_scope(
+    ref_node_id: oxc_semantic::NodeId,
+    scope_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    nodes
+        .ancestors(ref_node_id)
+        .take_while(|node| node.id() != scope_id)
+        .any(|node| is_call_scope(node.kind()))
+}
+
+/// True when `kind` is a `for` statement whose head builds the object at
+/// `origin_span`. The head runs once, so the body repeats around the same
+/// object instead of building a new one each pass.
+fn declares_binding_in_head(kind: oxc_ast::AstKind, origin_span: oxc_span::Span) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let AstKind::ForStatement(stmt) = kind else {
+        return false;
+    };
+    stmt.init
+        .as_ref()
+        .is_some_and(|init| init.span().contains_inclusive(origin_span))
 }
 
 /// True when `expr` constructs a brand-new object that copies from existing
@@ -1579,7 +2046,8 @@ pub fn is_local_object_builder_binding(
 ///   object is the (new) first argument, so the assignment produces a fresh
 ///   object rather than mutating an existing one. `Object.assign(existing, …)`,
 ///   whose first argument is an identifier or member expression, is NOT fresh —
-///   it mutates `existing` in place and stays subject to the rule.
+///   it mutates `existing` in place and stays subject to the rule;
+/// - `structuredClone(x)`, which always allocates a new object graph.
 fn is_fresh_copy_expression<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> bool {
     use oxc_ast::ast::Expression;
     // Peel transparent wrappers first: `{} as ThemePalette` (and `satisfies T` /
@@ -1587,23 +2055,26 @@ fn is_fresh_copy_expression<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> bool 
     // `peel_value_wrappers` for the full set of value-preserving wrappers stripped.
     match peel_value_wrappers(expr) {
         Expression::ObjectExpression(_) => true,
-        Expression::CallExpression(call) => {
-            let Expression::StaticMemberExpression(member) = &call.callee else {
-                return false;
-            };
-            let Expression::Identifier(obj) = &member.object else {
-                return false;
-            };
-            if obj.name.as_str() != "Object" || member.property.name.as_str() != "assign" {
-                return false;
+        Expression::CallExpression(call) => match &call.callee {
+            Expression::Identifier(callee) => {
+                callee.name.as_str() == "structuredClone" && !call.arguments.is_empty()
             }
-            // First argument must itself be a freshly-created target.
-            match call.arguments.first().and_then(|arg| arg.as_expression()) {
-                Some(Expression::ObjectExpression(_)) => true,
-                Some(Expression::CallExpression(inner)) => is_object_create_null(inner),
-                _ => false,
+            Expression::StaticMemberExpression(member) => {
+                let Expression::Identifier(obj) = &member.object else {
+                    return false;
+                };
+                if obj.name.as_str() != "Object" || member.property.name.as_str() != "assign" {
+                    return false;
+                }
+                // First argument must itself be a freshly-created target.
+                match call.arguments.first().and_then(|arg| arg.as_expression()) {
+                    Some(Expression::ObjectExpression(_)) => true,
+                    Some(Expression::CallExpression(inner)) => is_object_create_null(inner),
+                    _ => false,
+                }
             }
-        }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -1706,6 +2177,47 @@ pub fn is_array_initializer(expr: &oxc_ast::ast::Expression) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when there is static evidence that the target of `delete member` is an
+/// array: the index is a numeric literal (`arr[0]`), or the target identifier
+/// resolves to a binding declared as an array — an array initializer
+/// (`is_array_initializer`) or an array type annotation (`type_is_array`).
+///
+/// `delete` on an array leaves a sparse hole instead of shortening it, so the
+/// array case has its own remediation (`splice`) and its own rule.
+#[must_use]
+pub fn is_array_delete_target(
+    member: &oxc_ast::ast::ComputedMemberExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    if matches!(member.expression, Expression::NumericLiteral(_)) {
+        return true;
+    }
+    let Expression::Identifier(id) = &member.object else {
+        return false;
+    };
+    let Some(ref_id) = id.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let AstKind::VariableDeclarator(decl) =
+        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
+    else {
+        return false;
+    };
+    if let Some(annotation) = &decl.type_annotation
+        && type_is_array(&annotation.type_annotation)
+    {
+        return true;
+    }
+    matches!(&decl.init, Some(init) if is_array_initializer(init))
 }
 
 /// `true` when `expr` proves its value is a fresh array: an array literal
@@ -1981,9 +2493,9 @@ pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) ->
 }
 
 /// True when, at the point of a mutation starting at byte offset `mutation_start`,
-/// the receiver `ident` provably holds a freshly-created local object because the
-/// **nearest preceding write** to its binding reassigned it to a fresh-copy
-/// expression (`is_fresh_copy_expression`):
+/// the receiver `ident` provably holds a freshly-created local object because a
+/// preceding write reassigned its binding to a fresh-copy expression
+/// (`is_fresh_copy_expression`):
 ///
 /// ```ts
 /// function f(options = {}) {
@@ -1992,60 +2504,47 @@ pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) ->
 /// }
 /// ```
 ///
-/// Considering only the *nearest* preceding write is sound: no write to the
-/// binding happens between that fresh-copy reassignment and the mutation, so the
-/// receiver still references the fresh object. A later reassignment to external
-/// state (`options = getConfig()`) becomes the nearest preceding write for any
-/// subsequent mutation and is not a fresh copy, so that mutation stays flagged.
-/// A binding never reassigned to a fresh copy (a plain parameter or a `const`
-/// from an external call) has no qualifying write and stays flagged.
+/// `fresh_origin_before` classifies the writes, the same classification
+/// [`is_sole_owned_fresh_object_at`] reads for the same binding. The two apply it
+/// at different strengths, deliberately. A write that may hand the binding an
+/// object the function did not build leaves the mutation flagged for both. Past
+/// that they diverge three ways: a fresh copy only one branch builds is enough
+/// here, while sole ownership needs one that runs on every path; this predicate
+/// does not ask who else holds the object, and sole ownership does; and this
+/// predicate reads a binding at any nesting depth, while sole ownership needs
+/// one declared inside a call scope. A binding never reassigned to a fresh copy
+/// (a plain parameter, or a `const` from an external call) has no qualifying
+/// write and stays flagged.
 #[must_use]
 pub fn is_reassigned_fresh_copy_at(
     ident: &oxc_ast::ast::IdentifierReference,
     mutation_start: u32,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_ast::ast::AssignmentTarget;
-    use oxc_semantic::ReferenceFlags;
-    use oxc_span::GetSpan;
-
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+    let Some(sym_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
         return false;
     };
     let nodes = semantic.nodes();
-
-    // Nearest write-reference to this binding strictly before the mutation.
-    let mut nearest: Option<(u32, &oxc_ast::ast::AssignmentExpression)> = None;
-    for reference in scoping.get_resolved_references(sym_id) {
-        if !reference.flags().contains(ReferenceFlags::Write) {
-            continue;
-        }
-        let write_node = nodes.get_node(reference.node_id());
-        let write_start = write_node.kind().span().start;
-        if write_start >= mutation_start {
-            continue;
-        }
-        // The write reference is the LHS identifier of an assignment; its parent
-        // is the `AssignmentExpression`. A `let x = …` declarator is a separate
-        // declaration node, not a write reference, so it is not considered here.
-        let AstKind::AssignmentExpression(assign) = nodes.parent_node(write_node.id()).kind()
-        else {
-            continue;
-        };
-        if !matches!(assign.left, AssignmentTarget::AssignmentTargetIdentifier(_)) {
-            continue;
-        }
-        if nearest.is_none_or(|(start, _)| write_start > start) {
-            nearest = Some((write_start, assign));
-        }
+    // Reading writes only needs a terminator for the source-order walk, which
+    // the program gives a binding declared outside any function. Requiring a
+    // call scope is sole ownership's precondition, because only a lifetime
+    // bounded to one invocation makes the set of holders knowable.
+    let scope_id = enclosing_call_scope(scoping.symbol_declaration(sym_id), nodes)
+        .unwrap_or(oxc_semantic::NodeId::ROOT);
+    match fresh_origin_before(
+        sym_id,
+        oxc_span::Span::new(mutation_start, mutation_start),
+        scope_id,
+        semantic,
+    ) {
+        FreshOrigin::Assignment(_) | FreshOrigin::BranchAssignment => true,
+        FreshOrigin::Declarator | FreshOrigin::Foreign => false,
     }
-
-    nearest.is_some_and(|(_, assign)| is_fresh_copy_expression(&assign.right))
 }
 
 /// Node module-system specifiers a `Module` binding can be imported/required from.
@@ -2242,12 +2741,15 @@ fn resolves_to_node_module_ctor(
 ///
 /// The escape guard requires every resolved reference of the binding to read
 /// through it without leaking a pre-sort alias: the **object of a member access**
-/// (`arr.map(...)`, `arr.length`, `arr[i]`) or the iterated expression of a
-/// `for…of` loop (`for (const x of arr)`), which only consumes the iterator. A
-/// `return` is additionally allowed — either bare (`return arr`) or nested inside the
-/// returned object/array literal (`return { arr }`, `return [arr]`) — but only when
-/// the initializer is a provably-fresh array: an array literal (`[]`, `[a, b]`,
-/// `[...x]`) or a built-in Array copy (`x.slice(…)`, `.filter`/`.map`/`Array.from`).
+/// (`arr.map(...)`, `arr.length`, `arr[i]`), the iterated expression of a
+/// `for…of` / `for…in` head, or the argument of an `Object` static that only
+/// inspects it (`Object.keys(arr)`) — see
+/// [`reference_consumes_without_retaining`], which the object-ownership path
+/// shares. A `return` is additionally allowed — either bare (`return arr`) or
+/// nested inside the returned object/array literal (`return { arr }`,
+/// `return [arr]`) — but only when the initializer is a provably-fresh array: an
+/// array literal (`[]`, `[a, b]`, `[...x]`) or a built-in Array copy
+/// (`x.slice(…)`, `.filter`/`.map`/`Array.from`).
 /// The aggregate is built at the return, after the sort, so no pre-existing alias can
 /// observe the reorder. Any other bare-value use — a call argument (`use(arr)`), an
 /// assignment source (`x = arr`), a property/element of a *stored* literal
@@ -2303,40 +2805,15 @@ pub fn is_local_fresh_array_binding(
         return false;
     }
 
-    // The array must not leak a pre-sort alias. Every reference reads through the
-    // binding (member object, `for…of` iterable), and — only for a provably-fresh
-    // array — a `return` may hand out the already-sorted array.
+    // The array must not leak a pre-sort alias. Every reference consumes the
+    // array without keeping it (`reference_consumes_without_retaining`), and —
+    // only for a provably-fresh array — a `return` may hand out the
+    // already-sorted array.
     scoping.get_resolved_references(sym_id).all(|reference| {
-        reference_is_member_object(reference.node_id(), semantic, init_is_provably_fresh)
+        reference_consumes_without_retaining(reference.node_id(), nodes)
+            || (init_is_provably_fresh
+                && reference_escapes_only_via_return(reference.node_id(), semantic))
     })
-}
-
-/// True when the reference at `ref_node_id` cannot expose a pre-sort alias of the
-/// binding: it is the *object* of a member access (`arr.foo`, `arr[i]`), the
-/// iterated expression of a `for…of` loop (`for (const x of arr)`), which consumes
-/// the iterator without retaining the array, or — when `allow_return_escape` is set
-/// (the initializer is a provably-fresh array) — a value handed to a `return`, either
-/// directly (`return arr`) or nested inside the returned object/array literal
-/// (`return { arr }`, `return [arr]`), which exposes only the already-sorted private
-/// array. Any other parent (call argument, assignment source, a spread or property
-/// value in a *stored* literal, the `for…of` binding target, or a `return` of a
-/// possibly-shared binding) lets a pre-sort alias escape and returns `false`.
-fn reference_is_member_object(
-    ref_node_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
-    allow_return_escape: bool,
-) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_span::GetSpan;
-
-    let nodes = semantic.nodes();
-    let ref_span = nodes.get_node(ref_node_id).kind().span();
-    match nodes.kind(nodes.parent_id(ref_node_id)) {
-        AstKind::StaticMemberExpression(member) => member.object.span() == ref_span,
-        AstKind::ComputedMemberExpression(member) => member.object.span() == ref_span,
-        AstKind::ForOfStatement(for_of) => for_of.right.span() == ref_span,
-        _ => allow_return_escape && reference_escapes_only_via_return(ref_node_id, semantic),
-    }
 }
 
 /// True when the reference at `ref_node_id` flows into a `return` and nowhere else:
@@ -2535,12 +3012,12 @@ const ARRAY_PRODUCING_METHODS: &[&str] = &[
     "with", "getOwnPropertyNames",
 ];
 
-/// Whether a type annotation denotes an array: `T[]`, `readonly T[]`,
+/// Whether a type annotation denotes an array: `T[]`, `[A, B]`, `readonly T[]`,
 /// `Array<T>`, `ReadonlyArray<T>`.
 fn type_is_array(ty: &oxc_ast::ast::TSType) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName, TSTypeOperatorOperator};
     match ty {
-        TSType::TSArrayType(_) => true,
+        TSType::TSArrayType(_) | TSType::TSTupleType(_) => true,
         TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
             type_is_array(&op.type_annotation)
         }
@@ -2855,7 +3332,7 @@ pub fn expression_is_set(
     }
 }
 
-/// True when `arg` is `delete recv.prop` whose `prop` is declared **optional**
+/// True when `deleted` is `recv.prop` whose `prop` is declared **optional**
 /// (`prop?: T`) on the receiver's structurally-resolved named type. Deleting an
 /// optional member returns the object to the absent state its own type already
 /// permits, so it is type-safe and intentional — not the foot-gun the rule
@@ -2875,11 +3352,11 @@ pub fn expression_is_set(
 /// and stay flagged.
 #[must_use]
 pub fn is_optional_member_delete(
-    arg: &oxc_ast::ast::Expression,
+    deleted: &oxc_ast::ast::MemberExpression,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    use oxc_ast::ast::Expression;
-    let Expression::StaticMemberExpression(member) = arg else {
+    use oxc_ast::ast::MemberExpression;
+    let MemberExpression::StaticMemberExpression(member) = deleted else {
         return false;
     };
     let Some(type_name) = receiver_named_type(&member.object, semantic) else {

@@ -1443,4 +1443,17 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn flags_mutating_method_on_a_tuple_annotated_binding() {
+        // A tuple is an array at runtime, so mutating one reorders a value the
+        // caller holds exactly as `T[]` would.
+        let src = r#"
+            function f(pair: [number, string], other: readonly [number, string]) {
+                pair.reverse();
+                other.reverse();
+            }
+        "#;
+        assert_eq!(run(src).len(), 2);
+    }
 }
