@@ -712,7 +712,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
-| `no-duplicate-dependencies` | A dependency is listed twice in the same `package.json` section, or in two sections that should be mutually exclusive — both confuse package managers about which version wins. | Remove one of the listings so each dependency appears in exactly one section. |
+| `no-duplicate-dependencies` | A dependency is listed twice in one `package.json` section, or in two sections a package manager will not honour together — one listing is installed and the other ignored. A `dependencies` and `peerDependencies` pair is reported only when no version satisfies both declared ranges. | Remove one of the listings so each dependency appears in exactly one section. For a `dependencies`/`peerDependencies` pair, instead widen or narrow one range so a single installed version satisfies both. |
 
 ## css
 
