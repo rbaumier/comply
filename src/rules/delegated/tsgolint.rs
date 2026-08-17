@@ -547,7 +547,7 @@ pub fn register_all() -> Vec<RuleDef> {
             "ban-types",
             "ban-types",
             "`Object`, `{}`, `Function` are too loose — use specific types.",
-            "Use `object`, `Record<>`, or explicit function signatures.",
+            "Use a named domain type, `Record<K, V>` with a concrete value type, or an explicit function signature.",
             Some(Arc::new(BanTypesFilter)),
         ),
         entry(
