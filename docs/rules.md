@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2027 rules across 147 categories.
+2028 rules across 148 categories.
 
 ## Categories
 
@@ -139,6 +139,7 @@
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
+- [type-safety](#type-safety) (1 rules)
 - [typescript](#typescript) (182 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
@@ -2423,6 +2424,12 @@
 | `vitest-no-identical-title` | Two `test()` / `it()` blocks with the same title inside the same describe scope: vitest runs them both, but the test reporter merges them so only one result is visible. | Make every test title unique within its describe scope, even if you have to add a discriminator like `"… with empty input"`. |
 | `vitest-no-standalone-expect` | `expect(...)` outside any `test` / `it` / `describe` block runs at import time, not as a test. | Move the `expect` inside a `test(...)` / `it(...)` body. If it's setup verification, use `beforeAll(...)` instead. |
 | `vitest-no-test-return-statement` | Returning a non-Promise value from a test callback is silently discarded. | Drop the `return`. If you need a Promise, mark the callback `async` and `await` the value. |
+
+## type-safety
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `no-reflect-get` | `Reflect.get` reads a property without its name reaching the type system. | Read the property on a typed value, or parse the dynamic input into a named domain type at its boundary. |
 
 ## typescript
 

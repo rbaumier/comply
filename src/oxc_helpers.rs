@@ -892,6 +892,20 @@ const SERVICE_WORKER_GLOBAL_EVENTS: &[&str] = &[
 /// file runs as a Service Worker.
 const SERVICE_WORKER_GLOBAL_MEMBERS: &[&str] = &["skipWaiting", "clients", "registration"];
 
+/// True when `ident` resolves to no binding in any enclosing scope — the real
+/// global rather than a same-named local. A shadowing binding (`const Reflect =
+/// makeThing()`, `const self = this`, a receiver parameter, a test double) owns
+/// the name, so what is read off it says nothing about the built-in.
+#[must_use]
+pub(crate) fn identifier_is_unshadowed_global<'a>(
+    ident: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a Semantic<'a>,
+) -> bool {
+    ident.reference_id.get().is_some_and(|ref_id| {
+        semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+    })
+}
+
 /// True when `object` is the bare `self` global: named `self` and resolving to
 /// no binding in any enclosing scope. A local `self` — the `const self = this`
 /// alias, a receiver parameter, a stubbed test double — shadows the global, so
@@ -903,10 +917,7 @@ fn is_unbound_self_global<'a>(
     let oxc_ast::ast::Expression::Identifier(ident) = object else {
         return false;
     };
-    ident.name.as_str() == "self"
-        && ident.reference_id.get().is_some_and(|ref_id| {
-            semantic.scoping().get_reference(ref_id).symbol_id().is_none()
-        })
+    ident.name.as_str() == "self" && identifier_is_unshadowed_global(ident, semantic)
 }
 
 /// True when the file reads the `ServiceWorkerGlobalScope` API surface off the
