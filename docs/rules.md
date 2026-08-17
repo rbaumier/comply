@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2026 rules across 147 categories.
+2027 rules across 147 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
-- [typescript](#typescript) (181 rules)
+- [typescript](#typescript) (182 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2473,6 +2473,7 @@
 | `no-new` | `new` used only for side effects throws the object away. | Assign the `new X()` result to a variable, or call a plain function if you only want side effects. A bare `new` signals a misused constructor. |
 | `no-nullish-default-on-input` | Defaulting function parameters silently paves over invalid input. | Don't use `??` or `\|\|` to default a function parameter. Validate at the boundary: if the input is invalid, return a Result error. Silent defaults turn caller bugs into silent wrong answers. |
 | `no-obj-calls` | Global namespace objects are not callable. | Don't call `Math()`, `JSON()`, `Reflect()`, and the like — they are namespaces, not functions, so calling them throws a TypeError. |
+| `no-object-parameters` | A parameter annotated `object` accepts every non-primitive value and exposes no property. | Accept a named domain type, and parse external input at its I/O boundary before the call. |
 | `no-param-reassign` | Reassigning function parameters mutates the caller's data. | Copy the argument into a local `let` if you need to mutate it. Mutating params silently surprises callers. |
 | `no-process-global` | Usage of the Node `process` global is discouraged — it is hard for tools to statically analyze. | Import `process` explicitly with `import process from "node:process";` instead of relying on the implicit global. |
 | `no-redundant-optional` | `prop?: Type \| undefined` — the `?` already implies `\| undefined` (unless tsconfig sets `exactOptionalPropertyTypes`). | Remove `\| undefined` from the type, or remove the `?` from the property name. |
@@ -2644,7 +2645,7 @@
 |------|-------------|-------------|
 | `await-thenable` | `await` on a non-thenable value has no effect. | Remove the `await` or ensure the value is a Promise. |
 | `ban-ts-comment` | `@ts-ignore` and `@ts-nocheck` suppress type errors dangerously. | Fix the type error instead of suppressing it. |
-| `ban-types` | `Object`, `{}`, `Function` are too loose — use specific types. | Use `object`, `Record<>`, or explicit function signatures. |
+| `ban-types` | `Object`, `{}`, `Function` are too loose — use specific types. | Use a named domain type, `Record<K, V>` with a concrete value type, or an explicit function signature. |
 | `class-literal-property-style` | Use `readonly x = 5` instead of getter for constants. | Replace getter with readonly property. |
 | `consistent-generic-constructors` | Specify type arguments on constructor: `new Map<K, V>()`. | Move type arguments to constructor call. |
 | `consistent-return` | Function should either always return a value or never. | Add return statements to all branches or none. |
