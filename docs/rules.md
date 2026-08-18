@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2029 rules across 148 categories.
+2030 rules across 148 categories.
 
 ## Categories
 
@@ -140,7 +140,7 @@
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
 - [type-safety](#type-safety) (1 rules)
-- [typescript](#typescript) (183 rules)
+- [typescript](#typescript) (184 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2496,6 +2496,7 @@
 | `no-typeof-prefer-schema` | Validating the shape of freshly-deserialized data (`JSON.parse`, `response.json()`) with chained `typeof` checks is error-prone — use a schema validator (zod, valibot, …). | Replace the chained `typeof` checks with a schema parsed at the boundary, e.g. `const User = z.object({ name: z.string(), age: z.number() }); User.parse(data)`. A single `typeof x === 'string'` narrowing is fine — this targets multi-property shape checks. |
 | `no-unassigned-vars` | A variable that is read but never assigned is always undefined. | Assign the variable a value or remove it. A `let`/`var` that is only ever read holds `undefined`, usually a forgotten assignment. |
 | `no-unknown-parameters` | An `unknown` parameter defers the parse onto every caller. | Accept a named domain type, and run the parser at the I/O boundary instead. |
+| `no-unknown-returns` | A declared `unknown` return hands the caller an unparsed value. | Return a named domain type, and parse the value where it is produced. |
 | `no-unreachable` | Code after a terminating statement never runs. | Remove the unreachable statements after a `return`/`throw`/`break`/`continue`, or fix the control flow that strands them. |
 | `no-unused-labels` | A label that is never referenced is dead. | Remove the unused label. If you meant to jump to it, add the matching `break`/`continue`. |
 | `no-useless-catch` | A catch that only rethrows is pointless. | If the catch block just rethrows the original error, remove it — the error propagates identically without the ceremony. |
