@@ -2,45 +2,9 @@
 //! own type annotation.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, enclosing_parameter};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
-
-/// True when `node` — a `TSObjectKeyword` — is the type of a parameter.
-///
-/// The walk runs in two stages, each with its own whitelist. Out of the type
-/// position, only a parenthesis and a union member keep the keyword in the same
-/// annotation: `Record<string, object>`, `object[]`, `T & object` and a type
-/// literal's property all reach a node outside the whitelist and stop there.
-/// Out of the annotation, only binding nodes lead to a parameter: a return type
-/// reaches the function itself, a variable annotation its declarator.
-fn is_parameter_annotation(node: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
-    let nodes = semantic.nodes();
-
-    let mut current = node.id();
-    let annotation = loop {
-        let parent = nodes.parent_node(current);
-        match parent.kind() {
-            AstKind::TSParenthesizedType(_) | AstKind::TSUnionType(_) => current = parent.id(),
-            AstKind::TSTypeAnnotation(_) => break parent,
-            _ => return false,
-        }
-    };
-
-    let mut current = annotation.id();
-    loop {
-        let parent = nodes.parent_node(current);
-        match parent.kind() {
-            AstKind::FormalParameter(_) => return true,
-            AstKind::BindingIdentifier(_)
-            | AstKind::AssignmentPattern(_)
-            | AstKind::BindingRestElement(_)
-            | AstKind::ObjectPattern(_)
-            | AstKind::ArrayPattern(_) => current = parent.id(),
-            _ => return false,
-        }
-    }
-}
 
 pub struct Check;
 
@@ -59,7 +23,7 @@ impl OxcCheck for Check {
         let AstKind::TSObjectKeyword(kw) = node.kind() else {
             return;
         };
-        if !is_parameter_annotation(node, semantic) {
+        if enclosing_parameter(node, semantic).is_none() {
             return;
         }
         let (line, column) = byte_offset_to_line_col(ctx.source, kw.span.start as usize);

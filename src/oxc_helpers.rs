@@ -892,6 +892,49 @@ const SERVICE_WORKER_GLOBAL_EVENTS: &[&str] = &[
 /// file runs as a Service Worker.
 const SERVICE_WORKER_GLOBAL_MEMBERS: &[&str] = &["skipWaiting", "clients", "registration"];
 
+/// The `FormalParameter` whose own type annotation contains `node`, a type
+/// keyword or a type node.
+///
+/// The walk runs in two stages, each with its own whitelist. Out of the type
+/// position, only a parenthesis and a union member keep the node inside the
+/// same annotation: `Record<string, T>`, `T[]`, `A & T` and a type literal's
+/// property all reach a node outside the whitelist and stop there. Out of the
+/// annotation, only binding nodes lead to a parameter: a return type reaches
+/// the function itself, a variable annotation its declarator.
+#[must_use]
+pub(crate) fn enclosing_parameter<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::FormalParameter<'a>> {
+    use oxc_ast::AstKind;
+
+    let nodes = semantic.nodes();
+
+    let mut current = node.id();
+    let annotation = loop {
+        let parent = nodes.parent_node(current);
+        match parent.kind() {
+            AstKind::TSParenthesizedType(_) | AstKind::TSUnionType(_) => current = parent.id(),
+            AstKind::TSTypeAnnotation(_) => break parent,
+            _ => return None,
+        }
+    };
+
+    let mut current = annotation.id();
+    loop {
+        let parent = nodes.parent_node(current);
+        match parent.kind() {
+            AstKind::FormalParameter(param) => return Some(param),
+            AstKind::BindingIdentifier(_)
+            | AstKind::AssignmentPattern(_)
+            | AstKind::BindingRestElement(_)
+            | AstKind::ObjectPattern(_)
+            | AstKind::ArrayPattern(_) => current = parent.id(),
+            _ => return None,
+        }
+    }
+}
+
 /// True when `ident` resolves to no binding in any enclosing scope — the real
 /// global rather than a same-named local. A shadowing binding (`const Reflect =
 /// makeThing()`, `const self = this`, a receiver parameter, a test double) owns
