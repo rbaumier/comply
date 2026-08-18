@@ -60,6 +60,7 @@ pub mod test_helpers;
 pub mod test_methods;
 pub mod test_validation_rejection;
 pub mod throw_assertion;
+pub mod unknown_type;
 pub mod vue_directive_ast;
 pub mod vue_sfc;
 pub mod vue_sfc_oxc;
