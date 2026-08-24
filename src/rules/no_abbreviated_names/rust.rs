@@ -1,38 +1,31 @@
 //! no-abbreviated-names backend for Rust.
 //!
-//! Same dictionary as the TypeScript impl, applied to Rust identifiers.
-//! Splits snake_case words (Rust convention) and checks each against a
-//! banned abbreviation list.
+//! Only the identifier a declaration introduces is checked, never a mention of
+//! a name declared elsewhere: a type imported from a crate you do not own is
+//! not yours to rename.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 
-// Match the TypeScript list: only flag GENUINELY obscure abbreviations,
-// not ecosystem idioms. `cfg`, `ctx`, `idx`, `err`, `fmt`, `ret`, `val`,
-// `num`, `str`, `obj`, `arr`, `req`, `res`, `msg`, `auth`, `db`, `dict`
-// are all part of the Rust vocabulary (cfg attributes, std::fmt, io
-// context, iteration index, …) and flagging them only adds noise. The
-// list targets abbreviations a reader genuinely has to guess about.
-//
-// `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
-// `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
-// `org` is likewise exempt: it is the canonical domain term of the GitHub
-// API (`GET /orgs/{org}`, `org_member`), Kubernetes labels, and
-// multi-tenant SaaS schemas (`org_id`) — not an abbreviation a reader
-// has to guess about.
-// `desc` is likewise exempt: it is the canonical abbreviation for a
-// descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
-// `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
-// canonical expansions, so suggesting 'description' is frequently wrong.
-// `pwd` is likewise exempt: in shell/filesystem/OS code it is the Unix
-// `pwd(1)` command and `$PWD` variable ("print working directory"), while
-// in URL/auth code it means "password" — two canonical expansions, so
-// suggesting either single full word is frequently wrong.
-const DEFAULT_BANNED: &[(&str, &str)] = &[
-    ("acct", "account"),
-    ("usr", "user"),
-    ("btn", "button"),
-    ("cnt", "count"),
+use super::abbreviations::{build_banned_list, matches_banned};
+
+/// Parent node kinds that introduce a name, each paired with the field holding
+/// it. The field is what separates a declaration from a mention: in
+/// `fn handle(user: UsrProfile)` the parameter's `pattern` is the declaration
+/// and its `type` is a mention of a name declared elsewhere.
+const DECLARATION_NAME_FIELDS: &[(&str, &str)] = &[
+    ("let_declaration", "pattern"),
+    ("parameter", "pattern"),
+    ("function_item", "name"),
+    ("const_item", "name"),
+    ("static_item", "name"),
+    ("struct_item", "name"),
+    ("enum_item", "name"),
+    ("union_item", "name"),
+    ("trait_item", "name"),
+    ("type_item", "name"),
+    ("field_declaration", "name"),
+    ("enum_variant", "name"),
 ];
 
 #[derive(Debug)]
@@ -40,7 +33,7 @@ pub struct Check;
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
-        Some(&["identifier"])
+        Some(&["identifier", "type_identifier", "field_identifier"])
     }
 
     fn visit_node(
@@ -50,36 +43,28 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
+        if !is_declared_name(node) {
+            return;
+        }
+        let Ok(name) = node.utf8_text(ctx.source.as_bytes()) else {
+            return;
+        };
         let extra = ctx.config.string_list("no-abbreviated-names", "banned", ctx.lang);
-        let merged = build_banned_list(&extra);
-        let source_bytes = ctx.source.as_bytes();
-        let Some(parent) = node.parent() else {
+        let Some((abbreviation, full)) = matches_banned(name, &build_banned_list(&extra)) else {
             return;
         };
-        if !matches!(
-            parent.kind(),
-            "let_declaration" | "parameter" | "function_item" | "const_item" | "static_item"
-        ) {
+        let allowed = ctx.config.string_list("no-abbreviated-names", "allowed", ctx.lang);
+        if allowed.contains(&abbreviation) {
             return;
         }
-        let Ok(name) = node.utf8_text(source_bytes) else {
-            return;
-        };
-        let Some((abbr, full)) = matches_banned(name, &merged) else {
-            return;
-        };
-        if allowed.iter().any(|a| a == &abbr) {
-            return;
-        }
-        let pos = node.start_position();
+        let position = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "no-abbreviated-names".into(),
+            line: position.row + 1,
+            column: position.column + 1,
+            rule_id: super::META.id.into(),
             message: format!(
-                "Identifier '{name}' contains abbreviation '{abbr}' — \
+                "Identifier '{name}' contains abbreviation '{abbreviation}' — \
                  use the full word '{full}'. Editors auto-complete; \
                  readers don't."
             ),
@@ -89,31 +74,18 @@ impl AstCheck for Check {
     }
 }
 
-fn build_banned_list(extra: &[String]) -> Vec<(String, String)> {
-    let mut list: Vec<(String, String)> = DEFAULT_BANNED
-        .iter()
-        .map(|(a, f)| ((*a).to_owned(), (*f).to_owned()))
-        .collect();
-    for entry in extra {
-        if let Some((abbr, full)) = entry.split_once(':') {
-            let abbr = abbr.trim().to_lowercase();
-            let full = full.trim().to_owned();
-            if !list.iter().any(|(a, _)| *a == abbr) {
-                list.push((abbr, full));
-            }
-        }
-    }
-    list
-}
-
-fn matches_banned(name: &str, banned: &[(String, String)]) -> Option<(String, String)> {
-    for word in name.split('_') {
-        let lower = word.to_ascii_lowercase();
-        if let Some(pair) = banned.iter().find(|(abbr, _)| lower == *abbr) {
-            return Some(pair.clone());
-        }
-    }
-    None
+/// True when `node` is the identifier a declaration introduces, rather than a
+/// mention of a name declared elsewhere.
+fn is_declared_name(node: tree_sitter::Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let Some((_, field)) =
+        DECLARATION_NAME_FIELDS.iter().find(|(kind, _)| *kind == parent.kind())
+    else {
+        return false;
+    };
+    parent.child_by_field_name(field).map(|name| name.id()) == Some(node.id())
 }
 
 #[cfg(test)]
@@ -225,5 +197,57 @@ mod tests {
         assert!(diags.iter().any(|d| d.message.contains("acct")));
         let diags = run_on("fn f() { let btn = 1; }");
         assert!(diags.iter().any(|d| d.message.contains("btn")));
+    }
+
+    #[test]
+    fn flags_pascal_case_type_declarations() {
+        for source in [
+            "struct UsrProfile { id: u32 }",
+            "enum UsrKind { One }",
+            "trait UsrRepository {}",
+            "type UsrId = u32;",
+            "union UsrPayload { id: u32 }",
+        ] {
+            let diags = run_on(source);
+            assert!(diags.iter().any(|d| d.message.contains("usr")), "missed: {source}");
+        }
+    }
+
+    #[test]
+    fn flags_struct_field_and_enum_variant() {
+        let diags = run_on("struct Profile { usr_id: u32 }");
+        assert!(diags.iter().any(|d| d.message.contains("usr")), "unexpected: {diags:?}");
+        let diags = run_on("enum Event { BtnPressed }");
+        assert!(diags.iter().any(|d| d.message.contains("btn")), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn flags_screaming_snake_constant() {
+        let diags = run_on("const MAX_USR_COUNT: usize = 1;");
+        assert!(diags.iter().any(|d| d.message.contains("usr")), "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn no_fp_on_a_type_mentioned_rather_than_declared() {
+        // A type declared elsewhere — an imported one especially — is not
+        // ours to rename, so only its declaration site is flagged.
+        for source in [
+            "fn f(profile: UsrProfile) {}",
+            "fn f() -> UsrProfile { todo!() }",
+            "struct Profile { owner: UsrProfile }",
+            "fn f() { let profile: UsrProfile = load(); }",
+            "use vendor::UsrProfile;",
+            "impl UsrProfile {}",
+        ] {
+            assert!(run_on(source).is_empty(), "unexpected firing on: {source}");
+        }
+    }
+
+    #[test]
+    fn does_not_flag_a_pascal_case_word_containing_abbreviation_letters() {
+        // A segment matches whole, so a word that merely starts with the
+        // letters of an abbreviation stays clean.
+        assert!(run_on("struct Accountant { counter: usize }").is_empty());
+        assert!(run_on("struct OrganDonor { story: String }").is_empty());
     }
 }

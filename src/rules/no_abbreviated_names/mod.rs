@@ -1,5 +1,6 @@
-//! no-abbreviated-names — reject usr/btn/cfg/ctx/msg and similar.
+//! no-abbreviated-names — reject a declared name carrying an abbreviation.
 
+mod abbreviations;
 mod oxc_typescript;
 mod rust;
 

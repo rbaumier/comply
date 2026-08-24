@@ -6,28 +6,10 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
+use super::abbreviations::{build_banned_list, matches_banned};
+
 // better-result API: Result.err(value), result.isErr()
 const ALLOWED_METHOD_NAMES: &[&str] = &["err", "isErr"];
-
-// `addr` is intentionally NOT on the list — `std::net::SocketAddr`,
-// `peer_addr()`, `local_addr()`, and `bind_addr` are standard Rust API.
-// `org` is likewise exempt: it is the canonical domain term of the GitHub
-// API (`GET /orgs/{org}`, `org_member`) and multi-tenant SaaS schemas
-// (`orgId`) — not an abbreviation a reader has to guess about.
-// `desc` is likewise exempt: it is the canonical abbreviation for a
-// descriptor in virtualization/device-driver protocols (VirtIO/USB/PCIe
-// `Descriptor`) and the SQL `ORDER BY … DESC` keyword — it has multiple
-// canonical expansions, so suggesting 'description' is frequently wrong.
-// `pwd` is likewise exempt: in shell/filesystem/OS code it is the Unix
-// `pwd(1)` command and `$PWD` variable ("print working directory"), while
-// in URL/auth code it means "password" — two canonical expansions, so
-// suggesting either single full word is frequently wrong.
-const DEFAULT_BANNED: &[(&str, &str)] = &[
-    ("acct", "account"),
-    ("usr", "user"),
-    ("btn", "button"),
-    ("cnt", "count"),
-];
 
 pub struct Check;
 
@@ -83,53 +65,6 @@ impl OxcCheck for Check {
             span: None,
         });
     }
-}
-
-fn build_banned_list(extra: &[String]) -> Vec<(String, String)> {
-    let mut list: Vec<(String, String)> = DEFAULT_BANNED
-        .iter()
-        .map(|(a, f)| ((*a).to_owned(), (*f).to_owned()))
-        .collect();
-    for entry in extra {
-        if let Some((abbr, full)) = entry.split_once(':') {
-            let abbr = abbr.trim().to_lowercase();
-            let full = full.trim().to_owned();
-            if !list.iter().any(|(a, _)| *a == abbr) {
-                list.push((abbr, full));
-            }
-        }
-    }
-    list
-}
-
-fn matches_banned(name: &str, banned: &[(String, String)]) -> Option<(String, String)> {
-    for word in split_words(name) {
-        let lower = word.to_ascii_lowercase();
-        if let Some(pair) = banned.iter().find(|(abbr, _)| lower == *abbr) {
-            return Some(pair.clone());
-        }
-    }
-    None
-}
-
-/// Split a camelCase / snake_case identifier into its constituent words.
-fn split_words(name: &str) -> Vec<&str> {
-    let mut words = Vec::new();
-    let bytes = name.as_bytes();
-    let mut start = 0;
-    for i in 1..bytes.len() {
-        let prev_is_lower = bytes[i - 1].is_ascii_lowercase();
-        let curr_is_upper = bytes[i].is_ascii_uppercase();
-        let curr_is_underscore = bytes[i] == b'_';
-        if (prev_is_lower && curr_is_upper) || curr_is_underscore {
-            words.push(&name[start..i]);
-            start = if curr_is_underscore { i + 1 } else { i };
-        }
-    }
-    if start < bytes.len() {
-        words.push(&name[start..]);
-    }
-    words
 }
 
 #[cfg(test)]
