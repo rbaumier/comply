@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2031 rules across 148 categories.
+2032 rules across 148 categories.
 
 ## Categories
 
@@ -129,7 +129,7 @@
 - [tailwind > i18n](#tailwind-i18n) (1 rules)
 - [tailwind > mobile](#tailwind-mobile) (1 rules)
 - [tailwind > performance](#tailwind-performance) (2 rules)
-- [tanstack](#tanstack) (20 rules)
+- [tanstack](#tanstack) (21 rules)
 - [tanstack > performance](#tanstack-performance) (1 rules)
 - [tanstack-query](#tanstack-query) (17 rules)
 - [tanstack-start](#tanstack-start) (11 rules)
@@ -2227,6 +2227,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `react-no-request-state-mirror` | Request state re-modelled as a hand-rolled union or `useState` — the query result already carries `status`. | Delete the mirror and switch on the `status` of the `useQuery` / `useMutation` result (`pending` / `error` / `success`), or on its `isPending` / `isError` / `isSuccess` discriminants. A parallel copy drifts out of sync with the request it describes. |
 | `tanstack-query-array-key` | TanStack Query keys must be arrays, not strings. | Wrap the string in brackets: `queryKey: ['todos']`. v5 requires arrays, and hierarchical invalidation (`invalidateQueries({ queryKey: ['todos'] })`) only works on array keys. |
 | `tanstack-query-dehydrate-no-pending-in-ssr` | Calling `dehydrate(...)` while `prefetchQuery` is still pending serializes empty state. | `await` every `prefetchQuery(...)` before `dehydrate(queryClient)`. |
 | `tanstack-query-fn-must-throw-on-error` | `queryFn` must throw on HTTP errors so TanStack Query can retry and surface them. | Check `res.ok` and throw: `if (!res.ok) throw new Error(...)`. |
