@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2035 rules across 149 categories.
+2036 rules across 149 categories.
 
 ## Categories
 
@@ -141,7 +141,7 @@
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
 - [type-safety](#type-safety) (1 rules)
-- [typescript](#typescript) (186 rules)
+- [typescript](#typescript) (187 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2615,6 +2615,7 @@
 | `ts-prefer-optional-chain` | `a && a.b && a.b.c` is verbose and order-sensitive — `a?.b?.c` reads better and short-circuits the same way. | Use optional chaining `?.` for property and call access on possibly-nullish values. |
 | `ts-prefer-promise-reject-errors` | `Promise.reject()` should receive an `Error` instance, not a primitive or plain object. | Call `Promise.reject(new Error('...'))` instead of passing a string, number, or object literal. |
 | `ts-prefer-satisfies` | `as Type` on object/array literal widens the type — use `satisfies` instead. | Replace `{...} as Type` with `{...} satisfies Type`. `satisfies` validates the literal without losing the narrow inferred type. |
+| `ts-prefer-switch-on-discriminant` | A tagged union should be narrowed by a `switch` on its discriminant, not by `in` or an if/else chain. | Switch on the discriminant property and close the switch with `assertNever` (or `const _exhaustive: never = x;`). The compiler then reports a variant nobody handled; `"kind" in x` and repeated `x.kind === "…"` tests report nothing. |
 | `ts-prefer-using-declaration` | try/finally with a single cleanup call is replaceable by `using` / `await using` (TS 5.2+). | Declare the resource with `using res = ...` and let the runtime call dispose. |
 | `ts-triple-slash-reference` | Triple-slash `path` references to source modules are legacy — use ES `import`. | Replace `/// <reference path="./mod.ts" />` with an ES `import` declaration. (`types`/`lib` references and `path` references to `.d.ts` declaration files have no ESM equivalent and are not flagged.) |
 | `ts-unified-signatures` | Function overload signatures that differ by a single parameter should be unified with a union or optional parameter. | Merge the overload signatures into one using a union type or an optional parameter. |

@@ -43,6 +43,15 @@ min_line_length = 80
 [rules.prefer-switch-over-chained-if]
 min_arms = 4
 
+[rules.ts-prefer-switch-on-discriminant]
+# Property names read as a union's tag. Only these names make `"<name>" in x`
+# or `x.<name> === "…"` a narrowing test rather than an ordinary comparison.
+discriminant_names = ["kind", "type", "status", "state", "variant"]
+# Arms of one if/else chain on the same discriminant before the chain is
+# reported. Above `prefer-switch-over-chained-if.min_arms` that rule reports
+# instead, so raising this one past it silences the shape entirely.
+min_branches = 2
+
 [rules.prefer-early-return]
 # Minimum statements in the wrapped `if` before suggesting a guard clause: a
 # short positive `if` reads as the function's intent, so inverting it into a
