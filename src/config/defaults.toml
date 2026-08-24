@@ -49,6 +49,16 @@ min_arms = 4
 # negated early return only pays off once the wrapped body is substantial.
 min_statements = 3
 
+# A local one-expression function called from exactly one place.
+# `max_body_tokens` is the widest body still worth pasting at the call site,
+# counted as identifier runs, literals and punctuation characters: past that
+# width the call site reads better with the name than with the expression.
+# `ignore_names` holds globs for names that earn their own line whatever their
+# body — a domain predicate the team wants stated once, for instance.
+[rules.no-single-use-one-liner]
+max_body_tokens = 30
+ignore_names = []
+
 # ---------------------------------------------------------------
 # Rust-specific thresholds.
 # ---------------------------------------------------------------

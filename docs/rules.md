@@ -22,7 +22,7 @@
 - [better-result](#better-result) (20 rules)
 - [bundle-size](#bundle-size) (3 rules)
 - [ci-cd](#ci-cd) (9 rules)
-- [code-quality](#code-quality) (258 rules)
+- [code-quality](#code-quality) (259 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
 - [comments](#comments) (5 rules)
@@ -510,6 +510,7 @@
 | `no-shallow-passthrough-method` | Method body only forwards arguments to another method with the same signature. | Inline the call at each call-site or add real behaviour — a pure pass-through adds a layer with no value. |
 | `no-side-effects-in-initialization` | Top-level side effects (bare calls, `new`, IIFE) at module scope prevent tree-shaking. | Avoid side effects at module top-level for tree-shaking |
 | `no-single-promise-in-promise-methods` | Wrapping a single-element array with `Promise.all/any/race()` is unnecessary. | Use the value directly instead of wrapping it in a Promise method: `await single` instead of `await Promise.all([single])`. |
+| `no-single-use-one-liner` | A local one-expression function is called from exactly one place. | Paste the expression at its only call site and delete the function. A name that repeats what the expression already says costs the reader a jump and buys nothing; keep the function once a second caller needs it. |
 | `no-small-switch` | `switch` with fewer than 3 cases — use `if/else` instead. | Replace small `switch` statements (< 3 cases) with `if/else` chains. `switch` adds indentation and boilerplate (`break`, `case`, `default`) that isn't justified for 1-2 branches. |
 | `no-sort-without-comparator` | `.sort()` without comparator sorts lexicographically. | Pass an explicit comparator: `arr.sort((a, b) => a - b)` for numbers. Default `.sort()` converts to strings, so `[10, 2, 1].sort()` yields `[1, 10, 2]`. |
 | `no-static-only-class` | Disallow classes that only have static members. | Replace the class with plain exported functions or an object literal. Static-only classes add indirection without benefit — they cannot be instantiated meaningfully and prevent tree-shaking. |
