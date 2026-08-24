@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2031 rules across 148 categories.
+2032 rules across 149 categories.
 
 ## Categories
 
@@ -103,6 +103,7 @@
 - [react-native > security](#react-native-security) (1 rules)
 - [regex](#regex) (33 rules)
 - [rust](#rust) (73 rules)
+- [rust > architecture](#rust-architecture) (1 rules)
 - [rust > concurrency](#rust-concurrency) (2 rules)
 - [rust > configuration](#rust-configuration) (1 rules)
 - [rust > correctness](#rust-correctness) (1 rules)
@@ -1917,6 +1918,12 @@
 | `rust-workspace-deps-centralized` | Member crate pins a dependency instead of inheriting from the workspace. | Declare the version once under `[workspace.dependencies]` in the root `Cargo.toml`, then reference it from member crates with `foo = { workspace = true }`. Keeps versions in lockstep and makes bumps a one-file change. |
 | `rust-workspace-lints-shared` | Workspace lacks `[workspace.lints]` or member crate doesn't inherit it. | In the workspace root `Cargo.toml`, declare a `[workspace.lints.*]` section (clippy, rust, rustdoc). In every member crate, add `[lints]` followed by `workspace = true` to inherit the policy. Prevents per-crate drift of clippy categories and `deny(warnings)`. |
 | `timeout-on-external-command` | `Command::new()` without a timeout can hang indefinitely. | Wrap the command execution with a timeout (e.g. `tokio::time::timeout` or a custom helper). |
+
+## rust > architecture
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-no-provider-in-domain` | A declaration inside the domain names a provider — a port must stay vendor-agnostic. | Name the declaration after the role it plays in the domain (`twilio_phone_sid` → `provisioned_number_reference`) and keep the provider's name in the adapter that talks to it. Then swapping providers rewrites one adapter instead of every layer that quotes the vendor. |
 
 ## rust > concurrency
 

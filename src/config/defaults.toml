@@ -56,6 +56,30 @@ min_statements = 3
 [rules.rust-no-large-tuple-return]
 max_elements = 3
 
+# rust-no-provider-in-domain keeps vendor names out of the domain layer.
+#
+# `providers` are the vendor names a domain declaration must not carry. A match
+# is on whole word segments of the declared identifier (`_`, `-` and camelCase
+# boundaries), so `stripe_customer_id` and `StripeCustomerId` match `stripe`
+# while `striped_rows` does not. Add your own vendors here. `meta` is
+# deliberately absent: `metadata`/`meta_key` are ordinary domain words.
+#
+# `domain_globs` scopes the rule to the domain tree — an adapter is exactly
+# where the provider's name belongs, so files outside these globs are skipped.
+# Set it to `[]` to turn the rule off for a project with no domain layer.
+[rules.rust-no-provider-in-domain]
+providers = [
+    "twilio",
+    "stripe",
+    "gladia",
+    "ferriskey",
+    "openai",
+    "anthropic",
+    "brevo",
+    "scaleway",
+]
+domain_globs = ["**/domain/**"]
+
 # ---------------------------------------------------------------
 # Cross-language thresholds — these propagate into the generated
 # oxlintrc + clippy flags, so the same authoritative number flows
