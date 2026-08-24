@@ -1,7 +1,7 @@
 //! no-magic-numbers OxcCheck backend — flag numeric literals that are not in
 //! an allowed context (const declarations, enums, type annotations,
 //! `satisfies`/`as` annotations, default parameter values, array indices
-//! 0/1/-1).
+//! 0/1/-1, the time conversion factors 60/1000 as `*`/`/`/`%` operands).
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_typed_array_binding, is_typed_array_ctor_name};
@@ -13,6 +13,13 @@ use std::sync::Arc;
 
 /// Numeric values so idiomatic that flagging them is pure noise.
 const ALLOWED: &[&str] = &["-1", "0", "1", "2", "0.0", "1.0"];
+
+/// Time-unit conversion factors (seconds↔minutes, seconds↔milliseconds),
+/// exempt only as a direct operand of `*`, `/` or `%` — the shape of a unit
+/// conversion, where the unit-suffixed other operand (`durationMs / 1000`,
+/// `totalSeconds % 60`) already names the factor. In any other position (an
+/// argument, a comparison, a plain initializer) the value stays flagged.
+const TIME_CONVERSION_FACTORS: &[&str] = &["60", "1000"];
 
 /// HTTP status codes — universally understood, extracting them to a constant
 /// makes the code less readable, not more.
@@ -85,6 +92,11 @@ impl OxcCheck for Check {
             return;
         }
         if HTTP_STATUS_CODES.contains(&num.value) {
+            return;
+        }
+        if TIME_CONVERSION_FACTORS.contains(&text)
+            && is_multiplicative_operand(node.id(), semantic)
+        {
             return;
         }
 
@@ -1469,6 +1481,35 @@ fn raw_has_ansi_csi(raw: &str) -> bool {
     last_csi_tail(raw).is_some()
 }
 
+/// True when the literal is a direct operand of a multiplicative binary
+/// expression (`*`, `/`, `%`) — the shape of a unit conversion. Parentheses
+/// around the literal are looked through.
+fn is_multiplicative_operand(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut current_id = node_id;
+    loop {
+        let parent_id = nodes.parent_id(current_id);
+        if parent_id == current_id {
+            return false;
+        }
+        match nodes.get_node(parent_id).kind() {
+            AstKind::ParenthesizedExpression(_) => current_id = parent_id,
+            AstKind::BinaryExpression(bin) => {
+                return matches!(
+                    bin.operator,
+                    BinaryOperator::Multiplication
+                        | BinaryOperator::Division
+                        | BinaryOperator::Remainder
+                );
+            }
+            _ => return false,
+        }
+    }
+}
+
 fn is_allowed_context(
     node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic<'_>,
@@ -1575,6 +1616,27 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    // A time-unit conversion factor as a multiplicative operand is named by the
+    // unit-suffixed other operand (`durationMs / 1000`); forcing a
+    // `SECONDS_PER_MINUTE = 60` constant there adds ritual, not information.
+    #[test]
+    fn allows_time_conversion_factor_as_multiplicative_operand() {
+        assert!(run("function f(s: number) { return Math.round(s / 60); }").is_empty());
+        assert!(run("function f(s: number) { return s * 1000; }").is_empty());
+        assert!(run("function f(s: number) { return s % 60; }").is_empty());
+        // Parentheses around the literal are looked through.
+        assert!(run("function f(s: number) { return s / (60); }").is_empty());
+    }
+
+    // Outside the multiplicative shape, 60 and 1000 are ordinary magic numbers:
+    // a timeout argument, a comparison bound or an addition stays flagged.
+    #[test]
+    fn flags_time_factor_values_outside_multiplicative_position() {
+        assert_eq!(run("setTimeout(f, 1000);").len(), 1);
+        assert_eq!(run("function f(n: number) { if (n > 60) { g(); } }").len(), 1);
+        assert_eq!(run("function f(n: number) { return n + 1000; }").len(), 1);
     }
 
     #[test]
@@ -1815,8 +1877,9 @@ mod tests {
 
     #[test]
     fn flags_multiplication_constant() {
-        // `x * 1000` is ordinary arithmetic, not modular — still a magic number.
-        let src = r#"function f(x) { return x * 1000; }"#;
+        // `x * 700` is ordinary arithmetic, not modular — still a magic number.
+        // (60 and 1000 would pass as time conversion factors; 700 is neither.)
+        let src = r#"function f(x) { return x * 700; }"#;
         assert_eq!(run(src).len(), 1);
     }
 
