@@ -408,6 +408,15 @@ min_stale_time_ms = 5000
 [rules.tanstack-start-session-secret-min-length]
 min_length = 32
 
+[rules.react-no-request-state-mirror]
+# String literals treated as request-phase names on top of the built-in set
+# (idle, loading, pending, error, success, fetching, submitting, saving).
+# Matched case-insensitively. Add the words your codebase mirrors with.
+extra_literals = []
+# Set to false to keep only the union half of the rule, so `useState("idle")`
+# stops being flagged.
+check_use_state = true
+
 # ---------------------------------------------------------------
 # i18n / Kubernetes thresholds.
 # ---------------------------------------------------------------
