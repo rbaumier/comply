@@ -150,6 +150,18 @@ public_patterns = []
 [rules.no-nullish-default-on-input]
 paths = ["src/api/**", "**/src/api/**"]
 
+# ts-no-generated-type-alias matches an import specifier against these globs to
+# decide whether the type it binds is owned by a code generator. Only the project
+# knows where its codegen writes, so add your own output here — a re-export
+# barrel counts (e.g. "#/api/api"). Set to `[]` to turn the rule off.
+[rules.ts-no-generated-type-alias]
+generated_modules = [
+  "**/generated",
+  "**/generated/**",
+  "**/__generated__",
+  "**/__generated__/**",
+]
+
 [rules.sql-index-needs-rationale-comment]
 min_rationale_words = 3
 lookback_lines = 3

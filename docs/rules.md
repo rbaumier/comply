@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2031 rules across 148 categories.
+2032 rules across 148 categories.
 
 ## Categories
 
@@ -140,7 +140,7 @@
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
 - [type-safety](#type-safety) (1 rules)
-- [typescript](#typescript) (185 rules)
+- [typescript](#typescript) (186 rules)
 - [typescript > async](#typescript-async) (4 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2557,6 +2557,7 @@
 | `ts-no-export-equal` | CommonJS-style `export = ...` — prefer ES module exports. | Use ES module exports: `export default` or named exports. |
 | `ts-no-extra-non-null-assertion` | Extra non-null assertions (`!!`) are redundant and confusing. | Remove the extra `!` — a single non-null assertion is sufficient. |
 | `ts-no-extraneous-class` | Classes with only static members or an empty body should be plain objects or modules. | Use a module/namespace, plain object, or standalone functions instead. |
+| `ts-no-generated-type-alias` | An alias or a `Pick`/`Omit`/`Partial` derivative of a generated type copies a contract the generator owns. | Consume the generated type directly at every use site; when the shape you need is missing, add it where the generator reads from. |
 | `ts-no-implicit-any-catch` | catch binding without an explicit type annotation falls back to implicit any. | Add explicit type annotation: catch (e: unknown) |
 | `ts-no-import-type-side-effects` | Inline `type` qualifiers on every specifier leave a side-effect import at runtime. | Use a top-level `import type { ... }` instead of `import { type A, type B }`. |
 | `ts-no-inferrable-types` | Explicit types on variables initialized with literals are redundant — TypeScript infers them. | Remove the type annotation and let TypeScript infer the type. |
