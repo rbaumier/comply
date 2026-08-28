@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2036 rules across 149 categories.
+2037 rules across 149 categories.
 
 ## Categories
 
@@ -25,7 +25,7 @@
 - [code-quality](#code-quality) (259 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
-- [comments](#comments) (5 rules)
+- [comments](#comments) (6 rules)
 - [comments > suppressions](#comments-suppressions) (1 rules)
 - [complexity](#complexity) (4 rules)
 - [correctness](#correctness) (11 rules)
@@ -387,8 +387,8 @@
 | `catch-error-name` | The catch parameter should be named `error`. | Rename the catch parameter to `error` (or a suffixed variant like `parseError` when disambiguating nested catches). Use `_` if the parameter is unused. |
 | `cognitive-complexity` | Function cognitive complexity exceeds 5. | Simplify by extracting helpers, removing nesting, or splitting into smaller functions. Cognitive complexity measures how hard a function is to understand. |
 | `comma-or-logical-or-case` | Switch `case` uses comma or `\|\|` instead of fall-through. | Use separate `case` clauses with fall-through instead of comma or `\|\|` in a single `case`. |
-| `comment-max-block-words` | Comment block exceeds the configured word budget. | Trim the block or move the long-form explanation into a doc comment — an oversized inline block stops being read. |
-| `comment-max-words` | Comment sentence exceeds 25 words. | Split long comment sentences — one idea per sentence keeps the intent scannable. |
+| `comment-max-block-words` | Comment block exceeds the configured word budget. | Trim the block — past the budget a comment stops being read, doc comment or not. |
+| `comment-max-words` | Comment sentence exceeds the configured word budget. | Split long comment sentences — one idea per sentence keeps the intent scannable. |
 | `consistent-date-clone` | Prefer `new Date(date)` over `new Date(date.getTime())` for cloning. | Remove the unnecessary `.getTime()` / `.valueOf()` call — `new Date(date)` already clones correctly. |
 | `consistent-destructuring` | Use destructured variables over properties. | A property was already destructured from this object — destructure this property too instead of accessing it via dot notation. |
 | `consistent-empty-array-spread` | Parenthesize ternaries spread into array literals. | Wrap the ternary in parentheses: `[...(condition ? ['a'] : [])]` instead of `[...condition ? ['a'] : []]`. Without parens the precedence is ambiguous and confusing. |
@@ -675,6 +675,7 @@
 |------|-------------|-------------|
 | `banned-comment-phrases` | Narrator preambles and business jargon in comments read as AI-generated filler. | Drop the phrase and state the point directly, or delete the comment. Banned: here's the thing, here's what, here's why, let me be clear, let me walk you through, in this section we'll, as we'll see, the uncomfortable truth, let that sink in, make no mistake, the reality is, at the end of the day, it's worth noting, think about it, and that's okay, deep dive, game-changer, circle back, double down, on the same page. |
 | `banned-comment-words` | Dismissive filler words in comments hide complexity instead of explaining it. | Remove the filler word and rewrite the comment to explain the actual subtlety. If the line needs no explanation, delete the comment instead. Banned: obviously, simply, just, basically, clearly, trivially, reloaded, really, literally, genuinely, honestly, truly, fundamentally, inevitably, interestingly, importantly, crucially. |
+| `comment-no-mid-sentence-wrap` | A comment line breaks mid-sentence. | Break the line on punctuation, or shorten the sentence so it fits on one line. |
 | `comment-paraphrases-code` | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
 | `comment-prose-quality` | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
 | `no-commented-out-code` | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |

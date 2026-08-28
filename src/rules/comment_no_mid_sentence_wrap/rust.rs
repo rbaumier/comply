@@ -36,14 +36,13 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let comments = *state.unwrap().downcast::<State>().unwrap();
-        let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
-        for flag in super::flagged_sentences(comments, max) {
+        for flag in super::flagged_wraps(comments) {
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line: flag.line,
                 column: flag.column,
                 rule_id: super::META.id.into(),
-                message: super::message(flag.words, max),
+                message: super::MESSAGE.into(),
                 severity: Severity::Error,
                 span: None,
             });
@@ -66,55 +65,26 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_ast_check(self, src, path, project, file)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn run(s: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, s, "t.rs")
     }
 
     #[test]
-    fn flags_long_sentence_rust() {
-        let src = "// this comment goes on and on and on and on and on and on and on and on and on and on forever and ever and never stops\nfn f() {}";
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn allows_short_sentence_rust() {
-        let src = "// short note\nfn f() {}";
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn flags_long_block_comment_rust() {
-        let src = "/* this comment goes on and on and on and on and on and on and on and on and on and on forever and ever and never stops here */\nfn f() {}";
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn flags_sentence_wrapped_over_several_lines() {
+    fn flags_a_doc_sentence_running_over_two_lines() {
         let src = "\
-/// Holds the connection settings and builds one client per call because the
-/// underlying client opens a fresh connection per request anyway and only needs
-/// a mutable borrow to stash the response headers it just read.
+/// Holds the connection settings of the Gemini endpoint and posts every
+/// non-stream completion through reqwest.
 fn f() {}";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn flags_long_inner_line_doc_comment_rust() {
-        let src = "//! this module provides a cross platform abstraction for writing colored text to a terminal using either ANSI escape sequences or by communicating with a Windows console handle directly\nfn f() {}";
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn flags_long_inner_block_doc_comment_rust() {
-        let src = "/*!\nThis crate provides a cross platform abstraction for writing colored text to a terminal. Much of this API was motivated by use inside command line applications, where colors or styles can be configured by the end user and/or the environment.\n*/\nfn f() {}";
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn allows_short_sentences_across_lines() {
+    fn allows_one_sentence_per_line() {
         let src = "\
 /// Holds the connection settings.
 /// Each call builds its own client.
@@ -123,12 +93,31 @@ fn f() {}";
     }
 
     #[test]
-    fn fenced_code_in_a_doc_comment_is_not_prose() {
+    fn flags_a_wrapped_block_comment() {
+        let src = "\
+/* The client opens a fresh connection per request and only needs a
+   mutable borrow to stash the response headers. */
+fn f() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn fenced_code_is_not_prose() {
         let src = "\
 /// Builds the client.
 /// ```
-/// let client = Client::new(endpoint, key, timeout, retries, headers, proxy, agent, pool);
+/// let client = Client::new(endpoint)
+///     .with_timeout(timeout);
 /// ```
+fn f() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn separate_notes_stack_without_flagging() {
+        let src = "\
+// why: the pool times out under load.
+// gotcha: the retry loop hides the cause.
 fn f() {}";
         assert!(run(src).is_empty());
     }

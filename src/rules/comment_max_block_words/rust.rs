@@ -1,10 +1,11 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::comment_blocks::{self, RawComment};
 use std::sync::Arc;
 
 pub struct Check;
 
-type State = Vec<super::RawComment>;
+type State = Vec<RawComment>;
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
@@ -22,18 +23,10 @@ impl AstCheck for Check {
         state: Option<&mut dyn std::any::Any>,
         _diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let st = state.unwrap().downcast_mut::<State>().unwrap();
-        let Ok(raw) = node.utf8_text(ctx.source.as_bytes()) else {
-            return;
-        };
-        let pos = node.start_position();
-        st.push(super::RawComment {
-            start_byte: node.start_byte(),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            raw: raw.to_string(),
-            is_line: node.kind() == "line_comment",
-        });
+        let collected = state.unwrap().downcast_mut::<State>().unwrap();
+        if let Some(comment) = comment_blocks::from_tree_sitter(&node, ctx.source) {
+            collected.push(comment);
+        }
     }
 
     fn finish(
@@ -50,10 +43,7 @@ impl AstCheck for Check {
                 line: flag.line,
                 column: flag.column,
                 rule_id: super::META.id.into(),
-                message: format!(
-                    "Comment block spans {} words (max {max}). Split it or move the detail into a doc comment.",
-                    flag.words
-                ),
+                message: super::message(flag.words, max),
                 severity: Severity::Error,
                 span: None,
             });
@@ -103,13 +93,15 @@ fn f() {}";
     }
 
     #[test]
-    fn outer_doc_comment_block_is_exempt() {
+    fn outer_doc_comment_block_counts_too() {
         let src = "\
 /// This documents the public API in full prose across several lines and words,
 /// legitimately explaining the contract, invariants, and edge cases at length,
-/// which is exactly what a documentation comment is for and thus never flagged.
+/// which is exactly what a documentation comment is for and still budgeted here,
+/// because a doc comment nobody reads to the end documents nothing at all today.
+/// The budget applies to every comment the reader has to walk through in order.
 fn f() {}";
-        assert!(run(src).is_empty());
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

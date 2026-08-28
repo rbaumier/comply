@@ -30,6 +30,7 @@ pub struct RuleDef {
 pub mod backend;
 pub mod boolean_prefix;
 pub mod call_expression;
+pub mod comment_blocks;
 pub mod elysia_helpers;
 pub mod file_ctx;
 pub mod html_rel_helpers;
@@ -86,7 +87,15 @@ pub fn oxlint_delegate(meta: RuleMeta, rule: &'static str, languages: &[Language
         meta,
         backends: languages
             .iter()
-            .map(|&lang| (lang, Backend::Oxlint { rule, post_filter: None }))
+            .map(|&lang| {
+                (
+                    lang,
+                    Backend::Oxlint {
+                        rule,
+                        post_filter: None,
+                    },
+                )
+            })
             .collect(),
     }
 }
@@ -101,7 +110,15 @@ pub fn oxlint_and_clippy(
 ) -> RuleDef {
     let mut backends: Vec<(Language, Backend)> = TS_FAMILY
         .iter()
-        .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_rule, post_filter: None }))
+        .map(|&lang| {
+            (
+                lang,
+                Backend::Oxlint {
+                    rule: oxlint_rule,
+                    post_filter: None,
+                },
+            )
+        })
         .collect();
     backends.push((Language::Rust, Backend::Clippy { lint: clippy_lint }));
     RuleDef { meta, backends }
@@ -118,7 +135,10 @@ pub fn collect_oxlint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
         // once per process invocation, so the leak is negligible.
         let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
         for (_lang, backend) in &rule.backends {
-            if let Backend::Oxlint { rule: oxlint_key, .. } = backend {
+            if let Backend::Oxlint {
+                rule: oxlint_key, ..
+            } = backend
+            {
                 bindings.push((*oxlint_key, meta_static, meta_static.severity));
             }
         }
@@ -158,7 +178,10 @@ pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Seve
     for rule in delegated::register_tsgolint() {
         let meta_static: &'static RuleMeta = Box::leak(Box::new(rule.meta));
         for (_lang, backend) in &rule.backends {
-            if let Backend::Tsgolint { rule: tsgolint_key, .. } = backend {
+            if let Backend::Tsgolint {
+                rule: tsgolint_key, ..
+            } = backend
+            {
                 bindings.push((*tsgolint_key, meta_static, meta_static.severity));
             }
         }
@@ -173,13 +196,11 @@ pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Seve
 /// Called once by the oxlint dispatcher (`crate::oxlint::lint_files`).
 /// The dispatcher retains each diagnostic only when every filter in the Vec
 /// returns `true` (`all()` = suppress if any filter returns `false`).
-pub fn collect_delegated_post_filters(
-) -> rustc_hash::FxHashMap<&'static str, Vec<std::sync::Arc<dyn backend::PostFilter>>> {
+pub fn collect_delegated_post_filters()
+-> rustc_hash::FxHashMap<&'static str, Vec<std::sync::Arc<dyn backend::PostFilter>>> {
     use backend::PostFilter;
-    let mut map: rustc_hash::FxHashMap<
-        &'static str,
-        Vec<std::sync::Arc<dyn PostFilter>>,
-    > = rustc_hash::FxHashMap::default();
+    let mut map: rustc_hash::FxHashMap<&'static str, Vec<std::sync::Arc<dyn PostFilter>>> =
+        rustc_hash::FxHashMap::default();
     let mut seen: rustc_hash::FxHashSet<&'static str> = rustc_hash::FxHashSet::default();
     for rule in all_rule_defs() {
         let rule_id = rule.meta.id;
@@ -195,7 +216,9 @@ pub fn collect_delegated_post_filters(
                 _ => None,
             };
             if let Some(f) = filter_opt {
-                map.entry(rule_id).or_default().push(std::sync::Arc::clone(f));
+                map.entry(rule_id)
+                    .or_default()
+                    .push(std::sync::Arc::clone(f));
                 seen.insert(rule_id);
                 break;
             }
@@ -237,7 +260,11 @@ mod tests {
     #[test]
     fn rule_count_and_unique_ids() {
         let rules = all_rule_defs();
-        assert!(rules.len() >= 1845, "expected ≥1845 rules, got {}", rules.len());
+        assert!(
+            rules.len() >= 1845,
+            "expected ≥1845 rules, got {}",
+            rules.len()
+        );
         let mut ids: Vec<_> = rules.iter().map(|r| r.meta.id).collect();
         ids.sort();
         let mut deduped = ids.clone();
@@ -272,10 +299,19 @@ mod tests {
 
         // (canonical id kept) → (alias or retired ids that must NOT be registered).
         let groups: [(&str, &[&str]); 7] = [
-            ("ts-no-explicit-any", &["typescript/no-explicit-any", "no-explicit-any"]),
+            (
+                "ts-no-explicit-any",
+                &["typescript/no-explicit-any", "no-explicit-any"],
+            ),
             ("ts-no-inferrable-types", &["no-inferrable-types"]),
-            ("promise-prefer-await-to-then", &["promise/prefer-await-to-then"]),
-            ("consistent-type-imports", &["typescript/consistent-type-imports"]),
+            (
+                "promise-prefer-await-to-then",
+                &["promise/prefer-await-to-then"],
+            ),
+            (
+                "consistent-type-imports",
+                &["typescript/consistent-type-imports"],
+            ),
             ("vue-no-array-index-key", &["vue-v-for-needs-stable-key"]),
             ("no-delete", &["ts-no-dynamic-delete"]),
             ("no-implicit-deps", &["unlisted-dependency"]),

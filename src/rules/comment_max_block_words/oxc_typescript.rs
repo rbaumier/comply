@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
+use crate::rules::comment_blocks;
 use std::sync::Arc;
 
 pub struct Check;
@@ -13,22 +13,7 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
 
-        let mut comments = Vec::new();
-        for comment in semantic.comments().iter() {
-            let start = comment.span.start as usize;
-            let end = comment.span.end as usize;
-            let Some(raw) = ctx.source.get(start..end) else {
-                continue;
-            };
-            let (line, column) = byte_offset_to_line_col(ctx.source, start);
-            comments.push(super::RawComment {
-                start_byte: start,
-                line,
-                column,
-                raw: raw.to_string(),
-                is_line: raw.trim_start().starts_with("//"),
-            });
-        }
+        let comments = comment_blocks::from_oxc(semantic, ctx.source);
 
         super::flagged_blocks(comments, max)
             .into_iter()
@@ -37,10 +22,7 @@ impl OxcCheck for Check {
                 line: flag.line,
                 column: flag.column,
                 rule_id: super::META.id.into(),
-                message: format!(
-                    "Comment block spans {} words (max {max}). Split it or move the detail into a doc comment.",
-                    flag.words
-                ),
+                message: super::message(flag.words, max),
                 severity: Severity::Error,
                 span: None,
             })
@@ -90,14 +72,15 @@ fn_placeholder();";
     }
 
     #[test]
-    fn jsdoc_block_is_exempt() {
+    fn jsdoc_block_counts_too() {
         let src = r#"/**
  * This JSDoc block explains the loader integration pattern in thorough detail,
  * covering the relationship between the preload mechanism and the form dialog
  * lifecycle across many rendering phases and async boundary contexts here and
- * there and everywhere well past any reasonable fifty word inline note budget.
+ * there and everywhere well past any reasonable fifty word inline note budget,
+ * which is exactly the kind of wall of prose the budget exists to break apart.
  */
 export function f() {}"#;
-        assert!(run(src).is_empty());
+        assert_eq!(run(src).len(), 1);
     }
 }

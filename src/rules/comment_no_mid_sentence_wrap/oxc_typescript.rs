@@ -11,17 +11,16 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let comments = comment_blocks::from_oxc(semantic, ctx.source);
 
-        super::flagged_sentences(comments, max)
+        super::flagged_wraps(comments)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line: flag.line,
                 column: flag.column,
                 rule_id: super::META.id.into(),
-                message: super::message(flag.words, max),
+                message: super::MESSAGE.into(),
                 severity: Severity::Error,
                 span: None,
             })
@@ -54,45 +53,40 @@ mod tests {
     }
 
     #[test]
-    fn flags_long_sentence() {
-        let src = "// this comment goes on and on and on and on and on and on and on and on and on and on forever and ever and never stops\nconst count = 1;";
+    fn flags_a_jsdoc_sentence_running_over_two_lines() {
+        let src = r#"/**
+ * Holds the connection settings of the endpoint and posts every non-stream
+ * completion through fetch.
+ */
+export function build() {}"#;
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn allows_short_sentence() {
-        assert!(run("// short note\nconst count = 1;").is_empty());
+    fn allows_one_sentence_per_line() {
+        let src = r#"/**
+ * Holds the connection settings.
+ * Each call builds its own client.
+ */
+export function build() {}"#;
+        assert!(run(src).is_empty());
     }
 
     #[test]
-    fn flags_sentence_wrapped_over_several_lines() {
+    fn flags_a_wrapped_line_comment_block() {
         let src = "\
-// Holds the connection settings and builds one client per call because the
-// underlying client opens a fresh connection per request anyway and only needs
-// a mutable field to stash the response headers it just read.
+// The client opens a fresh connection per request and only needs a
+// mutable field to stash the response headers.
 const count = 1;";
         assert_eq!(run(src).len(), 1);
     }
 
     #[test]
-    fn flags_long_jsdoc_sentence() {
-        let src = r#"/**
- * This JSDoc block explains the loader integration pattern in thorough detail,
- * covering the relationship between the preload mechanism and the form dialog
- * lifecycle across many rendering phases and async boundary contexts.
- */
-export function build() {}"#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn jsdoc_example_bodies_are_not_prose() {
-        let src = r#"/**
- * Builds the client.
- * @example
- * const client = build(endpoint, key, timeout, retries, headers, proxy, agent, pool, extra);
- */
-export function build() {}"#;
+    fn separate_notes_stack_without_flagging() {
+        let src = "\
+// why: the pool times out under load.
+// gotcha: the retry loop hides the cause.
+const count = 1;";
         assert!(run(src).is_empty());
     }
 }
