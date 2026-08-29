@@ -102,7 +102,7 @@ fn f() {}";
     }
 
     #[test]
-    fn fenced_code_is_not_prose() {
+    fn fenced_code_wraps_like_prose() {
         let src = "\
 /// Builds the client.
 /// ```
@@ -110,7 +110,7 @@ fn f() {}";
 ///     .with_timeout(timeout);
 /// ```
 fn f() {}";
-        assert!(run(src).is_empty());
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

@@ -86,13 +86,13 @@ export function build() {}"#;
     }
 
     #[test]
-    fn jsdoc_example_bodies_are_not_prose() {
+    fn jsdoc_example_bodies_count_too() {
         let src = r#"/**
  * Builds the client.
  * @example
- * const client = build(endpoint, key, timeout, retries, headers, proxy, agent, pool, extra);
+ * const client = build(endpoint, key, timeout, retries, headers, proxy, agent, pool, extra, region, tenant, tracing, backoff, jitter, limits);
  */
 export function build() {}"#;
-        assert!(run(src).is_empty());
+        assert_eq!(run(src).len(), 1);
     }
 }

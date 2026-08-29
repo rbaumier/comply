@@ -123,13 +123,13 @@ fn f() {}";
     }
 
     #[test]
-    fn fenced_code_in_a_doc_comment_is_not_prose() {
+    fn fenced_code_in_a_doc_comment_counts_too() {
         let src = "\
 /// Builds the client.
 /// ```
-/// let client = Client::new(endpoint, key, timeout, retries, headers, proxy, agent, pool);
+/// let client = Client::new(endpoint, key, timeout, retries, headers, proxy, agent, pool, region, tenant, tracing, backoff, jitter, limits);
 /// ```
 fn f() {}";
-        assert!(run(src).is_empty());
+        assert_eq!(run(src).len(), 1);
     }
 }

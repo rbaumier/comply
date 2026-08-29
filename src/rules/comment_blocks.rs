@@ -21,7 +21,7 @@ pub struct BlockLine {
 }
 
 /// The comment a reader sees as one unit, anchored on its first line.
-/// `lines` holds prose only: code fences and JSDoc `@example` bodies are dropped.
+/// Every line counts, fenced examples and JSDoc tag bodies included.
 pub struct CommentBlock {
     pub line: usize,
     pub column: usize,
@@ -207,68 +207,26 @@ fn marker(raw: &str) -> &'static str {
     ""
 }
 
-/// Turn one run of comment tokens into a block of prose lines.
+/// Turn one run of comment tokens into a block of lines.
 fn build_block(run: &[RawComment]) -> CommentBlock {
-    let mut lines = Vec::new();
-    let mut state = ProseState {
-        is_jsdoc: marker(&run[0].raw) == "/**",
-        ..ProseState::default()
-    };
-    for comment in run {
-        for (offset, raw_line) in comment.raw.lines().enumerate() {
-            let text = strip_markers(raw_line);
-            if let Some(text) = state.keep(text) {
-                lines.push(BlockLine {
+    let lines = run
+        .iter()
+        .flat_map(|comment| {
+            comment
+                .raw
+                .lines()
+                .enumerate()
+                .map(move |(offset, raw_line)| BlockLine {
                     line: comment.line + offset,
-                    text,
-                });
-            }
-        }
-    }
+                    text: strip_markers(raw_line),
+                })
+        })
+        .collect();
     CommentBlock {
         line: run[0].line,
         column: run[0].column,
         lines,
     }
-}
-
-/// Tracks which lines of a block are prose and which are not.
-/// Fenced code and JSDoc `@example` bodies are source, not prose, so they drop out.
-#[derive(Default)]
-struct ProseState {
-    is_jsdoc: bool,
-    in_fence: bool,
-    in_example: bool,
-}
-
-impl ProseState {
-    fn keep(&mut self, text: String) -> Option<String> {
-        if text.starts_with("```") {
-            self.in_fence = !self.in_fence;
-            return None;
-        }
-        if self.in_fence {
-            return None;
-        }
-        if !self.is_jsdoc {
-            return Some(text);
-        }
-        if let Some(rest) = text.strip_prefix('@') {
-            self.in_example = jsdoc_tag(rest) == "example";
-            return None;
-        }
-        if self.in_example {
-            return None;
-        }
-        Some(text)
-    }
-}
-
-/// The tag name opening a JSDoc line, `@` already stripped.
-fn jsdoc_tag(rest: &str) -> &str {
-    rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
-        .next()
-        .unwrap_or("")
 }
 
 /// Strip the comment markers off one physical line.
@@ -357,26 +315,26 @@ mod tests {
     }
 
     #[test]
-    fn fenced_code_is_not_prose() {
+    fn fenced_code_counts_like_prose() {
         let blocks = merge(vec![
             line_comment(0, 1, "/// Example follows."),
             line_comment(21, 2, "/// ```"),
-            line_comment(29, 3, "/// let value = compute(one, two, three);"),
-            line_comment(71, 4, "/// ```"),
+            line_comment(29, 3, "/// let value = compute(one, two);"),
+            line_comment(64, 4, "/// ```"),
         ]);
-        assert_eq!(blocks[0].prose(), "Example follows.");
+        assert_eq!(blocks[0].prose(), "Example follows. ``` let value = compute(one, two); ```");
     }
 
     #[test]
-    fn jsdoc_example_bodies_are_not_prose() {
+    fn jsdoc_example_bodies_count_like_prose() {
         let blocks = merge(vec![RawComment {
             start_byte: 0,
             line: 1,
             column: 1,
-            raw: "/**\n * Summary here.\n * @example\n * doSomething(); // => 1\n */".into(),
+            raw: "/**\n * Summary here.\n * @example\n * doSomething();\n */".into(),
             is_line: false,
         }]);
-        assert_eq!(blocks[0].prose(), "Summary here.");
+        assert_eq!(blocks[0].prose(), "Summary here. @example doSomething();");
     }
 
     #[test]
