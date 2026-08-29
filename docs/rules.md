@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2037 rules across 149 categories.
+2038 rules across 149 categories.
 
 ## Categories
 
@@ -94,7 +94,7 @@
 - [promise](#promise) (6 rules)
 - [qwik](#qwik) (1 rules)
 - [qwik > correctness](#qwik-correctness) (2 rules)
-- [react](#react) (125 rules)
+- [react](#react) (126 rules)
 - [react > code-quality](#react-code-quality) (4 rules)
 - [react > imports](#react-imports) (1 rules)
 - [react > performance](#react-performance) (3 rules)
@@ -1664,6 +1664,7 @@
 | `react-jsx-no-useless-fragment` | Unnecessary `<Fragment>` that wraps a single child or nothing. | Remove the fragment wrapper when it contains only one child or is empty. Fragments are only needed to group multiple siblings. |
 | `react-jsx-pascal-case` | User-defined JSX components must use PascalCase. | Rename the component to PascalCase (e.g., `MyComponent` instead of `my_component` or `myComponent`). |
 | `react-jsx-props-no-spread-multi` | Same object spread multiple times on a JSX element. | Remove the duplicate spread. Spreading the same identifier twice is likely a copy-paste mistake. |
+| `react-jsx-returning-function-is-component` | Function returning JSX invoked as a function — name it PascalCase and render it as `<Name />`. | A function that returns JSX is a component. Rename `renderBody` to `Body` and write `<Body />` instead of `{renderBody()}`. A plain call is inlined into the caller's element tree: the returned nodes get no fiber of their own, so they cannot hold hooks or state, and React cannot key, memoize or profile them. |
 | `react-no-access-state-in-setstate` | `this.state` inside `setState()` reads stale state. | Use the updater callback form: `this.setState(prevState => ({ count: prevState.count + 1 }))`. Reading `this.state` inside `setState` may read a stale value because React batches state updates. |
 | `react-no-adjacent-inline-elements` | Adjacent inline elements without whitespace between them. | Add a space, `{' '}`, or a wrapper between adjacent inline elements to ensure they render with visible separation. |
 | `react-no-and-conditional-jsx` | `&&` renders 0/'' when the left operand is falsy-but-not-false. | Replace `{expr && <X />}` with `{expr ? <X /> : null}` or `{Boolean(expr) && <X />}`. `&&` lets falsy values like `0` and `''` leak into the DOM. |
