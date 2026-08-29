@@ -1,5 +1,6 @@
 mod oxc_typescript;
 mod rust;
+mod sql_text;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -28,6 +29,7 @@ pub fn register() -> RuleDef {
             (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
             (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Sql, Backend::Text(Box::new(sql_text::Check))),
         ],
     }
 }

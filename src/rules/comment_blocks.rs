@@ -108,6 +108,73 @@ pub fn from_oxc(semantic: &oxc_semantic::Semantic<'_>, source: &str) -> Vec<RawC
     comments
 }
 
+/// Read the comment lines of a file comply parses as text, such as SQL.
+/// Only a comment owning its line is collected.
+/// A `--` sitting after code, or inside a string, never opens one.
+pub fn from_line_oriented_text(source: &str) -> Vec<RawComment> {
+    let mut comments = Vec::new();
+    let mut open_block = None;
+    let mut byte = 0;
+    for (offset, line) in source.lines().enumerate() {
+        open_block = match open_block {
+            Some(block) => extend_block(block, line, &mut comments),
+            None => open_comment(line, offset + 1, byte, &mut comments),
+        };
+        byte += line.len() + 1;
+    }
+    if let Some(unterminated) = open_block {
+        comments.push(unterminated);
+    }
+    comments
+}
+
+/// Feed `line` to an open `/* */` block.
+/// The block is returned while it stays open, and pushed once it closes.
+fn extend_block(
+    mut block: RawComment,
+    line: &str,
+    comments: &mut Vec<RawComment>,
+) -> Option<RawComment> {
+    block.raw.push('\n');
+    block.raw.push_str(line);
+    if !line.contains("*/") {
+        return Some(block);
+    }
+    comments.push(block);
+    None
+}
+
+/// Open the comment `line` starts, if any.
+/// A `/* */` left open is returned so the next line can extend it.
+fn open_comment(
+    line: &str,
+    row: usize,
+    byte: usize,
+    comments: &mut Vec<RawComment>,
+) -> Option<RawComment> {
+    let trimmed = line.trim_start();
+    let column = line.len() - trimmed.len() + 1;
+    let opened = |is_line| RawComment {
+        start_byte: byte + column - 1,
+        line: row,
+        column,
+        raw: trimmed.to_string(),
+        is_line,
+    };
+    if trimmed.starts_with("--") {
+        comments.push(opened(true));
+        return None;
+    }
+    if !trimmed.starts_with("/*") {
+        return None;
+    }
+    if trimmed.contains("*/") {
+        comments.push(opened(false));
+        return None;
+    }
+    Some(opened(false))
+}
+
 /// Merge `comments` into the blocks a reader perceives.
 /// Line comments merge while the row, indent and marker all continue.
 /// A `/* */` node becomes one block on its own.
@@ -132,7 +199,7 @@ fn continues_block(previous: &RawComment, next: &RawComment) -> bool {
 /// The comment marker opening `raw`, used to keep doc and note blocks apart.
 fn marker(raw: &str) -> &'static str {
     let trimmed = raw.trim_start();
-    for candidate in ["///", "//!", "//", "/**", "/*!", "/*"] {
+    for candidate in ["///", "//!", "//", "--", "/**", "/*!", "/*"] {
         if trimmed.starts_with(candidate) {
             return candidate;
         }
@@ -211,6 +278,7 @@ fn strip_markers(raw_line: &str) -> String {
         .trim_start_matches("///")
         .trim_start_matches("//!")
         .trim_start_matches("//")
+        .trim_start_matches("--")
         .trim_start_matches("/**")
         .trim_start_matches("/*!")
         .trim_start_matches("/*")
