@@ -198,6 +198,23 @@ public_patterns = []
 [rules.no-nullish-default-on-input]
 paths = ["src/api/**", "**/src/api/**"]
 
+# ts-no-generated-shape-redeclaration compares every hand-written object type
+# against the shapes these files declare. `min_fields` is the smallest field
+# count that makes a name-for-name match evidence of a copy rather than a
+# coincidence. `generated_globs` names the codegen output whose path carries no
+# signal comply already recognizes (`*.gen.ts`, `*.generated.ts`, a `generated/`
+# directory are matched on top of this list). A project with no generated file in
+# reach reports nothing.
+[rules.ts-no-generated-shape-redeclaration]
+min_fields = 2
+generated_globs = [
+  "**/database.types.ts",
+  "**/supabase/types.ts",
+  "**/*.generated.ts",
+  "**/openapi*.ts",
+  "**/schema.d.ts",
+]
+
 # ts-no-generated-type-alias matches an import specifier against these globs to
 # decide whether the type it binds is owned by a code generator. Only the project
 # knows where its codegen writes, so add your own output here — a re-export

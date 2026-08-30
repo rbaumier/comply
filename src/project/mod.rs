@@ -35,10 +35,12 @@ use crate::files::SourceFile;
 use crate::frameworks::FrameworkDef;
 
 pub mod eslint_ignore;
+pub mod generated_shape_index;
 pub mod import_index;
 pub mod k8s_index;
 pub mod locale_index;
 
+pub use generated_shape_index::GeneratedShapeIndex;
 pub use import_index::ImportIndex;
 pub use k8s_index::K8sIndex;
 pub use locale_index::LocaleIndex;
@@ -2929,6 +2931,12 @@ pub struct ProjectCtx {
     // Cross-file i18n locale index. Built lazily when first accessed.
     locale_index: OnceLock<LocaleIndex>,
 
+    // The object shapes the project's code generators own. Built lazily on
+    // first access: only the rules comparing a hand-written type against
+    // codegen output pay the parse, and a project with no generated file pays
+    // one scan of the already-in-memory file list.
+    generated_shape_index: OnceLock<GeneratedShapeIndex>,
+
     // Cross-file Kubernetes resource index. Eagerly built by `load`
     // when YAML files are in the input set; empty (still queryable)
     // otherwise — the same lazy-fallback pattern as `import_index`.
@@ -3284,6 +3292,33 @@ impl ProjectCtx {
     /// returns empty index if not built.
     pub fn locale_index(&self) -> &LocaleIndex {
         self.locale_index.get_or_init(LocaleIndex::default)
+    }
+
+    /// The object shapes the project's code generators own, keyed by the field
+    /// names they carry. Empty when the project has no generated file in reach,
+    /// which is how a consuming rule turns itself off without a warning.
+    ///
+    /// `globs` is the caller's `generated_globs` configuration. It is read on
+    /// the first call only — the value is per-run configuration, identical on
+    /// every call, and building the index twice would double the parse.
+    pub fn generated_shape_index(&self, globs: &[String]) -> &GeneratedShapeIndex {
+        self.generated_shape_index.get_or_init(|| {
+            let mut candidates: Vec<PathBuf> = self
+                .import_index()
+                .indexed_paths()
+                .map(Path::to_path_buf)
+                .collect();
+            // Declaration files are dropped from the lint set, so the import
+            // index cannot carry openapi-typescript's default `schema.d.ts`
+            // output. Reaching it costs a second walk of the tree, so only a
+            // glob that names a declaration file pays for one.
+            if let Some(root) = self.project_root.as_deref()
+                && globs.iter().any(|glob| glob.contains(".d."))
+            {
+                candidates.extend(crate::files::discover_declaration_files(root));
+            }
+            GeneratedShapeIndex::build(&candidates, globs, self.project_root.as_deref())
+        })
     }
 
     /// The project's dominant TS/JS filename-casing convention paired with that
