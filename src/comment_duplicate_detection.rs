@@ -163,25 +163,6 @@ fn is_named_license_banner(lower: &str) -> bool {
     false
 }
 
-/// Tool/lint directives whose text is fixed by an external contract, so it is
-/// byte-identical in every file that needs it — copying it is the directive
-/// working as designed, not a copy-paste smell. Matched case-sensitively at the
-/// *start* of the stripped comment (the canonical tool spelling), so a free-form
-/// comment merely mentioning a tool name mid-sentence stays eligible to flag.
-/// `-next-line` / `-disable-next-line` suffixes are covered by the starts-with.
-const TOOL_DIRECTIVES: &[&str] = &[
-    "oxlint-disable",
-    "eslint-disable",
-    "biome-ignore",
-    "prettier-ignore",
-    "@ts-expect-error",
-    "@ts-ignore",
-    "@ts-nocheck",
-    "c8 ignore",
-    "v8 ignore",
-    "istanbul ignore",
-];
-
 /// Module-top string-literal pragmas (`"use client"`, `"use no memo"`, …). A
 /// comment trailing one of these on the same physical line is mandated identical
 /// across every file carrying the pragma, so it must not be flagged as a
@@ -194,13 +175,12 @@ const PRAGMA_LITERALS: &[&str] = &["use no memo", "use client", "use server", "u
 ///
 /// 1. the comment *is* a tool directive (`/* oxlint-disable … */`,
 ///    `// eslint-disable-next-line …`): the stripped text starts with a known
-///    directive token;
+///    directive token, per the shared `comment_blocks::is_tool_directive`;
 /// 2. the comment *trails* a string-literal pragma statement on the same line
 ///    (`"use no memo"; // …`): the source before its column is exactly such a
 ///    statement and nothing else.
 fn is_directive_or_pragma_comment(group: &CommentGroup, source: &str) -> bool {
-    let head = group.stripped.trim_start();
-    if TOOL_DIRECTIVES.iter().any(|d| head.starts_with(d)) {
+    if crate::rules::comment_blocks::is_tool_directive(&group.stripped) {
         return true;
     }
     line_before_comment(source, group.start_byte).is_some_and(is_pragma_literal_statement)

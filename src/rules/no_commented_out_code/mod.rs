@@ -136,11 +136,7 @@ pub fn register() -> RuleDef {
 /// they routinely carry example snippets.
 pub(super) fn strip_comment_syntax(raw: &str) -> Option<String> {
     let raw = raw.trim();
-    if raw.starts_with("///")
-        || raw.starts_with("//!")
-        || raw.starts_with("/**")
-        || raw.starts_with("/*!")
-    {
+    if crate::rules::comment_blocks::is_doc_comment(raw) {
         return None;
     }
     if let Some(body) = raw.strip_prefix("//") {
