@@ -24,7 +24,7 @@ impl OxcCheck for Check {
         let paths = ctx
             .config
             .string_list(super::META.id, "paths", ctx.lang);
-        if !paths.is_empty() && !path_matches_any(ctx.path, &paths) {
+        if !paths.is_empty() && !crate::rules::path_utils::matches_any_glob(ctx.path, &paths) {
             return Vec::new();
         }
         let mut diagnostics = Vec::new();
@@ -35,17 +35,6 @@ impl OxcCheck for Check {
         }
         diagnostics
     }
-}
-
-/// True if `path` matches at least one glob pattern from `patterns`.
-fn path_matches_any(path: &std::path::Path, patterns: &[String]) -> bool {
-    let path_str = path.to_string_lossy();
-    patterns.iter().any(|pat| {
-        globset::Glob::new(pat)
-            .ok()
-            .map(|g| g.compile_matcher().is_match(path_str.as_ref()))
-            .unwrap_or(false)
-    })
 }
 
 /// True when `id` resolves to a non-optional formal parameter of a named

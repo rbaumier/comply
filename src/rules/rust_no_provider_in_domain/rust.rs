@@ -29,7 +29,6 @@
 //! leaking the adapter's catalogue, is a judgement no AST carries — so the
 //! rule reports it and the answer is a `// comply-ignore` with the reason.
 
-use std::path::Path;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -140,7 +139,7 @@ fn provider_named_by(
 /// code, or no provider is configured, so there is nothing to report.
 fn resolve_scope(ctx: &CheckCtx) -> Option<Vec<String>> {
     let domain_globs = ctx.config.string_list(super::META.id, "domain_globs", ctx.lang);
-    if !path_matches_any(ctx.path, &domain_globs) {
+    if !crate::rules::path_utils::matches_any_glob(ctx.path, &domain_globs) {
         return None;
     }
     let providers: Vec<String> = ctx
@@ -154,18 +153,6 @@ fn resolve_scope(ctx: &CheckCtx) -> Option<Vec<String>> {
         return None;
     }
     Some(providers)
-}
-
-/// True if `path` matches at least one glob pattern from `patterns`. An empty
-/// pattern list matches nothing: the rule is opt-in on location, so dropping
-/// `domain_globs` to `[]` turns it off rather than firing everywhere.
-fn path_matches_any(path: &Path, patterns: &[String]) -> bool {
-    let path_str = path.to_string_lossy();
-    patterns.iter().any(|pat| {
-        globset::Glob::new(pat)
-            .ok()
-            .is_some_and(|g| g.compile_matcher().is_match(path_str.as_ref()))
-    })
 }
 
 /// The node holding the declared identifier, or `None` for a declaration whose
