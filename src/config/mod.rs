@@ -242,9 +242,10 @@ impl Config {
         s
     }
 
-    /// Shared lookup for `threshold` / `float`. Panics with a
-    /// uniform "missing key" message so the two public APIs don't
-    /// duplicate the same boilerplate.
+    /// Shared lookup for the accessors whose key is mandatory
+    /// (`threshold` / `float` / `bool_flag` / `string` /
+    /// `required_string_list`). Panics with a uniform "missing key"
+    /// message so those APIs don't duplicate the same boilerplate.
     fn extra_value(&self, rule_id: &str, key: &str, lang: Language) -> &toml::Value {
         if let Some(value) = self
             .lang_config
@@ -289,6 +290,33 @@ impl Config {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Read a list of strings a rule cannot run without — its vocabulary,
+    /// not an opt-in extra. Panics when the key is absent or holds a
+    /// non-string entry: `src/config/defaults.toml` is authoritative, so a
+    /// missing vocabulary is a packaging bug, and silently returning an empty
+    /// list would turn the rule off without telling anyone. An explicitly
+    /// configured `[]` is honored — that one *is* a user choice.
+    #[must_use]
+    pub fn required_string_list(&self, rule_id: &str, key: &str, lang: Language) -> Vec<String> {
+        let value = self.extra_value(rule_id, key, lang);
+        let Some(entries) = value.as_array() else {
+            panic!(
+                "config key `[rules.\"{rule_id}\"] {key}` must be an array of strings, got {value:?}"
+            );
+        };
+        entries
+            .iter()
+            .map(|entry| {
+                let Some(text) = entry.as_str() else {
+                    panic!(
+                        "config key `[rules.\"{rule_id}\"] {key}` must hold strings, got {entry:?}"
+                    );
+                };
+                text.to_string()
+            })
+            .collect()
     }
 
     fn from_raw(mut raw: ComplyToml) -> Result<Self> {

@@ -468,9 +468,54 @@ min_stale_time_ms = 5000
 [rules.tanstack-start-session-secret-min-length]
 min_length = 32
 
+[rules.no-homemade-async-state-union]
+# The async-state vocabulary, shared with `react-no-request-state-mirror` so
+# the two rules can never disagree on what a request phase is. All four lists
+# are matched case-insensitively.
+#
+# Every string literal that can name a phase of an in-flight request.
+async_literals = [
+  "idle",
+  "loading",
+  "pending",
+  "error",
+  "success",
+  "failed",
+  "fetching",
+  "refetching",
+  "errored",
+  "submitting",
+  "saving",
+]
+# The subset above that can only describe a request. A union needs at least one
+# of these before it is flagged: `"pending"` alone is an order, `"failed"` a
+# payment, and neither is a request lifecycle.
+async_only_literals = ["loading", "fetching", "refetching"]
+# Field names a hand-rolled async state object is built from.
+async_fields = [
+  "isLoading",
+  "isPending",
+  "isError",
+  "isSuccess",
+  "loading",
+  "error",
+  "data",
+]
+# The subset above that has to carry a boolean before the object counts as a
+# state machine — without one, `{ data, error }` is a `Result` in disguise.
+async_only_fields = ["loading", "isLoading"]
+# The failure channel, also required. A state machine has somewhere to put the
+# failure; `{ data, isLoading }` with nowhere to report one is a presentational
+# component's props, fed by a query it does not own.
+async_error_fields = ["error", "isError"]
+# Share of an object's named fields that must be async fields. A component's
+# 25 props or a snackbar model carry a `loading` flag and an `error` without
+# being a request state machine; at half the object, the shape is the state.
+min_async_field_ratio = 0.5
+
 [rules.react-no-request-state-mirror]
-# String literals treated as request-phase names on top of the built-in set
-# (idle, loading, pending, error, success, fetching, submitting, saving).
+# String literals treated as request-phase names on top of the shared
+# vocabulary above (`[rules.no-homemade-async-state-union] async_literals`).
 # Matched case-insensitively. Add the words your codebase mirrors with.
 extra_literals = []
 # Set to false to keep only the union half of the rule, so `useState("idle")`

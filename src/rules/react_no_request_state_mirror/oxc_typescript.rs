@@ -1,90 +1,44 @@
 //! react-no-request-state-mirror oxc backend.
 //!
 //! The whole rule is gated on a real `@tanstack/react-query` import: away from
-//! the library, `"idle" | "loading"` names a domain state nobody duplicated.
+//! the library, `"idle" | "loading"` names a domain state nobody duplicated —
+//! `no-homemade-async-state-union` covers that ground with its own guard.
+//!
+//! The phase vocabulary comes from [`crate::rules::async_state_helpers`], so
+//! this rule and `no-homemade-async-state-union` read one list.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::rules::async_state_helpers as vocabulary;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, CallExpression, Expression, TSLiteral, TSType};
+use oxc_ast::ast::{Argument, CallExpression};
 use std::sync::Arc;
 
 pub struct Check;
-
-const QUERY_MODULE: &str = "@tanstack/react-query";
-
-/// Literals naming a phase of an in-flight request. `pending` / `error` /
-/// `success` are TanStack Query's own `status` values; the others are the words
-/// a hand-rolled mirror reaches for.
-const REQUEST_STATE_LITERALS: &[&str] = &[
-    "idle",
-    "loading",
-    "pending",
-    "error",
-    "success",
-    "fetching",
-    "submitting",
-    "saving",
-];
 
 /// Two members make the union a request state machine. One is a single word
 /// shared with some larger domain enum, which the rule must leave alone.
 const MIN_UNION_MEMBERS: usize = 2;
 
-/// True when the file imports `@tanstack/react-query` — a substring match on the
-/// source would also accept the module name quoted in a comment.
-fn imports_tanstack_query(semantic: &oxc_semantic::Semantic) -> bool {
-    semantic.nodes().iter().any(|node| {
-        matches!(node.kind(), AstKind::ImportDeclaration(import)
-            if import.source.value.as_str() == QUERY_MODULE)
-    })
+/// The shared async-state vocabulary plus whatever `extra_literals` adds for
+/// the project.
+fn configured_literals(ctx: &CheckCtx) -> Vec<String> {
+    let mut literals = vocabulary::async_literals(ctx);
+    literals.extend(
+        ctx.config
+            .string_list(super::META.id, "extra_literals", ctx.lang),
+    );
+    literals
 }
 
-fn is_request_state_literal(value: &str, literals: &[&str]) -> bool {
-    literals.iter().any(|known| known.eq_ignore_ascii_case(value))
-}
-
-/// The built-in phase names plus whatever `extra_literals` adds for the project.
-fn configured_literals(extra: &[String]) -> Vec<&str> {
-    REQUEST_STATE_LITERALS
-        .iter()
-        .copied()
-        .chain(extra.iter().map(String::as_str))
-        .collect()
-}
-
-/// Count the string-literal members of `ty` that name a request phase. The
-/// parser keeps parentheses and nested unions as their own nodes, so
-/// `("idle" | "loading") | null` has to be walked to count both.
-fn count_request_state_members(ty: &TSType, literals: &[&str]) -> usize {
-    match ty {
-        TSType::TSUnionType(union) => union
-            .types
-            .iter()
-            .map(|member| count_request_state_members(member, literals))
-            .sum(),
-        TSType::TSParenthesizedType(paren) => {
-            count_request_state_members(&paren.type_annotation, literals)
-        }
-        TSType::TSLiteralType(lit) => match &lit.literal {
-            TSLiteral::StringLiteral(text) => {
-                usize::from(is_request_state_literal(text.value.as_str(), literals))
-            }
-            _ => 0,
-        },
-        _ => 0,
-    }
-}
-
-fn is_use_state_call(call: &CallExpression) -> bool {
-    match &call.callee {
-        Expression::Identifier(id) => id.name.as_str() == "useState",
-        Expression::StaticMemberExpression(member) => {
-            member.property.name.as_str() == "useState"
-                && matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "React")
-        }
-        _ => false,
-    }
+/// Count the string-literal members of `ty` that name a request phase.
+fn count_request_state_members(ty: &oxc_ast::ast::TSType, literals: &[String]) -> usize {
+    let mut members = Vec::new();
+    vocabulary::collect_string_literals(ty, &mut members);
+    members
+        .into_iter()
+        .filter(|value| vocabulary::matches(value, literals))
+        .count()
 }
 
 fn make_diagnostic(ctx: &CheckCtx, offset: u32, message: String) -> Diagnostic {
@@ -106,7 +60,7 @@ fn make_diagnostic(ctx: &CheckCtx, offset: u32, message: String) -> Diagnostic {
 fn mirror_in_type_alias(
     alias: &oxc_ast::ast::TSTypeAliasDeclaration,
     ctx: &CheckCtx,
-    literals: &[&str],
+    literals: &[String],
 ) -> Option<Diagnostic> {
     if count_request_state_members(&alias.type_annotation, literals) < MIN_UNION_MEMBERS {
         return None;
@@ -126,16 +80,16 @@ fn mirror_in_type_alias(
 fn mirror_in_use_state(
     call: &CallExpression,
     ctx: &CheckCtx,
-    literals: &[&str],
+    literals: &[String],
 ) -> Option<Diagnostic> {
-    if !is_use_state_call(call) {
+    if !vocabulary::is_use_state_call(call) {
         return None;
     }
     let Some(Argument::StringLiteral(initial)) = call.arguments.first() else {
         return None;
     };
     let value = initial.value.as_str();
-    if !is_request_state_literal(value, literals) {
+    if !vocabulary::matches(value, literals) {
         return None;
     }
     Some(make_diagnostic(
@@ -150,7 +104,7 @@ fn mirror_in_use_state(
 
 impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&[QUERY_MODULE])
+        Some(&[vocabulary::QUERY_MODULE])
     }
 
     fn run_on_semantic<'a>(
@@ -158,13 +112,10 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !imports_tanstack_query(semantic) {
+        if !vocabulary::imports_query_module(semantic) {
             return Vec::new();
         }
-        let extra = ctx
-            .config
-            .string_list(super::META.id, "extra_literals", ctx.lang);
-        let literals = configured_literals(&extra);
+        let literals = configured_literals(ctx);
         let flags_use_state = ctx
             .config
             .bool_flag(super::META.id, "check_use_state", ctx.lang);
