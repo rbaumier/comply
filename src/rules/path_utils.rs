@@ -35,6 +35,22 @@ fn canonicalize_cached(p: &Path) -> PathBuf {
     })
 }
 
+/// True when `candidate` matches at least one glob in `patterns`.
+///
+/// The caller decides what a pattern is matched against — a file path, an
+/// import specifier — because `globset` reads both as a `/`-separated
+/// candidate. A malformed pattern matches nothing instead of aborting: a typo
+/// in user config silences that one pattern, it never fails the run. An empty
+/// list matches nothing, which is what turns a glob-configured rule off.
+pub fn matches_any_glob(candidate: impl AsRef<Path>, patterns: &[String]) -> bool {
+    let candidate = candidate.as_ref();
+    patterns.iter().any(|pattern| {
+        globset::Glob::new(pattern)
+            .ok()
+            .is_some_and(|glob| glob.compile_matcher().is_match(candidate))
+    })
+}
+
 /// True if `path` is a build/tooling config file. Matches `*.config.*`
 /// (e.g. `vite.config.ts`, `jest.config.js`), the Vitest `*.workspace.*`
 /// convention (e.g. `vitest.workspace.ts`, loaded by filename and never

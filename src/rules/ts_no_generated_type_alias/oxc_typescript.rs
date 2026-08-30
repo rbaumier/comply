@@ -61,7 +61,7 @@ impl OxcCheck for Check {
         let patterns = ctx
             .config
             .string_list(super::META.id, "generated_modules", ctx.lang);
-        if !specifier_matches_any(source, &patterns) {
+        if !crate::rules::path_utils::matches_any_glob(source, &patterns) {
             return;
         }
 
@@ -163,17 +163,6 @@ fn import_source_of<'a>(
     nodes.ancestors(declaration_id).find_map(|node| match node.kind() {
         AstKind::ImportDeclaration(declaration) => Some(declaration.source.value.as_str()),
         _ => None,
-    })
-}
-
-/// True when the import specifier matches at least one glob. An empty list
-/// matches nothing, which turns the rule off for a project that declares no
-/// generated module.
-fn specifier_matches_any(specifier: &str, patterns: &[String]) -> bool {
-    patterns.iter().any(|pattern| {
-        globset::Glob::new(pattern)
-            .ok()
-            .is_some_and(|glob| glob.compile_matcher().is_match(specifier))
     })
 }
 
@@ -431,8 +420,13 @@ mod tests {
         );
     }
 
+    /// An empty `generated_modules` list turns the rule off: the project
+    /// declares no codegen output, so no alias can copy one.
     #[test]
     fn empty_pattern_list_matches_nothing() {
-        assert!(!specifier_matches_any("#/api/generated/types.gen", &[]));
+        assert!(!crate::rules::path_utils::matches_any_glob(
+            "#/api/generated/types.gen",
+            &[]
+        ));
     }
 }
