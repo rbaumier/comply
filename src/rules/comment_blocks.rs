@@ -74,6 +74,56 @@ impl CommentBlock {
     }
 }
 
+/// True for a documentation comment (`///`, `//!`, `/**`, `/*!`).
+/// It states a public symbol's contract, not an inline note.
+pub fn is_doc_comment(raw: &str) -> bool {
+    let raw = raw.trim_start();
+    ["///", "//!", "/**", "/*!"]
+        .iter()
+        .any(|marker| raw.starts_with(marker))
+}
+
+/// Comment openings that address a tool rather than a reader.
+/// An external contract fixes their wording, so they are not prose.
+/// Matched at the start of a body, so a mid-sentence mention stays prose.
+const TOOL_DIRECTIVES: &[&str] = &[
+    "eslint ",
+    "eslint-disable",
+    "eslint-enable",
+    "eslint-env",
+    "oxlint-disable",
+    "oxlint-enable",
+    "biome-ignore",
+    "prettier-ignore",
+    "stylelint-disable",
+    "stylelint-enable",
+    "tslint:",
+    "comply-ignore",
+    "@ts-",
+    "c8 ignore",
+    "v8 ignore",
+    "istanbul ignore",
+    "@vitest-environment",
+    "cspell",
+    "deno-lint-ignore",
+    "deno-fmt-ignore",
+    "@vite-ignore",
+    "webpackchunkname",
+    "webpackignore",
+    "@__pure__",
+    "#__pure__",
+    "#region",
+    "#endregion",
+];
+
+/// True when a marker-stripped comment `body` opens with a tool directive.
+pub fn is_tool_directive(body: &str) -> bool {
+    let head = body.trim_start().to_ascii_lowercase();
+    TOOL_DIRECTIVES
+        .iter()
+        .any(|directive| head.starts_with(directive))
+}
+
 /// Read one tree-sitter comment node.
 /// Returns `None` when the node text is not valid UTF-8.
 pub fn from_tree_sitter(node: &tree_sitter::Node, source: &str) -> Option<RawComment> {
@@ -106,6 +156,61 @@ pub fn from_oxc(semantic: &oxc_semantic::Semantic<'_>, source: &str) -> Vec<RawC
         });
     }
     comments
+}
+
+/// Read every comment of a Vue single-file component.
+///
+/// The Vue grammar parses the template only, so there are two sources.
+/// Its `<!-- -->` nodes come straight off the tree.
+/// Each `<script>` body is one opaque `raw_text`, re-parsed here as TypeScript.
+/// Every position is reported in Vue file coordinates.
+pub fn from_vue_sfc(tree: &tree_sitter::Tree, source: &str) -> Vec<RawComment> {
+    let mut comments: Vec<RawComment> = crate::rules::walker::collect_nodes_of_kinds(tree, &["comment"])
+        .iter()
+        .filter_map(|node| from_tree_sitter(node, source))
+        .collect();
+    for block in crate::rules::vue_sfc::extract_scripts(tree, source) {
+        comments.extend(from_vue_script(&block, source));
+    }
+    comments
+}
+
+/// Read the comments of one `<script>` block, shifted into file coordinates.
+fn from_vue_script(block: &crate::rules::vue_sfc::ScriptBlock<'_>, source: &str) -> Vec<RawComment> {
+    // why: `lang="tsx"`/`"jsx"` needs the JSX-aware grammar.
+    // Every other value parses as TypeScript, a superset of JavaScript.
+    let language = match block.lang {
+        Some("tsx" | "jsx") => crate::files::Language::Tsx,
+        _ => crate::files::Language::TypeScript,
+    };
+    let mut parser = tree_sitter::Parser::new();
+    let Some(tree) = crate::parsing::parse_with_grammar(&mut parser, language, block.text.as_bytes())
+    else {
+        return Vec::new();
+    };
+    // why: `block.text` is a slice of `source`.
+    // Their pointer difference is the byte offset `merge` sorts on.
+    let block_offset = block.text.as_ptr() as usize - source.as_ptr() as usize;
+    crate::rules::walker::collect_nodes_of_kinds(&tree, &["comment"])
+        .iter()
+        .filter_map(|node| {
+            let raw = node.utf8_text(block.text.as_bytes()).ok()?;
+            let position = node.start_position();
+            // why: only the first row is indented by the `<script>` tag.
+            // Later rows start at the file's own column zero.
+            let column = match position.row {
+                0 => block.start_column + position.column + 1,
+                _ => position.column + 1,
+            };
+            Some(RawComment {
+                start_byte: block_offset + node.start_byte(),
+                line: block.start_row + position.row + 1,
+                column,
+                raw: raw.to_string(),
+                is_line: raw.trim_start().starts_with("//"),
+            })
+        })
+        .collect()
 }
 
 /// Read the comment lines of a file comply parses as text, such as SQL.
@@ -199,7 +304,7 @@ fn continues_block(previous: &RawComment, next: &RawComment) -> bool {
 /// The comment marker opening `raw`, used to keep doc and note blocks apart.
 fn marker(raw: &str) -> &'static str {
     let trimmed = raw.trim_start();
-    for candidate in ["///", "//!", "//", "--", "/**", "/*!", "/*"] {
+    for candidate in ["///", "//!", "//", "--", "/**", "/*!", "/*", "<!--"] {
         if trimmed.starts_with(candidate) {
             return candidate;
         }
@@ -230,10 +335,13 @@ fn build_block(run: &[RawComment]) -> CommentBlock {
 }
 
 /// Strip the comment markers off one physical line.
-fn strip_markers(raw_line: &str) -> String {
-    raw_line
-        .trim()
-        .trim_start_matches("///")
+pub fn strip_markers(raw_line: &str) -> String {
+    let line = raw_line.trim();
+    // why: an HTML comment's two markers are peeled off first.
+    // Either can sit alone on a line, so neither is a prefix.
+    let line = line.strip_prefix("<!--").unwrap_or(line);
+    let line = line.strip_suffix("-->").unwrap_or(line).trim();
+    line.trim_start_matches("///")
         .trim_start_matches("//!")
         .trim_start_matches("//")
         .trim_start_matches("--")
@@ -335,6 +443,35 @@ mod tests {
             is_line: false,
         }]);
         assert_eq!(blocks[0].prose(), "Summary here. @example doSomething();");
+    }
+
+    #[test]
+    fn html_comment_markers_are_stripped() {
+        let blocks = merge(vec![RawComment {
+            start_byte: 0,
+            line: 1,
+            column: 1,
+            raw: "<!-- the header row\n     and its actions -->".into(),
+            is_line: false,
+        }]);
+        assert_eq!(blocks[0].prose(), "the header row and its actions");
+    }
+
+    #[test]
+    fn doc_comment_markers_are_recognized() {
+        for doc in ["/// outer", "//! inner", "/** jsdoc */", "/*! banner */"] {
+            assert!(is_doc_comment(doc), "not detected: {doc}");
+        }
+        assert!(!is_doc_comment("// plain"));
+        assert!(!is_doc_comment("/* plain */"));
+    }
+
+    #[test]
+    fn tool_directives_are_recognized_at_the_body_start() {
+        assert!(is_tool_directive("eslint-disable-next-line no-console"));
+        assert!(is_tool_directive("@ts-expect-error the upstream types are wrong"));
+        assert!(is_tool_directive("Prettier-Ignore"));
+        assert!(!is_tool_directive("the eslint-disable above is temporary"));
     }
 
     #[test]

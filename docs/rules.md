@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2038 rules across 149 categories.
+2039 rules across 149 categories.
 
 ## Categories
 
@@ -25,7 +25,7 @@
 - [code-quality](#code-quality) (259 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
-- [comments](#comments) (6 rules)
+- [comments](#comments) (7 rules)
 - [comments > suppressions](#comments-suppressions) (1 rules)
 - [complexity](#complexity) (4 rules)
 - [correctness](#correctness) (11 rules)
@@ -678,6 +678,7 @@
 | `comment-no-mid-sentence-wrap` | A comment line breaks mid-sentence. | Break the line on punctuation, or shorten the sentence so it fits on one line. |
 | `comment-paraphrases-code` | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
 | `comment-prose-quality` | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
+| `comment-requires-tag` | Comment opens with no tag, so nothing marks it as worth reading. | Delete the comment — the name and the types already carry the what. Keep it only by opening the block with a tag: `why:` for a decision the code cannot show, `gotcha:` for a trap, `TODO(#123):` / `FIXME(#123):` / `WORKAROUND(upstream#123):` / `HACK(#123):` for an action with its reference, or `SAFETY:` for an unsafe block's invariant. |
 | `no-commented-out-code` | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |
 
 ## comments > suppressions
