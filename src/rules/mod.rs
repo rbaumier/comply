@@ -27,6 +27,7 @@ pub struct RuleDef {
 }
 
 // --- helpers at src/rules/ root (not rule directories) ---
+pub mod async_state_helpers;
 pub mod backend;
 pub mod boolean_prefix;
 pub mod call_expression;

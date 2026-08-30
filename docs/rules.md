@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2039 rules across 149 categories.
+2040 rules across 149 categories.
 
 ## Categories
 
@@ -142,7 +142,7 @@
 - [testing > vitest](#testing-vitest) (7 rules)
 - [type-safety](#type-safety) (1 rules)
 - [typescript](#typescript) (187 rules)
-- [typescript > async](#typescript-async) (4 rules)
+- [typescript > async](#typescript-async) (5 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
 - [typescript > security](#typescript-security) (1 rules)
@@ -2639,6 +2639,7 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `no-homemade-async-state-union` | Async state re-modelled by hand as a literal union or a `{ data, loading, error }` object. | Homemade async state — read `status` / `isPending` / `error` from the query result (TanStack Query, SWR) or return a `Result`; no parallel state machine. |
 | `ts-no-floating-promise-in-array-method` | `.forEach(async ...)` / `.map(async ...)` floats promises — the iteration completes before the async work does. | Use `for (const x of arr) { await fn(x); }` for sequential work, or `await Promise.all(arr.map(async (x) => fn(x)))` for parallel work. |
 | `ts-no-promise-void-function-misuse` | Async callback passed to a void-return slot — rejections become unhandled. | Wrap the callback: `setTimeout(() => { void asyncFn(); }, 100)`. For `.forEach`, switch to `for ... of` with `await` or `Promise.all(arr.map(async ...))`. |
 | `ts-no-redundant-async` | `async function f() { return await x; }` is redundant — the wrapper adds no behaviour over `function f() { return x; }`. | Drop `async` and `await`, or keep them only when you need a try/catch around the awaited expression. |
