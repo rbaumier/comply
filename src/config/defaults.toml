@@ -174,13 +174,13 @@ overlap_threshold = 0.80
 # comment block, so wrapping a sentence across lines does not shrink it. Only
 # license banners are exempt.
 [rules.comment-max-words]
-max = 15
+max = 10
 
 # Maximum total words in one comment block. Consecutive `//` lines merge into a
 # single block; each `/* */` stands alone. Doc comments count like any other
 # comment; only license banners are exempt.
 [rules.comment-max-block-words]
-max = 50
+max = 30
 
 # When non-empty, jsdoc-missing-example only fires on files whose path matches
 # at least one of these glob patterns. Leave empty (the default) to require

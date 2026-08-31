@@ -110,7 +110,7 @@ fn f() {}";
 /* this block comment on its own runs well past the small budget configured for
    the test by packing more than a dozen words onto its several wrapped lines */
 fn f() {}";
-        // With the default budget (50) this stays under; assert it does not flag.
+        // With the default budget (30) this stays under; assert it does not flag.
         assert!(run(src).is_empty());
     }
 }

@@ -109,7 +109,7 @@ fn f() {}";
 
     #[test]
     fn flags_long_inner_block_doc_comment_rust() {
-        let src = "/*!\nThis crate provides a cross platform abstraction for writing colored text to a terminal. Much of this API was motivated by use inside command line applications, where colors or styles can be configured by the end user and/or the environment.\n*/\nfn f() {}";
+        let src = "/*!\nThis crate abstracts colored terminal text. Much of this API was motivated by use inside command line applications, where colors or styles can be configured by the end user and/or the environment.\n*/\nfn f() {}";
         assert_eq!(run(src).len(), 1);
     }
 
