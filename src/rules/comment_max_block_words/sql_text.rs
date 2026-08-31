@@ -15,7 +15,7 @@ impl TextCheck for Check {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let comments = comment_blocks::from_line_oriented_text(ctx.source);
 
-        super::flagged_blocks(comments, max)
+        super::flagged_blocks(comments, ctx.source, max)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -49,6 +49,23 @@ mod tests {
 -- The budget applies to every comment the reader has to walk through in order.
 CREATE TABLE endpoint (id uuid PRIMARY KEY);";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn paragraphs_of_one_header_share_the_budget() {
+        let src = "\
+-- Deployed copy of analysis.get_analyses_per_hour (prod).
+-- No migration pipeline; this file is the reference.
+
+-- Shares its filter block with the three sibling RPCs.
+-- Keep the four files in step.
+
+-- Hours are Paris wall time, on purpose.
+-- The customer sizes French teams.
+BEGIN;";
+        let diagnostics = run(src);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].line, 1);
     }
 
     #[test]

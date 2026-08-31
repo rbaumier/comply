@@ -14,21 +14,28 @@ pub struct Check;
 /// `resultData` do not. These read as vague on their own yet are legitimate
 /// segments of a descriptive compound (`resultCount`, `valueKind`), so they
 /// never match as a prefix or suffix.
-const BANNED_WORDS: &[&str] = &[
-    "info", "temp", "result", "results", "obj", "objs", "item", "items", "thing", "stuff", "val",
-    "retval", "value", "values", "foo", "bar", "baz", "qux", "tmp",
-    "dummy", "placeholder", "arr", "list", "lists", "str", "num",
-    "payload", "payloads", "flag", "stub", "fake", "foobar", "quux", "corge", "blah",
-    "bleh", "asdf", "qwerty", "zzz", "xxx", "aaa", "bbb", "scratch", "junk", "garbage", "something",
-    "anything", "whatever", "dict", "vec", "tup", "bool", "int", "float", "char", "ptr",
-    "ret", "vars", "entity", "entities", "dto", "resource", "resources", "entry", "entries",
-    "blob", "elem", "comp", "func", "widget", "record", "records", "body", "idx", "curr", "cfg",
-    "found",
+///
+/// The shared placeholder core lives in `super::GENERIC_WORDS`. The words here
+/// are the TypeScript/JavaScript-specific additions: type-ish tokens (`str`,
+/// `num`, `int`, `bool`, `char`, `ptr`, `vec`, `blob`) and JS/DOM idioms
+/// (`entries`, `body`, `idx`, `cfg`) that read as generic in TS but are
+/// idiomatic in other languages, so they stay out of the shared core. Test
+/// membership through `is_banned_word`, which unions both lists.
+const EXTRA_BANNED_WORDS: &[&str] = &[
+    "str", "num", "dict", "vec", "tup", "bool", "int", "float", "char", "ptr", "entity",
+    "entities", "dto", "resource", "resources", "entry", "entries", "blob", "elem", "comp", "func",
+    "widget", "record", "records", "body", "idx", "curr", "cfg", "found",
 ];
+
+/// True when `lower` (already lowercased) is a banned generic word — either the
+/// shared placeholder core or a TypeScript-specific extra.
+fn is_banned_word(lower: &str) -> bool {
+    super::GENERIC_WORDS.contains(&lower) || EXTRA_BANNED_WORDS.contains(&lower)
+}
 
 const PARAM_ALLOWED_WORDS: &[&str] = &["value", "item"];
 
-/// The subset of `BANNED_WORDS` that names a primitive scalar / binary data
+/// The subset of the banned words that names a primitive scalar / binary data
 /// type. Lowercase, these are the C/Java "name the variable after its type"
 /// anti-pattern (`int i`, `char c`, `float f`, `str s`) the rule targets. In
 /// SCREAMING_SNAKE_CASE, the same word is the universal convention for a named
@@ -288,7 +295,7 @@ fn is_event_payload_data_compound(name: &str) -> bool {
     for_each_segment(name, |seg| {
         if count == 0 {
             first_is_meaningful = seg.len() >= 2
-                && !BANNED_WORDS.iter().any(|w| seg.eq_ignore_ascii_case(w))
+                && !is_banned_word(&seg.to_ascii_lowercase())
                 && !BANNED_SEGMENTS.iter().any(|w| seg.eq_ignore_ascii_case(w));
         }
         prev_is_event = last_is_event;
@@ -1594,7 +1601,7 @@ impl OxcCheck for Check {
             && !is_destructuring(node, semantic)
             {
                 let lower = name.to_ascii_lowercase();
-                if BANNED_WORDS.contains(&lower.as_str()) {
+                if is_banned_word(&lower) {
                     // A SCREAMING_SNAKE_CASE constant whose word names a primitive
                     // scalar/binary type (`CHAR`, `FLOAT`, `BLOB`, `INT`) is a named
                     // type token in a type/schema registry (SQL data-type export,
@@ -2893,20 +2900,25 @@ mod tests {
 
     #[test]
     fn no_fp_row_typed_with_row_type_reference_issue_1233() {
-        // Regression for #1233 — `row`/`rows` name database-domain records, not
-        // generic placeholders (the kysely camel-case plugin maps each queried
-        // row through `mapRow(row: UnknownRow): UnknownRow`). They are no longer
-        // flagged in any form (see #5623), so the typed and untyped cases are
-        // all clean.
-        let src = r#"
+        // Regression for #1233 — singular `row` names a database-domain record,
+        // not a generic placeholder (the kysely camel-case plugin maps each
+        // queried row through `mapRow(row: UnknownRow)`), so it never flags. A
+        // `rows` parameter whose type is an array (`rows: UnknownRow[]`) is
+        // likewise clean: the array annotation carries the domain type. Bare
+        // `rows` is a generic placeholder and flags — see `super::GENERIC_WORDS`.
+        let clean = r#"
             class CamelCasePlugin {
                 protected mapRow(row: UnknownRow): UnknownRow { return row; }
             }
             function mapAll(rows: UnknownRow[]): UnknownRow[] { return rows; }
             const row: PgRow = fetchOne();
-            const rows: ReadonlyArray<DatabaseRow> = fetchMany();
         "#;
-        assert!(run(src).is_empty(), "Row-typed `row`/`rows` must not flag");
+        assert!(
+            run(clean).is_empty(),
+            "singular `row` and array-typed `rows` must not flag"
+        );
+        // Bare `rows` with no descriptive array annotation is a placeholder.
+        assert!(!run("const rows: ReadonlyArray<DatabaseRow> = fetchMany();").is_empty());
     }
 
     #[test]
@@ -3000,7 +3012,7 @@ mod tests {
 
     #[test]
     fn whole_name_words_do_not_fire_as_segments() {
-        // The `BANNED_WORDS` list is exact-name only — `result`/`value`/`item`
+        // The banned-word list is exact-name only — `result`/`value`/`item`
         // are legitimate segments of a descriptive compound and must not fire
         // as a prefix or suffix.
         for name in ["parsedResult", "defaultValue", "rawValue", "currentItem"] {
@@ -3015,12 +3027,11 @@ mod tests {
         // (a discrete addressable unit) name concrete structural units of a
         // table/grid/spreadsheet. They are the canonical, self-documenting
         // bindings in spreadsheet libraries: `worksheet.on('row', row => …)`,
-        // `const cell = row.getCell(col)`. Bare and plural forms are all clean,
-        // and descriptive compounds (`rowIndex`, `headerCell`) were never
-        // flagged either.
+        // `const cell = row.getCell(col)`. Singular forms and descriptive
+        // compounds (`rowIndex`, `headerCell`) stay clean. Bare `rows` is the
+        // exception: it is a generic placeholder and flags.
         for name in [
             "row",
-            "rows",
             "cell",
             "cells",
             "tableRow",
@@ -3036,6 +3047,8 @@ mod tests {
         }
         assert!(run("worksheet.on('row', row => { count += 1; });").is_empty());
         assert!(run("const cell = row.getCell(col);").is_empty());
+        // Bare `rows` is a generic placeholder, unlike singular `row`.
+        assert!(!run("const rows = 1;").is_empty(), "bare `rows` must be flagged");
     }
 
     #[test]

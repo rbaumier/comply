@@ -15,7 +15,7 @@ impl OxcCheck for Check {
 
         let comments = comment_blocks::from_oxc(semantic, ctx.source);
 
-        super::flagged_blocks(comments, max)
+        super::flagged_blocks(comments, ctx.source, max)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),

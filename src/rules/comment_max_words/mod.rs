@@ -50,9 +50,9 @@ pub(crate) struct Flag {
 /// Flag every sentence longer than `max` words.
 /// Sentences are counted across the whole block, not line by line.
 /// License banners are exempt: their wording is fixed by the license.
-pub(crate) fn flagged_sentences(comments: Vec<RawComment>, max: usize) -> Vec<Flag> {
+pub(crate) fn flagged_sentences(comments: Vec<RawComment>, source: &str, max: usize) -> Vec<Flag> {
     let mut flags = Vec::new();
-    for block in comment_blocks::merge(comments) {
+    for block in comment_blocks::merge(comments, source) {
         if block.is_license() {
             continue;
         }
@@ -126,7 +126,8 @@ mod tests {
             comment(0, 1, "// one two three four"),
             comment(22, 2, "// five six seven eight."),
         ];
-        let flags = flagged_sentences(comments, 5);
+        let source = comment_blocks::source_of(&comments);
+        let flags = flagged_sentences(comments, &source, 5);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].words, 8);
         assert_eq!(flags[0].line, 1);
@@ -138,7 +139,8 @@ mod tests {
             comment(0, 1, "// Short one."),
             comment(14, 2, "// one two three four five six seven."),
         ];
-        let flags = flagged_sentences(comments, 5);
+        let source = comment_blocks::source_of(&comments);
+        let flags = flagged_sentences(comments, &source, 5);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].line, 2);
     }
@@ -149,7 +151,8 @@ mod tests {
             comment(0, 1, "// One idea here."),
             comment(18, 2, "// Another idea here."),
         ];
-        assert!(flagged_sentences(comments, 5).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_sentences(comments, &source, 5).is_empty());
     }
 
     #[test]
@@ -162,7 +165,8 @@ mod tests {
             ),
             comment(56, 2, "// of the agreement shipped alongside this file."),
         ];
-        assert!(flagged_sentences(comments, 5).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_sentences(comments, &source, 5).is_empty());
     }
 
     #[test]
@@ -172,7 +176,8 @@ mod tests {
             1,
             "// ctx.config holds one two three four five six.",
         )];
-        let flags = flagged_sentences(comments, 5);
+        let source = comment_blocks::source_of(&comments);
+        let flags = flagged_sentences(comments, &source, 5);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].words, 8);
     }

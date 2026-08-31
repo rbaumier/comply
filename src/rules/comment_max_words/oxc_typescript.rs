@@ -14,7 +14,7 @@ impl OxcCheck for Check {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let comments = comment_blocks::from_oxc(semantic, ctx.source);
 
-        super::flagged_sentences(comments, max)
+        super::flagged_sentences(comments, ctx.source, max)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),

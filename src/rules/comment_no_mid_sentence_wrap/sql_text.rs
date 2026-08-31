@@ -14,7 +14,7 @@ impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let comments = comment_blocks::from_line_oriented_text(ctx.source);
 
-        super::flagged_wraps(comments)
+        super::flagged_wraps(comments, ctx.source)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),

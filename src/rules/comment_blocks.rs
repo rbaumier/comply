@@ -158,61 +158,6 @@ pub fn from_oxc(semantic: &oxc_semantic::Semantic<'_>, source: &str) -> Vec<RawC
     comments
 }
 
-/// Read every comment of a Vue single-file component.
-///
-/// The Vue grammar parses the template only, so there are two sources.
-/// Its `<!-- -->` nodes come straight off the tree.
-/// Each `<script>` body is one opaque `raw_text`, re-parsed here as TypeScript.
-/// Every position is reported in Vue file coordinates.
-pub fn from_vue_sfc(tree: &tree_sitter::Tree, source: &str) -> Vec<RawComment> {
-    let mut comments: Vec<RawComment> = crate::rules::walker::collect_nodes_of_kinds(tree, &["comment"])
-        .iter()
-        .filter_map(|node| from_tree_sitter(node, source))
-        .collect();
-    for block in crate::rules::vue_sfc::extract_scripts(tree, source) {
-        comments.extend(from_vue_script(&block, source));
-    }
-    comments
-}
-
-/// Read the comments of one `<script>` block, shifted into file coordinates.
-fn from_vue_script(block: &crate::rules::vue_sfc::ScriptBlock<'_>, source: &str) -> Vec<RawComment> {
-    // why: `lang="tsx"`/`"jsx"` needs the JSX-aware grammar.
-    // Every other value parses as TypeScript, a superset of JavaScript.
-    let language = match block.lang {
-        Some("tsx" | "jsx") => crate::files::Language::Tsx,
-        _ => crate::files::Language::TypeScript,
-    };
-    let mut parser = tree_sitter::Parser::new();
-    let Some(tree) = crate::parsing::parse_with_grammar(&mut parser, language, block.text.as_bytes())
-    else {
-        return Vec::new();
-    };
-    // why: `block.text` is a slice of `source`.
-    // Their pointer difference is the byte offset `merge` sorts on.
-    let block_offset = block.text.as_ptr() as usize - source.as_ptr() as usize;
-    crate::rules::walker::collect_nodes_of_kinds(&tree, &["comment"])
-        .iter()
-        .filter_map(|node| {
-            let raw = node.utf8_text(block.text.as_bytes()).ok()?;
-            let position = node.start_position();
-            // why: only the first row is indented by the `<script>` tag.
-            // Later rows start at the file's own column zero.
-            let column = match position.row {
-                0 => block.start_column + position.column + 1,
-                _ => position.column + 1,
-            };
-            Some(RawComment {
-                start_byte: block_offset + node.start_byte(),
-                line: block.start_row + position.row + 1,
-                column,
-                raw: raw.to_string(),
-                is_line: raw.trim_start().starts_with("//"),
-            })
-        })
-        .collect()
-}
-
 /// Read the comment lines of a file comply parses as text, such as SQL.
 /// Only a comment owning its line is collected.
 /// A `--` sitting after code, or inside a string, never opens one.
@@ -281,24 +226,35 @@ fn open_comment(
 }
 
 /// Merge `comments` into the blocks a reader perceives.
-/// Line comments merge while the row, indent and marker all continue.
+/// Line comments merge while the indent and marker continue, blank rows included.
 /// A `/* */` node becomes one block on its own.
-pub fn merge(mut comments: Vec<RawComment>) -> Vec<CommentBlock> {
+pub fn merge(mut comments: Vec<RawComment>, source: &str) -> Vec<CommentBlock> {
     comments.sort_by_key(|comment| comment.start_byte);
+    let blank_rows: Vec<bool> = source.lines().map(|row| row.trim().is_empty()).collect();
 
     comments
-        .chunk_by(continues_block)
+        .chunk_by(|previous, next| continues_block(previous, next, &blank_rows))
         .map(build_block)
         .collect()
 }
 
-/// True when `next` is the following line of the same comment as `previous`.
-fn continues_block(previous: &RawComment, next: &RawComment) -> bool {
+/// True when `next` continues the comment `previous` opened.
+///
+/// Blank rows keep the block open. A paragraph break is a pause inside one
+/// comment, not a second comment, and ending the block there would hand each
+/// half its own word budget.
+fn continues_block(previous: &RawComment, next: &RawComment, blank_rows: &[bool]) -> bool {
     previous.is_line
         && next.is_line
         && next.column == previous.column
-        && next.line == previous.line + 1
         && marker(&next.raw) == marker(&previous.raw)
+        && rows_between_are_blank(previous.line, next.line, blank_rows)
+}
+
+/// True when every row strictly between rows `previous` and `next` is blank.
+/// Rows that already follow each other have none, which holds vacuously.
+fn rows_between_are_blank(previous: usize, next: usize, blank_rows: &[bool]) -> bool {
+    next > previous && (previous + 1..next).all(|row| blank_rows.get(row - 1) == Some(&true))
 }
 
 /// The comment marker opening `raw`, used to keep doc and note blocks apart.
@@ -313,25 +269,46 @@ fn marker(raw: &str) -> &'static str {
 }
 
 /// Turn one run of comment tokens into a block of lines.
+///
+/// A blank row inside the run is kept as an empty line, so a rule reading
+/// consecutive lines still sees the paragraph break the author wrote.
 fn build_block(run: &[RawComment]) -> CommentBlock {
-    let lines = run
-        .iter()
-        .flat_map(|comment| {
+    let mut lines: Vec<BlockLine> = Vec::new();
+    for comment in run {
+        let gap = lines.last().map_or(0..0, |last| last.line + 1..comment.line);
+        lines.extend(gap.map(|line| BlockLine {
+            line,
+            text: String::new(),
+        }));
+        lines.extend(
             comment
                 .raw
                 .lines()
                 .enumerate()
-                .map(move |(offset, raw_line)| BlockLine {
+                .map(|(offset, raw_line)| BlockLine {
                     line: comment.line + offset,
                     text: strip_markers(raw_line),
-                })
-        })
-        .collect();
+                }),
+        );
+    }
     CommentBlock {
         line: run[0].line,
         column: run[0].column,
         lines,
     }
+}
+
+/// Lay `comments` back out as the file they were read from, gaps left blank.
+/// Lets a rule test state its comments once and still feed `merge` a source
+/// whose blank rows line up with them.
+#[cfg(test)]
+pub(crate) fn source_of(comments: &[RawComment]) -> String {
+    let mut rows: Vec<String> = Vec::new();
+    for comment in comments {
+        rows.resize(comment.line - 1, String::new());
+        rows.push(comment.raw.clone());
+    }
+    rows.join("\n")
 }
 
 /// Strip the comment markers off one physical line.
@@ -371,52 +348,89 @@ mod tests {
 
     #[test]
     fn consecutive_line_comments_merge() {
-        let blocks = merge(vec![
-            line_comment(0, 1, "// one two"),
-            line_comment(11, 2, "// three four"),
-        ]);
+        let blocks = merge(
+            vec![
+                line_comment(0, 1, "// one two"),
+                line_comment(11, 2, "// three four"),
+            ],
+            "// one two\n// three four",
+        );
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].prose(), "one two three four");
         assert_eq!(blocks[0].word_count(), 4);
     }
 
     #[test]
-    fn row_gap_splits_blocks() {
-        let blocks = merge(vec![
-            line_comment(0, 1, "// one"),
-            line_comment(11, 3, "// two"),
-        ]);
+    fn blank_rows_keep_the_block_open() {
+        let blocks = merge(
+            vec![line_comment(0, 1, "// one"), line_comment(9, 4, "// two")],
+            "// one\n\n\n// two",
+        );
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].prose(), "one two");
+        assert_eq!(blocks[0].word_count(), 2);
+    }
+
+    #[test]
+    fn a_blank_row_stays_an_empty_line_of_the_block() {
+        let blocks = merge(
+            vec![line_comment(0, 1, "// one"), line_comment(8, 3, "// two")],
+            "// one\n\n// two",
+        );
+        let rows: Vec<(usize, &str)> = blocks[0]
+            .lines
+            .iter()
+            .map(|line| (line.line, line.text.as_str()))
+            .collect();
+        assert_eq!(rows, vec![(1, "one"), (2, ""), (3, "two")]);
+    }
+
+    #[test]
+    fn a_row_of_code_splits_blocks() {
+        let blocks = merge(
+            vec![line_comment(0, 1, "// one"), line_comment(18, 3, "// two")],
+            "// one\nlet x = 1;\n// two",
+        );
         assert_eq!(blocks.len(), 2);
     }
 
     #[test]
     fn different_markers_split_blocks() {
-        let blocks = merge(vec![
-            line_comment(0, 1, "/// doc"),
-            line_comment(11, 2, "// note"),
-        ]);
+        let blocks = merge(
+            vec![
+                line_comment(0, 1, "/// doc"),
+                line_comment(11, 2, "// note"),
+            ],
+            "/// doc\n// note",
+        );
         assert_eq!(blocks.len(), 2);
     }
 
     #[test]
     fn doc_comment_lines_merge() {
-        let blocks = merge(vec![
-            line_comment(0, 1, "/// one two"),
-            line_comment(12, 2, "/// three"),
-        ]);
+        let blocks = merge(
+            vec![
+                line_comment(0, 1, "/// one two"),
+                line_comment(12, 2, "/// three"),
+            ],
+            "/// one two\n/// three",
+        );
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].prose(), "one two three");
     }
 
     #[test]
     fn block_comment_lines_carry_their_own_rows() {
-        let blocks = merge(vec![RawComment {
-            start_byte: 0,
-            line: 4,
-            column: 1,
-            raw: "/* one\n   two */".into(),
-            is_line: false,
-        }]);
+        let blocks = merge(
+            vec![RawComment {
+                start_byte: 0,
+                line: 4,
+                column: 1,
+                raw: "/* one\n   two */".into(),
+                is_line: false,
+            }],
+            "\n\n\n/* one\n   two */",
+        );
         assert_eq!(blocks[0].lines.len(), 2);
         assert_eq!(blocks[0].lines[1].line, 5);
         assert_eq!(blocks[0].prose(), "one two");
@@ -424,36 +438,47 @@ mod tests {
 
     #[test]
     fn fenced_code_counts_like_prose() {
-        let blocks = merge(vec![
-            line_comment(0, 1, "/// Example follows."),
-            line_comment(21, 2, "/// ```"),
-            line_comment(29, 3, "/// let value = compute(one, two);"),
-            line_comment(64, 4, "/// ```"),
-        ]);
+        let blocks = merge(
+            vec![
+                line_comment(0, 1, "/// Example follows."),
+                line_comment(21, 2, "/// ```"),
+                line_comment(29, 3, "/// let value = compute(one, two);"),
+                line_comment(64, 4, "/// ```"),
+            ],
+            "/// Example follows.\n/// ```\n/// let value = compute(one, two);\n/// ```",
+        );
         assert_eq!(blocks[0].prose(), "Example follows. ``` let value = compute(one, two); ```");
     }
 
     #[test]
     fn jsdoc_example_bodies_count_like_prose() {
-        let blocks = merge(vec![RawComment {
-            start_byte: 0,
-            line: 1,
-            column: 1,
-            raw: "/**\n * Summary here.\n * @example\n * doSomething();\n */".into(),
-            is_line: false,
-        }]);
+        let raw = "/**\n * Summary here.\n * @example\n * doSomething();\n */";
+        let blocks = merge(
+            vec![RawComment {
+                start_byte: 0,
+                line: 1,
+                column: 1,
+                raw: raw.into(),
+                is_line: false,
+            }],
+            raw,
+        );
         assert_eq!(blocks[0].prose(), "Summary here. @example doSomething();");
     }
 
     #[test]
     fn html_comment_markers_are_stripped() {
-        let blocks = merge(vec![RawComment {
-            start_byte: 0,
-            line: 1,
-            column: 1,
-            raw: "<!-- the header row\n     and its actions -->".into(),
-            is_line: false,
-        }]);
+        let raw = "<!-- the header row\n     and its actions -->";
+        let blocks = merge(
+            vec![RawComment {
+                start_byte: 0,
+                line: 1,
+                column: 1,
+                raw: raw.into(),
+                is_line: false,
+            }],
+            raw,
+        );
         assert_eq!(blocks[0].prose(), "the header row and its actions");
     }
 
@@ -476,7 +501,10 @@ mod tests {
 
     #[test]
     fn license_banner_is_detected() {
-        let blocks = merge(vec![line_comment(0, 1, "// Copyright 2026 the authors")]);
+        let blocks = merge(
+            vec![line_comment(0, 1, "// Copyright 2026 the authors")],
+            "// Copyright 2026 the authors",
+        );
         assert!(blocks[0].is_license());
     }
 }

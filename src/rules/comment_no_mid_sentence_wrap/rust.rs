@@ -36,7 +36,7 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let comments = *state.unwrap().downcast::<State>().unwrap();
-        for flag in super::flagged_wraps(comments) {
+        for flag in super::flagged_wraps(comments, ctx.source) {
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line: flag.line,

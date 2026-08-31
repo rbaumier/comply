@@ -52,9 +52,9 @@ pub(crate) struct Flag {
 /// Flag the first wrapped sentence of every block.
 /// One flag per block keeps a rewrapped paragraph from firing on every line.
 /// License banners are exempt: their line breaks come with the license.
-pub(crate) fn flagged_wraps(comments: Vec<RawComment>) -> Vec<Flag> {
+pub(crate) fn flagged_wraps(comments: Vec<RawComment>, source: &str) -> Vec<Flag> {
     let mut flags = Vec::new();
-    for block in comment_blocks::merge(comments) {
+    for block in comment_blocks::merge(comments, source) {
         if block.is_license() {
             continue;
         }
@@ -123,7 +123,8 @@ mod tests {
             comment(0, 1, "/// Non-stream completions POST through"),
             comment(40, 2, "/// `reqwest`; the stream leg builds one client."),
         ];
-        let flags = flagged_wraps(comments);
+        let source = comment_blocks::source_of(&comments);
+        let flags = flagged_wraps(comments, &source);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].line, 1);
     }
@@ -134,7 +135,8 @@ mod tests {
             comment(0, 1, "/// Holds the connection settings."),
             comment(35, 2, "/// Each call builds its own client."),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 
     #[test]
@@ -143,7 +145,8 @@ mod tests {
             comment(0, 1, "// The pool times out under load,"),
             comment(34, 2, "// so the retry loop hides the cause."),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 
     #[test]
@@ -152,7 +155,8 @@ mod tests {
             comment(0, 1, "/// Non-stream completions POST through reqwest;"),
             comment(48, 2, "/// the stream leg builds one client per attempt."),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 
     #[test]
@@ -161,7 +165,8 @@ mod tests {
             comment(0, 1, "// why: the pool times out under load"),
             comment(38, 2, "// gotcha: the retry loop hides the cause"),
         ];
-        assert_eq!(flagged_wraps(comments).len(), 1);
+        let source = comment_blocks::source_of(&comments);
+        assert_eq!(flagged_wraps(comments, &source).len(), 1);
     }
 
     #[test]
@@ -171,7 +176,8 @@ mod tests {
             comment(34, 2, "// - the endpoint is missing"),
             comment(63, 3, "// - the endpoint is malformed"),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 
     #[test]
@@ -184,7 +190,8 @@ mod tests {
                 "/// Returns an error when the endpoint is unreachable.",
             ),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 
     #[test]
@@ -202,7 +209,8 @@ mod tests {
             ),
             comment(119, 3, "// just read from the wire."),
         ];
-        assert_eq!(flagged_wraps(comments).len(), 1);
+        let source = comment_blocks::source_of(&comments);
+        assert_eq!(flagged_wraps(comments, &source).len(), 1);
     }
 
     #[test]
@@ -215,6 +223,7 @@ mod tests {
             ),
             comment(56, 2, "// of the agreement shipped alongside this file."),
         ];
-        assert!(flagged_wraps(comments).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
     }
 }

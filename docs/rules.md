@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2041 rules across 149 categories.
+2040 rules across 149 categories.
 
 ## Categories
 
@@ -25,7 +25,7 @@
 - [code-quality](#code-quality) (259 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
-- [comments](#comments) (7 rules)
+- [comments](#comments) (6 rules)
 - [comments > suppressions](#comments-suppressions) (1 rules)
 - [complexity](#complexity) (4 rules)
 - [correctness](#correctness) (11 rules)
@@ -678,7 +678,6 @@
 | `comment-no-mid-sentence-wrap` | A comment line breaks mid-sentence. | Break the line on punctuation, or shorten the sentence so it fits on one line. |
 | `comment-paraphrases-code` | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
 | `comment-prose-quality` | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
-| `comment-requires-tag` | Comment opens with no tag, so nothing marks it as worth reading. | Delete the comment — the name and the types already carry the what. Keep it only by opening the block with a tag: `why:` for a decision the code cannot show, `gotcha:` for a trap, `TODO(#123):` / `FIXME(#123):` / `WORKAROUND(upstream#123):` / `HACK(#123):` for an action with its reference, or `SAFETY:` for an unsafe block's invariant. |
 | `no-commented-out-code` | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |
 
 ## comments > suppressions
@@ -1547,7 +1546,7 @@
 |------|-------------|-------------|
 | `function-inside-loop` | Function declared inside loop creates new function object each iteration. | Move the function outside the loop, or use a method reference. |
 | `prefer-array-fill` | Prefer `Array(n).fill(v)` over `Array.from({length: n}, () => v)` for constant fills. | Use `Array(n).fill(value)` for simpler constant array initialization. |
-| `prefer-array-from-map` | Prefer `Array.from(iter, mapFn)` over `[...iter].map(mapFn)`. | Use `Array.from(iterable, mapFn)` to avoid intermediate array allocation. |
+| `prefer-array-from-map` | `[...x].map(fn)` builds an intermediate array before mapping. | Drop the spread when `x` is already an array — `x.map(fn)` returns a new array on its own. When `x` is a `Map`, a `Set` or another iterable, use `Array.from(x, fn)` to map without materializing the intermediate array. |
 
 ## performance > imports
 

@@ -13,7 +13,7 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         let comments = comment_blocks::from_oxc(semantic, ctx.source);
 
-        super::flagged_wraps(comments)
+        super::flagged_wraps(comments, ctx.source)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),

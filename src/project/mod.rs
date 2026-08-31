@@ -1838,6 +1838,83 @@ fn strip_module_extension(path: &Path) -> PathBuf {
     }
 }
 
+/// The ECMAScript edition a TypeScript project compiles against, as declared by
+/// `compilerOptions.lib` (or, absent that, `compilerOptions.target`).
+///
+/// A `lib` entry contributes the edition it names, sub-library included:
+/// `"ES2023.Array"` contributes `Year(2023)`, `"ESNext.Disposable"` contributes
+/// `Next`, `"DOM"` contributes nothing. The highest contribution wins, so a
+/// project that opts a single domain into a newer edition is treated as having
+/// that edition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum EsLib {
+    /// Neither `lib` nor `target` declared — the edition is unknown. Ordered
+    /// below every declared level so folding a set of levels ignores it.
+    #[default]
+    Unspecified,
+    /// A numbered edition: `"ES2022"` → `Year(2022)`, `"ES5"` → `Year(5)`.
+    Year(u16),
+    /// `esnext` — tracks the latest proposals, so every stabilized feature is in.
+    Next,
+}
+
+impl EsLib {
+    /// True when a *declared* edition predates `year`, i.e. a method introduced
+    /// in that edition is missing from the project's ambient library and code
+    /// calling it would not compile. `Unspecified` is never below: an undeclared
+    /// edition proves nothing, so a caller gating on this stays enabled.
+    #[must_use]
+    pub fn is_below(self, year: u16) -> bool {
+        matches!(self, EsLib::Year(declared) if declared < year)
+    }
+
+    /// The lower of two levels, with an `Unspecified` on either side yielding
+    /// the other — folding the project references of a solution-style root, a
+    /// reference that declares no edition must not erase one that does.
+    fn lowest(self, other: Self) -> Self {
+        match (self, other) {
+            (EsLib::Unspecified, _) => other,
+            (_, EsLib::Unspecified) => self,
+            _ => self.min(other),
+        }
+    }
+}
+
+/// The edition a single `lib` entry contributes, `Unspecified` for an entry that
+/// names no ECMAScript edition (`"DOM"`, `"WebWorker"`).
+fn es_lib_from_entry(entry: &str) -> EsLib {
+    let lowered = entry.trim().to_ascii_lowercase();
+    let Some(rest) = lowered.strip_prefix("es") else {
+        return EsLib::Unspecified;
+    };
+    let edition = rest.split('.').next().unwrap_or_default();
+    if edition == "next" {
+        return EsLib::Next;
+    }
+    edition.parse::<u16>().map_or(EsLib::Unspecified, EsLib::Year)
+}
+
+/// The edition a tsconfig's own `compilerOptions` declare. `lib` wins when
+/// present — it replaces the ambient library outright — and `target` is read
+/// only in its absence, matching how TypeScript derives the default library.
+fn parse_es_lib(compiler_options: Option<&Value>) -> EsLib {
+    let declared_libs = compiler_options
+        .and_then(|co| co.get("lib"))
+        .and_then(Value::as_array);
+    if let Some(libs) = declared_libs {
+        return libs
+            .iter()
+            .filter_map(Value::as_str)
+            .map(es_lib_from_entry)
+            .max()
+            .unwrap_or_default();
+    }
+    compiler_options
+        .and_then(|co| co.get("target"))
+        .and_then(Value::as_str)
+        .map_or(EsLib::Unspecified, es_lib_from_entry)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Tsconfig {
     pub paths: BTreeMap<String, Vec<String>>,
@@ -1880,6 +1957,11 @@ pub struct Tsconfig {
     ///
     /// [`root_dir`]: Tsconfig::root_dir
     pub include: Option<Vec<String>>,
+    /// The ECMAScript edition the project's ambient library covers, read from
+    /// `compilerOptions.lib` when declared and from `compilerOptions.target`
+    /// otherwise — the two keys TypeScript resolves the ambient library from.
+    /// Gates suggestions that name a method from a given edition.
+    pub es_lib: EsLib,
 }
 
 impl Tsconfig {
@@ -1945,9 +2027,10 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
     // `tsconfig.app.json`. Union each referenced project's path aliases into the
     // effective set (the referrer's own aliases win via `or_insert`), so a
     // `@console/*` alias declared only in a referenced config is still
-    // recognized. Only alias prefixes cross over; scalar options stay the
-    // referrer's. A referenced config's own `extends`/`references` are followed
-    // by this same recursion, bounded by the shared depth cap.
+    // recognized. Alias prefixes and `es_lib` cross over; every other scalar
+    // option stays the referrer's. A referenced config's own `extends` /
+    // `references` are followed by this same recursion, bounded by the shared
+    // depth cap.
     if let Some(references) = json.get("references").and_then(|v| v.as_array()) {
         for reference in references {
             let Some(ref_path) = reference.get("path").and_then(|v| v.as_str()) else {
@@ -1958,6 +2041,12 @@ fn load_tsconfig_file(path: &Path, depth: u8) -> Option<Tsconfig> {
                 for (alias, targets) in referenced.paths {
                     merged.paths.entry(alias).or_insert(targets);
                 }
+                // `es_lib` is the one scalar that does cross over, as the lowest
+                // edition in play: a solution-style root declares none of its own
+                // and its sources compile under the referenced projects, so a
+                // suggestion gated on an edition must stay silent unless every
+                // referenced project admits it.
+                merged.es_lib = merged.es_lib.lowest(referenced.es_lib);
             }
         }
     }
@@ -2114,6 +2203,7 @@ fn parse_tsconfig_value(json: &Value) -> Tsconfig {
             .and_then(|s| s.as_str())
             .map(PathBuf::from),
         include: parse_tsconfig_include(json),
+        es_lib: parse_es_lib(co),
     }
 }
 
@@ -2138,7 +2228,8 @@ fn parse_tsconfig_include(json: &Value) -> Option<Vec<String>> {
 /// `parse_tsconfig_value`, so a child that omits the flag inherits the parent's
 /// value here via the `||`. `use_unknown_in_catch_variables` is an `Option`, so a
 /// `Some` in the child overrides the parent (letting an explicit `false` opt out)
-/// while a `None` inherits the parent's value.
+/// while a `None` inherits the parent's value. `es_lib` follows that same rule,
+/// with `Unspecified` standing for absence.
 fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
     let mut paths = parent.paths;
     for (k, v) in child.paths {
@@ -2160,6 +2251,10 @@ fn merge_tsconfig(parent: Tsconfig, child: Tsconfig) -> Tsconfig {
         out_dir: child.out_dir.or(parent.out_dir),
         root_dir: child.root_dir.or(parent.root_dir),
         include: child.include.or(parent.include),
+        es_lib: match child.es_lib {
+            EsLib::Unspecified => parent.es_lib,
+            declared => declared,
+        },
     }
 }
 
@@ -4879,6 +4974,19 @@ impl ProjectCtx {
         self.nearest_tsconfig(path)
             .map(|tsc| tsc.use_unknown_in_catch_variables.unwrap_or(tsc.strict))
             .unwrap_or(false)
+    }
+
+    /// True when the tsconfig governing `path` declares an ECMAScript library
+    /// older than `year` — through `compilerOptions.lib`, or `target` in its
+    /// absence, resolved across the `extends` chain and project references. A
+    /// method introduced in that edition is then missing from the project's
+    /// ambient library, so suggesting it would not compile.
+    ///
+    /// False when no tsconfig is found or it declares neither key: an undeclared
+    /// edition proves nothing, and a rule gating on this stays enabled.
+    pub fn targets_es_below(&self, path: &Path, year: u16) -> bool {
+        self.nearest_tsconfig(path)
+            .is_some_and(|tsc| tsc.es_lib.is_below(year))
     }
 
     /// True when the tsconfig governing `path` declares a
@@ -7662,6 +7770,47 @@ mod tests {
         .unwrap();
         assert!(ts.paths.contains_key("~/*"));
         assert_eq!(ts.alias_prefixes(), vec!["~".to_string()]);
+    }
+
+    #[test]
+    fn tsconfig_reads_the_highest_es_lib_entry() {
+        let ts = Tsconfig::parse(r#"{"compilerOptions":{"lib":["ES2022","DOM","DOM.Iterable"]}}"#)
+            .expect("must parse");
+        assert_eq!(ts.es_lib, EsLib::Year(2022));
+        assert!(ts.es_lib.is_below(2023));
+    }
+
+    #[test]
+    fn tsconfig_es_lib_counts_a_sub_library_edition() {
+        let ts = Tsconfig::parse(r#"{"compilerOptions":{"lib":["ES2022","ES2023.Array"]}}"#)
+            .expect("must parse");
+        assert_eq!(ts.es_lib, EsLib::Year(2023));
+        assert!(!ts.es_lib.is_below(2023));
+    }
+
+    #[test]
+    fn tsconfig_es_lib_treats_esnext_as_above_every_edition() {
+        let ts =
+            Tsconfig::parse(r#"{"compilerOptions":{"lib":["ESNext"]}}"#).expect("must parse");
+        assert_eq!(ts.es_lib, EsLib::Next);
+        assert!(!ts.es_lib.is_below(2023));
+    }
+
+    #[test]
+    fn tsconfig_es_lib_falls_back_to_target_then_to_unspecified() {
+        let from_target =
+            Tsconfig::parse(r#"{"compilerOptions":{"target":"ES2015"}}"#).expect("must parse");
+        assert_eq!(from_target.es_lib, EsLib::Year(2015));
+
+        // `lib` replaces the ambient library outright, so it wins over `target`.
+        let lib_wins = Tsconfig::parse(r#"{"compilerOptions":{"target":"ES5","lib":["ESNext"]}}"#)
+            .expect("must parse");
+        assert_eq!(lib_wins.es_lib, EsLib::Next);
+
+        let neither = Tsconfig::parse(r#"{"compilerOptions":{"strict":true}}"#).expect("must parse");
+        assert_eq!(neither.es_lib, EsLib::Unspecified);
+        // Nothing declared proves nothing: an edition gate must stay enabled.
+        assert!(!neither.es_lib.is_below(2023));
     }
 
     #[test]

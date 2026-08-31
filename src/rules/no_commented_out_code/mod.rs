@@ -151,7 +151,7 @@ pub(super) fn strip_comment_syntax(raw: &str) -> Option<String> {
 
 /// Fast filter: a block of text is only worth re-parsing if it contains
 /// at least one structural marker. Pure prose rarely contains `;` or `{`.
-pub(super) fn has_code_shape(text: &str) -> bool {
+fn has_code_shape(text: &str) -> bool {
     text.contains(';') || text.contains('{')
 }
 

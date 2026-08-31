@@ -15,7 +15,7 @@ impl TextCheck for Check {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let comments = comment_blocks::from_line_oriented_text(ctx.source);
 
-        super::flagged_sentences(comments, max)
+        super::flagged_sentences(comments, ctx.source, max)
             .into_iter()
             .map(|flag| Diagnostic {
                 path: Arc::clone(&ctx.path_arc),

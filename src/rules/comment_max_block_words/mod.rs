@@ -43,8 +43,8 @@ pub(crate) struct Flag {
 
 /// Flag every merged block holding more than `max` words.
 /// License banners are exempt: their length is fixed by the license.
-pub(crate) fn flagged_blocks(comments: Vec<RawComment>, max: usize) -> Vec<Flag> {
-    comment_blocks::merge(comments)
+pub(crate) fn flagged_blocks(comments: Vec<RawComment>, source: &str, max: usize) -> Vec<Flag> {
+    comment_blocks::merge(comments, source)
         .into_iter()
         .filter(|block| block.word_count() > max && !block.is_license())
         .map(|block| Flag { line: block.line, column: block.column, words: block.word_count() })
@@ -67,28 +67,38 @@ mod tests {
     #[test]
     fn merges_consecutive_line_comments() {
         let comments = vec![comment(0, 1, "// a b c"), comment(9, 2, "// d e f")];
-        let flags = flagged_blocks(comments, 5);
+        let source = comment_blocks::source_of(&comments);
+        let flags = flagged_blocks(comments, &source, 5);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].line, 1);
         assert_eq!(flags[0].words, 6);
     }
 
     #[test]
-    fn blank_line_gap_splits_blocks() {
+    fn a_blank_line_gap_shares_one_budget() {
         let comments = vec![comment(0, 1, "// a b c"), comment(9, 3, "// d e f")];
-        assert!(flagged_blocks(comments, 5).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert_eq!(flagged_blocks(comments, &source, 5).len(), 1);
+    }
+
+    #[test]
+    fn a_line_of_code_starts_a_new_budget() {
+        let comments = vec![comment(0, 1, "// a b c"), comment(20, 3, "// d e f")];
+        assert!(flagged_blocks(comments, "// a b c\nlet x = 1;\n// d e f", 5).is_empty());
     }
 
     #[test]
     fn doc_comments_count_too() {
         let comments = vec![comment(0, 1, "/// one two three four five six")];
-        assert_eq!(flagged_blocks(comments, 3).len(), 1);
+        let source = comment_blocks::source_of(&comments);
+        assert_eq!(flagged_blocks(comments, &source, 3).len(), 1);
     }
 
     #[test]
     fn license_banner_is_exempt() {
         let comments =
             vec![comment(0, 1, "// Copyright 2026 the authors under the terms of the license")];
-        assert!(flagged_blocks(comments, 3).is_empty());
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_blocks(comments, &source, 3).is_empty());
     }
 }

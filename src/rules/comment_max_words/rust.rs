@@ -37,7 +37,7 @@ impl AstCheck for Check {
     ) {
         let comments = *state.unwrap().downcast::<State>().unwrap();
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
-        for flag in super::flagged_sentences(comments, max) {
+        for flag in super::flagged_sentences(comments, ctx.source, max) {
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line: flag.line,
