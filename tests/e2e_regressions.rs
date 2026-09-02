@@ -302,3 +302,79 @@ fn undeclared_dependency_reports_once_per_import_site_at_the_import() {
         // per-package reporting, or a double-visited edge, moves this number.
         .stderr(predicate::str::contains("comply: 5 violations found"));
 }
+
+/// Run git in `dir` and fail the test with its stderr if it does not succeed.
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git must be on PATH");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn diff_only_survives_a_non_utf8_file_in_the_diff_issue_8502() {
+    // `--staged --diff-only` is the pre-commit gate. A repository that commits
+    // an ISO-8859-1 CSV on purpose (0xE9 = `é`) puts undecodable bytes in the
+    // diff as soon as that file is touched; the gate must still report the
+    // violation on the staged `.ts` line instead of linting nothing.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+
+    fs::write(root.join("a.ts"), "export const one = 1;\n").unwrap();
+    fs::write(root.join("sample.csv"), b"name\nCaf\xe9\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "init"]);
+
+    fs::write(
+        root.join("a.ts"),
+        "export const one = 1;\nexport const two = a ? b ? 1 : 2 : 3;\n",
+    )
+    .unwrap();
+    fs::write(root.join("sample.csv"), b"name\nCaf\xe9\nTh\xe9\n").unwrap();
+    git(root, &["add", "-A"]);
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .current_dir(root)
+        .args(["--staged", "--diff-only"])
+        .assert()
+        .stdout(predicate::str::contains("no-nested-ternary"))
+        .stderr(predicate::str::contains("crashed unexpectedly").not());
+}
+
+#[test]
+fn ansi_fixture_does_not_cost_its_batch_its_diagnostics_issue_8402() {
+    // oxlint's json writer echoes source text into `message` unescaped, so a
+    // golden fixture storing terminal output verbatim (first byte ESC) yields
+    // JSON that serde_json rejects. Every `.ts` file goes into one batch of up
+    // to 500, so the sibling's oxlint diagnostic is what proves the batch — and
+    // with it the run — survived. "Completes" alone would pass on zero output.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
+    fs::write(
+        dir.path().join("ansi.ts"),
+        "\u{1b}[3;38;2;248;248;242mconst x = 1;\u{1b}[0m\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("other.ts"),
+        "export function f() { debugger; }\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(dir.path())
+        .assert()
+        .stdout(predicate::str::contains("no-debugger"))
+        .stderr(predicate::str::contains("crashed unexpectedly").not());
+}
