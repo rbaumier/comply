@@ -193,6 +193,16 @@ fn line_before_comment(source: &str, comment_start: usize) -> Option<&str> {
     source.get(line_start..comment_start)
 }
 
+/// True when code precedes the comment on its own physical line — the comment
+/// *trails* that code (`UInt16(72), // ppi`) rather than standing above it.
+///
+/// A trailing comment is a per-line label whose scope ends with its line, not a
+/// paragraph of prose, so it forms a group by itself: a column of aligned field
+/// labels must not be glued into one pseudo-paragraph.
+fn is_trailing_comment(source: &str, comment_start: usize) -> bool {
+    line_before_comment(source, comment_start).is_some_and(|before| !before.trim().is_empty())
+}
+
 /// True when `before` (the source preceding a trailing comment) is exactly a
 /// recognized pragma string-literal statement and nothing else: an optional
 /// surrounding-whitespace `"use client"` / `'use no memo'`, with an optional
@@ -342,6 +352,26 @@ fn line_is_marker(stripped_line: &str) -> bool {
     DIRECTIVE_MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// The API surface a documented declaration is a member of — the type, trait,
+/// class, interface, or module whose block declares it. A file-top-level
+/// declaration is a member of none.
+///
+/// Two declarations in one file that share a surface are siblings: declared on
+/// one API surface, they are related by construction rather than by a
+/// copy-paste. The surface is the *type*, not the block, so a type whose methods
+/// are split across several `impl` blocks (Rust's usual way of varying trait
+/// bounds) still reads as one surface.
+#[derive(Clone, PartialEq, Eq)]
+enum ApiSurface {
+    /// A named type, trait, class, interface, or module.
+    Named(String),
+    /// A member block with no name of its own — a TS type literal written inline
+    /// as a return type, or a JS object literal. It exposes no name to serve as
+    /// an owner, yet two *distinct* such blocks are as much two distinct owners
+    /// as two named interfaces are, so each is identified by its byte offset.
+    Unnamed(usize),
+}
+
 /// A comment eligible to be compared against others.
 struct CommentEntry {
     file_idx: usize,
@@ -349,6 +379,11 @@ struct CommentEntry {
     column: usize,
     span: (usize, usize),
     words: Vec<String>,
+    /// URL / path tokens the comment cites, in order of appearance. Two comments
+    /// that cite *different* targets are two different pointers, however much
+    /// prose they share — collapsing them would destroy the mapping each one
+    /// records, so the "keep one, cite it" remedy cannot apply.
+    references: Vec<String>,
     /// The first `shared_prefix_words` words, joined — the bucket key.
     prefix_key: String,
     /// Name of the declaration or object/type member this comment immediately
@@ -366,6 +401,8 @@ struct CommentEntry {
     /// their identical docs are intentional per-item documentation, not a
     /// copy-paste smell.
     decl_owner: Option<String>,
+    /// The API surface this declaration is a member of (see `ApiSurface`).
+    decl_surface: Option<ApiSurface>,
     /// Name of the function/method whose body encloses this comment, if any. An
     /// inline body comment inside a same-named method in another file (drizzle's
     /// `queryWithCache` mirrored across its per-dialect session classes)
@@ -386,6 +423,8 @@ struct CommentGroup {
     decl_name: Option<String>,
     /// Name of the type owning the variant or member this block documents, if any.
     decl_owner: Option<String>,
+    /// The API surface this declaration is a member of (see `ApiSurface`).
+    decl_surface: Option<ApiSurface>,
     /// Name of the function/method whose body encloses this block, if any.
     enclosing_decl_name: Option<String>,
     /// Any line of the block has its repetition forced by its enclosing
@@ -405,6 +444,8 @@ struct RawComment {
     decl_name: Option<String>,
     /// Name of the type owning the variant or member this comment documents, if any.
     decl_owner: Option<String>,
+    /// The API surface this declaration is a member of (see `ApiSurface`).
+    decl_surface: Option<ApiSurface>,
     /// Name of the function/method whose body encloses this comment, captured by
     /// walking up to the nearest `function_item` / `function_declaration` /
     /// `method_definition` ancestor (see `enclosing_decl_name`).
@@ -543,9 +584,10 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
         }
         // Sort by (path, line) so both the partner choice and the output order
         // are deterministic. Each member after the first reports once, against
-        // the earlier member it shares the longest opening with — so a bucket
-        // of N yields at most N-1 diagnostics, each pointing at a genuinely
-        // similar sibling rather than an arbitrary bucket representative.
+        // the *first* earlier member that both clears the similarity floor and is
+        // not exempt against it — so a bucket of N yields at most N-1
+        // diagnostics, and a member's verdict depends only on the bucket's
+        // contents, never on which member wins a similarity contest among them.
         let mut ordered = members.clone();
         ordered.sort_by(|&a, &b| {
             let (ea, eb) = (&entries[a], &entries[b]);
@@ -556,91 +598,18 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
         });
         for (pos, &m) in ordered.iter().enumerate().skip(1) {
             let entry = &entries[m];
-            // Closest earlier sibling: longest shared opening. Ties resolve to
-            // the earliest, since we only replace on a strictly longer match.
-            // Every member shares the bucket's prefix, so `shared >= prefix_words`.
-            let mut shared = 0;
-            let mut partner_idx = ordered[0];
-            for &p in &ordered[..pos] {
-                let lcp = common_prefix_len(&entries[p].words, &entry.words);
-                if lcp > shared {
-                    shared = lcp;
-                    partner_idx = p;
-                }
-            }
+            let reported_against = ordered[..pos].iter().find_map(|&p| {
+                let partner = &entries[p];
+                // Every member shares the bucket's prefix, so `shared >= prefix_words`.
+                let shared = common_prefix_len(&partner.words, &entry.words);
+                let shorter = partner.words.len().min(entry.words.len());
+                let similar_enough = (shared as f64) >= prefix_pct * (shorter as f64);
+                (similar_enough && !is_exempt_pair(entry, partner)).then_some((p, shared))
+            });
+            let Some((partner_idx, shared)) = reported_against else {
+                continue;
+            };
             let partner = &entries[partner_idx];
-            let shorter = partner.words.len().min(entry.words.len());
-            if (shared as f64) < prefix_pct * (shorter as f64) {
-                continue;
-            }
-            // Parallel API surfaces: a comment documenting the same — or an
-            // analogous variant of the same — named declaration or member in
-            // another file (a SIMD vs scalar backend both exposing
-            // `aes128_decrypt`, a runtime props object and the TS type declaring
-            // the same prop, a server `ignore_invalid_headers` and its client
-            // `ignore_invalid_headers_in_responses` builder twin, or a safe
-            // `read_integer` and its unsafe `read_integer_ptr` decompressor
-            // twin) carries the same description because it describes the same
-            // item, not because it was copy-pasted. Restricted to cross-file
-            // matches between declaration names so an intra-file duplicate, or a
-            // copy-pasted free-floating rationale, still flags.
-            if entry.file_idx != partner.file_idx
-                && are_parallel_decl_names(entry.decl_name.as_deref(), partner.decl_name.as_deref())
-            {
-                continue;
-            }
-            // Parallel inline body documentation: an inline comment inside the
-            // body of a same-named function/method in another file documents the
-            // same step of an algorithm implemented once per package (drizzle's
-            // `queryWithCache` mirrored across its pg/sqlite/gel dialect session
-            // classes), so the identical wording describes the same invariant,
-            // not a copy-paste smell. Keyed on the enclosing declaration name and
-            // a cross-file match, mirroring the same-named-declaration exemption
-            // above: an intra-file duplicate, or a comment with no enclosing named
-            // function, still flags.
-            if entry.file_idx != partner.file_idx
-                && enclosing_names_match(
-                    entry.enclosing_decl_name.as_deref(),
-                    partner.enclosing_decl_name.as_deref(),
-                )
-            {
-                continue;
-            }
-            // Implementation twins co-located in one file: an infallible `get_u8`
-            // and its fallible `try_get_u8`, or a safe `read` and its `read_ptr`
-            // fast path, frequently sit side by side in one trait or module and
-            // share a verbatim opening because they perform the same operation.
-            // The `a != b` guard is load-bearing: `are_impl_qualifier_twins`
-            // treats identical names as trivially equal roots, so without it a
-            // same-name intra-file copy-paste — the one case the cross-file
-            // restriction above guards against — would wrongly be exempted here.
-            if entry
-                .decl_name
-                .as_deref()
-                .zip(partner.decl_name.as_deref())
-                .is_some_and(|(a, b)| a != b && are_impl_qualifier_twins(a, b))
-            {
-                continue;
-            }
-            // Parallel members of distinct owners: two enum variants of
-            // *different* enums (`FlushCompress::None` / `FlushDecompress::None`
-            // mirroring the same zlib flush mode for the two directions), or two
-            // type/interface members of *different* types that share a name (an
-            // OpenAPI `minimum_amount` field carried by both a request type and
-            // its response type) describe the same concept, so their identical
-            // doc-comments are intentional per-item documentation. A member name
-            // is unique within its owner, so requiring distinct owners means a
-            // same-file copy-paste inside one type can never qualify; this
-            // exemption therefore applies regardless of file, unlike the
-            // top-level cross-file one above.
-            if are_parallel_owned_members(
-                entry.decl_name.as_deref(),
-                entry.decl_owner.as_deref(),
-                partner.decl_name.as_deref(),
-                partner.decl_owner.as_deref(),
-            ) {
-                continue;
-            }
             // Tailor the remediation to reach: a copy in the same file is best
             // collapsed to one comment the others reference, while the same
             // rationale spread across files belongs in a doc the comments cite.
@@ -673,6 +642,75 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Vec<Diagnostic> {
 
 fn common_prefix_len(a: &[String], b: &[String]) -> usize {
     a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+/// True when two similar comments are documenting parallel constructs rather
+/// than repeating one explanation, so the pair must not be reported.
+fn is_exempt_pair(entry: &CommentEntry, partner: &CommentEntry) -> bool {
+    // Distinct citations: two comments whose reference tokens differ point at two
+    // different targets (`/// Source: <url-a>` and `/// Source: <url-b>`, one per
+    // ported upstream test). Collapsing them would destroy the mapping each one
+    // records, so the remedy this rule proposes cannot apply to them. Only a pair
+    // that cites *the same* target — or cites nothing — remains reportable.
+    if !entry.references.is_empty()
+        && !partner.references.is_empty()
+        && entry.references != partner.references
+    {
+        return true;
+    }
+    // Parallel API surfaces: a comment documenting the same — or an analogous
+    // variant of the same — named declaration or member (a SIMD vs scalar backend
+    // both exposing `aes128_decrypt`, a runtime props object and the TS type
+    // declaring the same prop, a server `ignore_invalid_headers` and its client
+    // `ignore_invalid_headers_in_responses` builder twin, an infallible
+    // `add_year_months` and its `add_year_months_opt` twin, or the several
+    // overload signatures TypeScript requires one JSDoc block each on) carries the
+    // same description because it describes the same item, not because it was
+    // copy-pasted.
+    if are_parallel_declarations(entry, partner) {
+        return true;
+    }
+    // Parallel inline body documentation: an inline comment inside the body of a
+    // same-named function/method in another file documents the same step of an
+    // algorithm implemented once per package (drizzle's `queryWithCache` mirrored
+    // across its pg/sqlite/gel dialect session classes), so the identical wording
+    // describes the same invariant, not a copy-paste smell. Restricted to
+    // cross-file matches: an intra-file duplicate, or a comment with no enclosing
+    // named function, still flags.
+    if entry.file_idx != partner.file_idx
+        && enclosing_names_match(
+            entry.enclosing_decl_name.as_deref(),
+            partner.enclosing_decl_name.as_deref(),
+        )
+    {
+        return true;
+    }
+    // Implementation twins co-located in one file: an infallible `get_u8` and its
+    // fallible `try_get_u8`, or a safe `read` and its `read_ptr` fast path,
+    // frequently sit side by side in one trait or module and share a verbatim
+    // opening because they perform the same operation. The `a != b` guard is
+    // load-bearing: `are_impl_qualifier_twins` treats identical names as trivially
+    // equal roots, so without it two same-named declarations in two *different*
+    // blocks of one file — which `are_parallel_declarations` deliberately keeps
+    // reportable — would slip through here.
+    if entry
+        .decl_name
+        .as_deref()
+        .zip(partner.decl_name.as_deref())
+        .is_some_and(|(a, b)| a != b && are_impl_qualifier_twins(a, b))
+    {
+        return true;
+    }
+    // Parallel members of distinct owners: two enum variants of *different* enums
+    // (`FlushCompress::None` / `FlushDecompress::None` mirroring the same zlib
+    // flush mode for the two directions), or two type/interface members of
+    // *different* types that share a name (an OpenAPI `minimum_amount` field
+    // carried by both a request type and its response type) describe the same
+    // concept, so their identical doc-comments are intentional per-item
+    // documentation. A member name is unique within its owner, so requiring
+    // distinct owners means a same-file copy-paste inside one type can never
+    // qualify; this exemption therefore applies regardless of file.
+    are_parallel_owned_members(entry, partner)
 }
 
 /// Minimum `_`-separated segments the shorter name must carry for a prefix
@@ -717,13 +755,84 @@ fn are_parallel_decl_names(a: Option<&str>, b: Option<&str>) -> bool {
     let (Some(a), Some(b)) = (a, b) else {
         return false;
     };
-    if a == b {
-        return true;
-    }
-    is_variant_suffix_of(a, b)
+    a == b
+        || is_variant_suffix_of(a, b)
         || is_variant_suffix_of(b, a)
         || are_impl_qualifier_twins(a, b)
         || are_async_sync_twins(a, b)
+}
+
+/// Two *distinct* names that mark analogous variants of one operation, with the
+/// `MIN_VARIANT_ROOT_SEGMENTS` floor lifted (`find` / `find_at`, `new` /
+/// `new_no_color`, `build` / `build_many`). The floor exists to rule out two
+/// *unrelated* declarations that happen to share a short generic prefix; when the
+/// two are declared on one API surface that possibility is already excluded by
+/// their sibling membership, so the floor has nothing left to guard.
+///
+/// The fallible `try_` prefix is stripped before the roots are compared, so it
+/// composes with the suffix relation the way the names themselves do:
+/// `try_find_iter` is `find_iter`'s fallible form and `find_iter_at` is its
+/// positioned form, which makes the two variants of one operation.
+fn are_variant_names(a: &str, b: &str) -> bool {
+    if a == b {
+        return false;
+    }
+    let (a_root, b_root) = (strip_fallible_prefix(a), strip_fallible_prefix(b));
+    a_root == b_root
+        || is_suffixed_variant(a_root, b_root)
+        || is_suffixed_variant(b_root, a_root)
+        || are_impl_qualifier_twins(a, b)
+        || are_async_sync_twins(a, b)
+}
+
+/// `name` without the leading `try_` that marks Rust's fallible twin.
+fn strip_fallible_prefix(name: &str) -> &str {
+    name.strip_prefix("try_").unwrap_or(name)
+}
+
+/// Two doc-comments document parallel API surfaces when both name a declaration
+/// and the two declarations are separate entry points rather than one
+/// explanation pasted twice.
+///
+/// Across files this is the name relation alone: two files are two API surfaces
+/// by construction (a sync crate and its async twin, a SIMD backend and its
+/// scalar one).
+///
+/// Within one file the two declarations must additionally share a *scope*, since
+/// that is what makes a name match evidence of one item rather than of a
+/// copy-paste:
+///
+/// - the same name in one scope is one item declared several times — the several
+///   overload signatures TypeScript requires one JSDoc block each on, or a trait
+///   method contract restated on the item that implements it. There is no syntax
+///   for sharing one block across them, so the "keep one, cite it" remedy has no
+///   form. Two same-named declarations in *different* scopes of one file (two
+///   classes each declaring `clearDatabase`) stay reportable;
+/// - variant names in one member block are siblings of one API surface —
+///   `Matcher::find` and `Matcher::find_at`, `Builder::new` and
+///   `Builder::new_no_color` — each of which rustdoc renders as its own page and
+///   so must document itself. Sibling membership is directly observable, so the
+///   root-length floor is waived for it;
+/// - at file top level there is no block to observe, so the floor stands: two
+///   unrelated free functions sharing a generic prefix keep flagging.
+///
+/// A comment with no `decl_name` (a free-floating rationale, or a plain `//`
+/// above a top-level declaration) never qualifies, so a copy-pasted rationale
+/// stays in scope wherever it sits.
+fn are_parallel_declarations(entry: &CommentEntry, partner: &CommentEntry) -> bool {
+    let (Some(a), Some(b)) = (entry.decl_name.as_deref(), partner.decl_name.as_deref()) else {
+        return false;
+    };
+    if entry.file_idx != partner.file_idx {
+        return are_parallel_decl_names(Some(a), Some(b));
+    }
+    if entry.decl_surface != partner.decl_surface {
+        return false;
+    }
+    if entry.decl_surface.is_some() && are_variant_names(a, b) {
+        return true;
+    }
+    are_parallel_decl_names(Some(a), Some(b))
 }
 
 /// Two inline comments share an enclosing API surface when both sit inside a
@@ -830,23 +939,44 @@ fn strip_async_sync_suffix(name: &str) -> &str {
 /// `FlushDecompress::None`) or the same field on parallel request/response types
 /// (`Restrictions.minimum_amount` on a create-params type and its response type),
 /// never a botched copy-paste of one member onto a sibling within one owner.
-fn are_parallel_owned_members(
-    a_name: Option<&str>,
-    a_owner: Option<&str>,
-    b_name: Option<&str>,
-    b_owner: Option<&str>,
-) -> bool {
-    let (Some(a_owner), Some(b_owner)) = (a_owner, b_owner) else {
-        return false;
-    };
-    a_owner != b_owner && are_parallel_decl_names(a_name, b_name)
+fn are_parallel_owned_members(a: &CommentEntry, b: &CommentEntry) -> bool {
+    owners_are_distinct(a, b)
+        && are_parallel_decl_names(a.decl_name.as_deref(), b.decl_name.as_deref())
+}
+
+/// The two comments document members of two *different* owners.
+///
+/// A named owner is compared by name. When neither side has one, the only owner
+/// that still counts is an unnamed member block: `omit(keys)` and
+/// `omit(keys, message)` each return an inline `{ … }` carrying the same
+/// documented member, and two distinct literals are two distinct owners exactly
+/// as two named interfaces are. Every *named* owner-less shape — a class body, a
+/// Rust `impl` or `mod` body — deliberately stays undecided, so a same-named
+/// member declared under two of them keeps flagging.
+fn owners_are_distinct(a: &CommentEntry, b: &CommentEntry) -> bool {
+    match (a.decl_owner.as_deref(), b.decl_owner.as_deref()) {
+        (Some(a_owner), Some(b_owner)) => a_owner != b_owner,
+        (None, None) => matches!(
+            (&a.decl_surface, &b.decl_surface),
+            (Some(ApiSurface::Unnamed(a_block)), Some(ApiSurface::Unnamed(b_block)))
+                if a.file_idx != b.file_idx || a_block != b_block
+        ),
+        _ => false,
+    }
 }
 
 /// `root` is `name` with a trailing `_<suffix>` appended at a `_` boundary, and
 /// `root` itself spans enough segments to be a distinctive shared root.
 fn is_variant_suffix_of(root: &str, name: &str) -> bool {
-    name.strip_prefix(root).is_some_and(|rest| rest.starts_with('_'))
+    is_suffixed_variant(root, name)
         && root.split('_').filter(|s| !s.is_empty()).count() >= MIN_VARIANT_ROOT_SEGMENTS
+}
+
+/// `root` is `name` with a trailing `_<suffix>` appended at a `_` boundary
+/// (`captures_iter` ⊂ `captures_iter_at`), with no requirement on the root's
+/// length.
+fn is_suffixed_variant(root: &str, name: &str) -> bool {
+    name.strip_prefix(root).is_some_and(|rest| rest.starts_with('_'))
 }
 
 fn extract_entries(
@@ -897,15 +1027,23 @@ fn extract_entries(
             continue;
         }
         let prefix_key = prefix.join("\u{1}");
+        let references = group
+            .stripped
+            .split_whitespace()
+            .filter_map(reference_token)
+            .map(str::to_lowercase)
+            .collect();
         entries.push(CommentEntry {
             file_idx,
             line: group.line,
             column: group.column,
             span: (group.start_byte, group.end_byte - group.start_byte),
             words,
+            references,
             prefix_key,
             decl_name: group.decl_name,
             decl_owner: group.decl_owner,
+            decl_surface: group.decl_surface,
             enclosing_decl_name: group.enclosing_decl_name,
         });
     }
@@ -924,6 +1062,13 @@ fn extract_entries(
 /// same-named-item exemption reach a trait method mirrored by parallel sync and
 /// async crates (`embedded-hal` vs `embedded-hal-async`), and an interface
 /// method mirrored by the class that implements it.
+///
+/// A class property is spelled `public_field_definition` — the grammar's only
+/// class-property kind, covering `static`, `readonly`, `declare`, `accessor` and
+/// `#private` fields alike. It belongs here rather than in `is_named_member`
+/// because a class property is documented with a JSDoc block, so it must keep
+/// the doc-comment gate; that is what lets an interface's `property_signature`
+/// and the class field implementing it read as one documented item.
 fn is_named_declaration(kind: &str) -> bool {
     matches!(
         kind,
@@ -951,6 +1096,7 @@ fn is_named_declaration(kind: &str) -> bool {
             | "method_definition"
             | "method_signature"
             | "abstract_method_signature"
+            | "public_field_definition"
             | "abstract_class_declaration"
     )
 }
@@ -998,17 +1144,33 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     key.utf8_text(source).ok().map(str::to_owned)
 }
 
+/// What a comment documents, as resolved from the declaration it precedes.
+struct DocumentedDecl {
+    /// Name of the declaration or member.
+    name: Option<String>,
+    /// Name of the type that owns it, when it is a member of a named type.
+    owner: Option<String>,
+    /// The API surface it is a member of, when it is not at file top level.
+    surface: Option<ApiSurface>,
+}
+
+impl DocumentedDecl {
+    /// The comment documents nothing the rule can attribute.
+    const NOTHING: Self = Self { name: None, owner: None, surface: None };
+}
+
 /// The name of the declaration or member a comment immediately documents, plus
 /// the owning type's name when that declaration is an enum variant, a
 /// type/interface member, a Rust struct field, or a Rust trait-body item (an
-/// associated type or trait method, owned by its enclosing `trait`). Looks at the
+/// associated type or trait method, owned by its enclosing `trait`), plus the
+/// member block it belongs to. Looks at the
 /// comment's next named sibling, skipping attributes, decorators, and intervening
 /// non-doc comments (a `// @ts-expect-error` directive, or any plain `//` note) — such a
 /// line between a doc block and its declaration must not drop the attribution. A
 /// following *doc*-comment block is not skipped: it, not the block above it,
 /// documents the declaration.
-/// `(None, _)` for free-floating comments (no following declaration) or
-/// declarations without a recognizable name.
+/// `DocumentedDecl::NOTHING` for free-floating comments (no following
+/// declaration) or declarations without a recognizable name.
 ///
 /// A top-level declaration or enum variant is only documented by a *doc*-comment
 /// (`///`, `/**`, …) — a plain `//` above it is incidental prose, so a
@@ -1020,30 +1182,32 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
 /// declaration); it lets the caller treat same-named members of *different* owners
 /// as parallel API surfaces while a botched copy-paste within one owner
 /// (impossible — member names are unique per owner) cannot slip through.
-fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<String>, Option<String>) {
+fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> DocumentedDecl {
     let Some(mut sibling) = comment.next_named_sibling() else {
-        return (None, None);
+        return DocumentedDecl::NOTHING;
     };
     while matches!(sibling.kind(), "attribute_item" | "decorator")
         || (is_comment_kind(sibling.kind())
             && !is_doc_comment(&source[sibling.start_byte()..sibling.end_byte()]))
     {
         let Some(next) = sibling.next_named_sibling() else {
-            return (None, None);
+            return DocumentedDecl::NOTHING;
         };
         sibling = next;
     }
     // A TS/JS `export function parse() {}` nests the `function_declaration` under
-    // an `export_statement`; descend into the exported declaration so the name is
-    // read from `parse`, not lost at the wrapper.
-    if sibling.kind() == "export_statement" {
-        let Some(decl) = sibling.child_by_field_name("declaration") else {
-            return (None, None);
-        };
-        sibling = decl;
+    // an `export_statement`, and `export declare function parse(): void` nests it
+    // one level deeper still, under an `ambient_declaration`. Descend through both
+    // wrappers so the name is read from `parse`, not lost at the wrapper.
+    if let Some(inner) = unwrap_declaration(sibling) {
+        sibling = inner;
     }
     if is_named_member(sibling.kind()) {
-        return (member_name(sibling, source), enclosing_named_type(sibling, source));
+        return DocumentedDecl {
+            name: member_name(sibling, source),
+            owner: enclosing_named_type(sibling, source),
+            surface: api_surface(sibling, source),
+        };
     }
     let is_doc = is_doc_comment(&source[comment.start_byte()..comment.end_byte()]);
     if is_doc && sibling.kind() == "enum_variant" {
@@ -1051,10 +1215,14 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source).ok())
             .map(str::to_owned);
-        return (name, enclosing_enum_name(sibling, source));
+        return DocumentedDecl {
+            name,
+            owner: enclosing_enum_name(sibling, source),
+            surface: api_surface(sibling, source),
+        };
     }
     if !is_doc || !is_named_declaration(sibling.kind()) {
-        return (None, None);
+        return DocumentedDecl::NOTHING;
     }
     // A computed key (`[expr](): …`, reachable on a `method_signature` or a
     // `method_definition`) names nothing stable to mirror across files — its text
@@ -1070,7 +1238,84 @@ fn documented_decl_name(comment: tree_sitter::Node, source: &[u8]) -> (Option<St
     // transits to an unnamed container and resolves to `None`, so same-named
     // members of two owners become a parallel-owned pair while a top-level
     // copy-paste stays owner-less.
-    (name, enclosing_named_type(sibling, source))
+    DocumentedDecl {
+        name,
+        owner: enclosing_named_type(sibling, source),
+        surface: api_surface(sibling, source),
+    }
+}
+
+/// The declaration hidden inside a TS wrapper node, or `None` when `node` is not
+/// a wrapper. `export function f() {}` wraps the `function_declaration` in an
+/// `export_statement` (reachable through its `declaration` field);
+/// `declare function f(): void` wraps it in an `ambient_declaration`, which
+/// carries no fields at all — its declaration is simply its first named child of
+/// a declaration kind. `export declare function f(): void` nests both.
+fn unwrap_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let inner = match node.kind() {
+        "export_statement" => node.child_by_field_name("declaration")?,
+        "ambient_declaration" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor).find(|c| is_named_declaration(c.kind()))?
+        }
+        _ => return None,
+    };
+    // `export declare function f()` needs both unwraps, in that order.
+    Some(unwrap_declaration(inner).unwrap_or(inner))
+}
+
+/// Member-block kinds: the node whose children are the members of one type,
+/// trait, impl, module, or object. A declaration whose parent (past the
+/// `export`/`declare` wrappers) is one of these is a member of that block; a
+/// file-top-level declaration's parent is the file node, so it has no block.
+const MEMBER_BLOCK_KINDS: &[&str] = &[
+    // TS / JS
+    "class_body",
+    "interface_body",
+    "object_type",
+    "object",
+    // Rust
+    "declaration_list",
+    "field_declaration_list",
+    "enum_variant_list",
+];
+
+/// The `ApiSurface` `decl` is a member of, or `None` when it sits at file top
+/// level. The surface is read from the block's *owner* — the `impl`'s type, the
+/// `class`'s name — so the several `impl` blocks a Rust type is usually split
+/// across resolve to one surface.
+fn api_surface(decl: tree_sitter::Node, source: &[u8]) -> Option<ApiSurface> {
+    let mut block = decl.parent()?;
+    while matches!(block.kind(), "export_statement" | "ambient_declaration") {
+        block = block.parent()?;
+    }
+    if !MEMBER_BLOCK_KINDS.contains(&block.kind()) {
+        return None;
+    }
+    let unnamed = || ApiSurface::Unnamed(block.start_byte());
+    let Some(owner) = block.parent() else {
+        return Some(unnamed());
+    };
+    // An `impl` names its surface by the type it is implemented on; every other
+    // block-carrying construct names it directly.
+    let name = match owner.kind() {
+        "impl_item" => owner.child_by_field_name("type").and_then(base_type_name),
+        _ => owner.child_by_field_name("name"),
+    };
+    Some(
+        name.and_then(|n| n.utf8_text(source).ok())
+            .map_or_else(unnamed, |text| ApiSurface::Named(text.to_owned())),
+    )
+}
+
+/// The bare type name inside a possibly-generic type node — `Summary` from
+/// `Summary<NoColor<W>>`, by descending the leftmost `type` field until a plain
+/// identifier is reached.
+fn base_type_name(mut node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    while !matches!(node.kind(), "type_identifier" | "identifier" | "scoped_type_identifier") {
+        node = node.child_by_field_name("type")?;
+    }
+    Some(node)
 }
 
 /// The name of the `enum_item` enclosing a variant node, via its
@@ -1154,15 +1399,16 @@ fn collect_raw_comments(tree: &tree_sitter::Tree, source: &[u8]) -> Vec<RawComme
             let start = node.start_byte();
             let end = node.end_byte();
             let is_line = source[start..end].starts_with(b"//");
-            let (decl_name, decl_owner) = documented_decl_name(node, source);
+            let documented = documented_decl_name(node, source);
             out.push(RawComment {
                 start_byte: start,
                 end_byte: end,
                 row: node.start_position().row,
                 col: node.start_position().column,
                 is_line,
-                decl_name,
-                decl_owner,
+                decl_name: documented.name,
+                decl_owner: documented.owner,
+                decl_surface: documented.surface,
                 enclosing_decl_name: enclosing_decl_name(node, source),
                 // A doc-comment inside a `macro_rules!` body is a template that
                 // cannot be lifted out, so it is skipped through the same guard
@@ -1201,10 +1447,15 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
             // run (the one directly above the declaration).
             let mut decl_name = c.decl_name.clone();
             let mut decl_owner = c.decl_owner.clone();
+            let mut decl_surface = c.decl_surface.clone();
             let mut texts = vec![first_text.to_string()];
             let mut cfg_conditional = c.cfg_conditional;
             let mut j = i + 1;
-            while let Some(n) = raws.get(j) {
+            // A trailing comment labels the code on its own line, so it never
+            // joins a run: its scope ends with its line. Starting the run on one
+            // closes the group immediately.
+            let starts_on_trailing = is_trailing_comment(source, c.start_byte);
+            while let Some(n) = raws.get(j).filter(|_| !starts_on_trailing) {
                 if !(n.is_line && n.col == col && n.row == last_row + 1) {
                     break;
                 }
@@ -1213,12 +1464,20 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 if line_is_marker(n_text) != group_is_marker {
                     break;
                 }
+                // Column-aligned trailing labels satisfy the same-column,
+                // next-row test as well as a prose run does, so the boundary has
+                // to be tested explicitly or a column of one-word field names
+                // merges into a pseudo-paragraph long enough to clear `min_words`.
+                if is_trailing_comment(source, n.start_byte) {
+                    break;
+                }
                 texts.push(n_text.to_string());
                 cfg_conditional |= n.cfg_conditional;
                 last_row = n.row;
                 end_byte = n.end_byte;
                 decl_name = n.decl_name.clone();
                 decl_owner = n.decl_owner.clone();
+                decl_surface = n.decl_surface.clone();
                 j += 1;
             }
             groups.push(CommentGroup {
@@ -1229,6 +1488,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 stripped: texts.join(" "),
                 decl_name,
                 decl_owner,
+                decl_surface,
                 // Every line of a contiguous `//` run shares one enclosing scope,
                 // so the first line's enclosing function names the whole block.
                 enclosing_decl_name: c.enclosing_decl_name.clone(),
@@ -1244,6 +1504,7 @@ fn merge_groups(raws: &[RawComment], source: &str) -> Vec<CommentGroup> {
                 stripped: strip_block(&source[c.start_byte..c.end_byte]),
                 decl_name: c.decl_name.clone(),
                 decl_owner: c.decl_owner.clone(),
+                decl_surface: c.decl_surface.clone(),
                 enclosing_decl_name: c.enclosing_decl_name.clone(),
                 cfg_conditional: c.cfg_conditional,
             });
@@ -1277,12 +1538,38 @@ fn strip_block(raw: &str) -> String {
         .join(" ")
 }
 
+/// The comment's words, lowercased, with each URL or path kept whole.
+///
+/// A reference is one thing the comment names, so it counts as one word. Split on
+/// every non-alphanumeric character instead, a URL becomes a dozen tokens of
+/// which only the last one or two carry the identity — and since similarity here
+/// is measured on the shared *opening*, any family of references under one base
+/// then scores near 1.0 whatever they actually point at.
 fn normalize_words(stripped: &str) -> Vec<String> {
-    stripped
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect()
+    let mut words = Vec::new();
+    for token in stripped.split_whitespace() {
+        match reference_token(token) {
+            Some(reference) => words.push(reference.to_lowercase()),
+            None => words.extend(
+                token
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| !w.is_empty())
+                    .map(str::to_lowercase),
+            ),
+        }
+    }
+    words
+}
+
+/// The URL or path inside a whitespace-separated token, stripped of the
+/// punctuation that surrounds it in prose. `None` when the token names no
+/// reference. Shares `reference_kind`'s classification so "what is one word" and
+/// "what is a citation target" cannot drift apart.
+fn reference_token(raw: &str) -> Option<&str> {
+    let core = raw.trim_matches(|c: char| {
+        !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':')
+    });
+    reference_kind(raw).map(|_| core.trim_end_matches('.'))
 }
 
 /// A comment whose normalized words are *every one* a purely numeric integer
@@ -1733,7 +2020,7 @@ pub trait Input {
             .children(&mut cursor)
             .find(|n| is_comment_kind(n.kind()))
             .expect("snippet has a leading comment");
-        documented_decl_name(comment, source.as_bytes()).0
+        documented_decl_name(comment, source.as_bytes()).name
     }
 
     #[test]
@@ -2303,22 +2590,27 @@ export type VueCalProps = {
         // exported function with the same `/** */` JSDoc are parallel API
         // implementations, not a copy-paste smell.
         let dir = tempfile::tempdir().unwrap();
-        let doc = "\
-/**
- * Encrypts four blocks in-place and in parallel using the fixsliced representation.
- */
-export function aes128Encrypt(rkeys: number, blocks: number): number { return rkeys ^ blocks; }
-";
-        let a = write(&dir, "backend-wasm.ts", doc);
-        let b = write(&dir, "backend-node.ts", doc);
+        let doc = |name: &str| {
+            format!(
+                "/**\n                 * Encrypts four blocks in-place and in parallel using the fixsliced\n                 * representation of the expanded round keys handed to it.\n                 */\n                 export function {name}(rkeys: number, blocks: number): number {{ return rkeys ^ blocks; }}\n"
+            )
+        };
+        let a = write(&dir, "backend-wasm.ts", &doc("aes128Encrypt"));
+        let b = write(&dir, "backend-node.ts", &doc("aes128Encrypt"));
         assert!(run(&[&a, &b]).is_empty(), "same-named TS parallel-impl JSDoc must not flag");
+        // The name is what earns the exemption, and the block is long enough to
+        // reach it: the same JSDoc over an unrelated export still flags.
+        let c = write(&dir, "backend-deno.ts", &doc("hashPassword"));
+        assert_eq!(run(&[&a, &c]).len(), 1, "an unrelated export still flags");
     }
 
     #[test]
-    fn still_flags_intra_file_duplicate_doc_on_same_decl_name() {
-        // The exemption is cross-file only: two same-named functions in one file
-        // (e.g. a botched copy-paste before renaming) with identical docs is still
-        // a smell. Distinct files filler keeps the run from being a single-file noop.
+    fn ignores_repeated_doc_on_one_declaration_name_in_one_scope() {
+        // One name repeated in one scope is one item declared several times — the
+        // shape TypeScript overload signatures take, and the shape Rust's own
+        // name resolution forbids outright. Each such declaration needs its own
+        // doc block, so the repetition is not a copy-paste. Distinct files filler
+        // keeps the run from being a single-file noop.
         let dir = tempfile::tempdir().unwrap();
         let doc = "\
 /// Fully-fixsliced AES-128 decryption (the InvShiftRows is completely omitted).
@@ -2328,9 +2620,7 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
 ";
         let a = write(&dir, "a.rs", &format!("{doc}\n{doc}"));
         let b = write(&dir, "filler.rs", "pub fn z() {}\n");
-        let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "intra-file duplicate doc on same name is still a smell");
-        assert!(diags[0].path.ends_with("a.rs"));
+        assert!(run(&[&a, &b]).is_empty(), "one name in one scope is one documented item");
     }
 
     #[test]
@@ -2672,14 +2962,12 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
     }
 
     #[test]
-    fn overload_run_in_one_owner_clears_only_through_a_cross_file_partner() {
-        // The top-level parallel-declaration exemption is cross-file only, so an
-        // overload run repeating one JSDoc inside a single owner flags on its own
-        // and clears once a same-named partner in another file joins the scan — and
-        // only when that partner sorts earlier, because entries are ordered by
-        // `(path, line)` and the longest-common-prefix search keeps the first of
-        // equal candidates. The verdict depends on what else is in the scan, and on
-        // its name. Filed as #8373.
+    fn overload_run_in_one_owner_is_exempt_whatever_else_is_scanned() {
+        // Two readings of one run of overload signatures. It is exempt on its own
+        // (#8210: one name in one scope is one item, and TypeScript has no syntax
+        // for sharing a JSDoc block across its signatures), and — the point of
+        // #8373 — that verdict does not move when an unrelated file joins the scan
+        // or when a same-named partner sorts before or after it.
         let dir = tempfile::tempdir().unwrap();
         let iface = write(
             &dir,
@@ -2691,26 +2979,15 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             ),
         );
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
-        assert_eq!(
-            run(&[&iface, &filler]).len(),
-            1,
-            "an overload run alone has no cross-file partner and flags"
-        );
+        assert!(run(&[&iface, &filler]).is_empty(), "an overload run documents one item");
         let implementation = format!(
             "export class Implementation {{\n{CLEAR_DATABASE_DOC}\
              clearDatabase(a: string): this {{\n    return this\n}}\n}}\n"
         );
         let early = write(&dir, "Early.ts", &implementation);
-        assert!(
-            run(&[&iface, &early]).is_empty(),
-            "the run clears through an earlier-sorting same-named partner"
-        );
+        assert!(run(&[&iface, &early]).is_empty(), "an earlier same-named partner changes nothing");
         let late = write(&dir, "ZLate.ts", &implementation);
-        assert_eq!(
-            run(&[&iface, &late]).len(),
-            1,
-            "the same partner, sorting later, never becomes the run's partner"
-        );
+        assert!(run(&[&iface, &late]).is_empty(), "nor does a later-sorting one");
     }
 
     #[test]
@@ -3328,6 +3605,587 @@ fn split_to(&mut self, at: usize) {
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "free-floating duplicate inline comment is still a smell");
         assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    // The valibot JSDoc block from #8210, long enough to clear `min_words`.
+    const MIN_VALUE_DOC: &str = "\
+/**
+ * Builds a minimum value validation action for numeric datasets.
+ *
+ * @param requirement The minimum value the input must reach.
+ *
+ * @returns A min value action.
+ */
+";
+
+    #[test]
+    fn ignores_ambient_declare_function_jsdoc_across_files_issue_8210() {
+        // Regression (#8210): `export declare function` nests its
+        // `function_signature` under an `ambient_declaration` inside the
+        // `export_statement`. Only the outer wrapper used to be unwrapped, so the
+        // signature named nothing and every exemption keyed on a declaration name
+        // died. The `.d.ts` spelling and the implemented spelling must agree.
+        let dir = tempfile::tempdir().unwrap();
+        let ambient = format!("{MIN_VALUE_DOC}export declare function maxValue<T>(r: T): T;\n");
+        let a = write(&dir, "one.ts", &ambient);
+        let b = write(&dir, "two.ts", &ambient);
+        assert!(run(&[&a, &b]).is_empty(), "an ambient declaration is a named declaration");
+
+        let implemented = format!("{MIN_VALUE_DOC}export function maxValue<T>(r: T): T {{ return r }}\n");
+        let c = write(&dir, "three.ts", &implemented);
+        let d = write(&dir, "four.ts", &implemented);
+        assert!(run(&[&c, &d]).is_empty(), "control: the implemented spelling was already clean");
+    }
+
+    #[test]
+    fn ignores_overload_signature_jsdoc_on_async_sync_twins_issue_8210() {
+        // #7044's sync/async twin exemption expressed as overload signatures: the
+        // JSDoc sits on a `function_signature`, and the two names differ only by
+        // the camelCase `Async` suffix.
+        let dir = tempfile::tempdir().unwrap();
+        let twin = |name: &str| {
+            format!(
+                "{MIN_VALUE_DOC}export function {name}<T>(r: T): T;\n\
+                 export function {name}<T>(r: T, m?: string): T {{ return r }}\n"
+            )
+        };
+        let a = write(&dir, "one.ts", &twin("maxValue"));
+        let b = write(&dir, "two.ts", &twin("maxValueAsync"));
+        assert!(run(&[&a, &b]).is_empty(), "overloads of sync/async twins must not flag");
+    }
+
+    #[test]
+    fn ignores_overload_run_of_one_top_level_function_issue_8210() {
+        // Two overload signatures of one exported function in one file. They share
+        // a name and a scope, so they are one item declared twice — and TypeScript
+        // resolves the doc per selected signature, so neither block can be dropped.
+        let dir = tempfile::tempdir().unwrap();
+        let overloads = format!(
+            "{MIN_VALUE_DOC}export function minValue<T>(requirement: T): T;\n\
+             {MIN_VALUE_DOC}export function minValue<T, M>(requirement: T, message: M): T;\n\
+             export function minValue<T, M>(requirement: T, message?: M): T {{ return requirement }}\n"
+        );
+        let a = write(&dir, "minValue.ts", &overloads);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        assert!(run(&[&a, &filler]).is_empty(), "an overload run documents one function");
+    }
+
+    #[test]
+    fn still_flags_copy_pasted_jsdoc_on_two_top_level_functions_issue_8210() {
+        // Over-exclusion guard: the same JSDoc on two *differently named* exported
+        // functions in one file is the rule's core case and must survive the
+        // intra-file relaxation.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "{MIN_VALUE_DOC}export function minValue<T>(r: T): T {{ return r }}\n\
+             {MIN_VALUE_DOC}export function trimStart(r: string): string {{ return r }}\n"
+        );
+        let a = write(&dir, "actions.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "one JSDoc on two unrelated functions is a copy-paste");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_plain_comment_copy_pasted_above_two_overload_signatures_issue_8210() {
+        // The relaxation keeps the doc-comment gate: a plain `//` above a
+        // declaration is incidental prose, never its documentation, so a
+        // copy-pasted one still flags even between two signatures of one function.
+        let dir = tempfile::tempdir().unwrap();
+        let note = "// Kept here because the runner reads the requirement before the message is resolved at call time.\n";
+        let content = format!(
+            "{note}export function minValue<T>(r: T): T;\n\
+             {note}export function minValue<T, M>(r: T, m: M): T;\n\
+             export function minValue<T, M>(r: T, m?: M): T {{ return r }}\n"
+        );
+        let a = write(&dir, "minValue.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "a plain `//` earns no declaration attribution");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    // valibot's `'~run'` member doc, carried by every schema's inline result type.
+    const RUN_MEMBER_DOC: &str = "    /**
+     * Parses unknown input values against this schema definition.
+     *
+     * @param dataset The input dataset to parse.
+     * @param config The parse configuration.
+     *
+     * @returns The typed output dataset.
+     */
+";
+
+    #[test]
+    fn ignores_same_named_member_docs_under_two_anonymous_type_literals_issue_8210() {
+        // Two overloads of `omit` each return an inline `{ … }` declaring the same
+        // `'~run'` member. A type literal has no name to expose as an owner, but
+        // two *distinct* literals are two distinct owners just as two named
+        // interfaces are, which is what the owned-member exemption actually tests.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "export declare function omit<T>(keys: readonly string[]): {{\n\
+             {RUN_MEMBER_DOC}  readonly run: (dataset: unknown) => unknown\n}};\n\
+             export declare function omit<T, M>(keys: readonly string[], message: M): {{\n\
+             {RUN_MEMBER_DOC}  readonly run: (dataset: unknown) => unknown\n}};\n"
+        );
+        let a = write(&dir, "omit.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        assert!(run(&[&a, &filler]).is_empty(), "two type literals are two owners");
+    }
+
+    #[test]
+    fn still_flags_copy_pasted_member_docs_inside_one_anonymous_type_literal_issue_8210() {
+        // Over-exclusion guard: two members of the *same* literal share an owner,
+        // so the exemption cannot reach them.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "export declare function omit<T>(keys: readonly string[]): {{\n\
+             {RUN_MEMBER_DOC}  readonly run: (dataset: unknown) => unknown\n\
+             {RUN_MEMBER_DOC}  readonly validate: (dataset: unknown) => unknown\n}};\n"
+        );
+        let a = write(&dir, "omit.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "two members of one literal are a copy-paste");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    // arrow-rs's `Date32Type` temporal API doc, repeated per `add_*` entry point.
+    const ADD_YEAR_MONTHS_DOC: &str = "    /// Adds the given IntervalYearMonthType to an arrow Date32Type value.
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation here
+    /// * `delta` - The interval to add to that date value
+";
+
+    #[test]
+    fn ignores_fallible_twin_docs_in_one_impl_block_issue_8059() {
+        // Regression (#8059): apache/arrow-rs documents `add_year_months` and its
+        // infallible/fallible twin `add_year_months_opt` in one `impl` block. Each
+        // is a public entry point that rustc's `missing_docs` requires a doc on,
+        // and rustdoc renders one page per item, so neither can cite the other.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "impl Date32Type {{\n\
+             {ADD_YEAR_MONTHS_DOC}    pub fn add_year_months(date: i32, delta: i32) -> i32 {{ date + delta }}\n\
+             {ADD_YEAR_MONTHS_DOC}    pub fn add_year_months_opt(date: i32, delta: i32) -> Option<i32> {{ Some(date) }}\n}}\n"
+        );
+        let a = write(&dir, "types.rs", &content);
+        let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(run(&[&a, &filler]).is_empty(), "an `_opt` twin in one impl must not flag");
+
+        // The same doc over an unrelated sibling is a copy-paste, which is what
+        // shows the emptiness above comes from the name relation and not from the
+        // fixture falling short of the word gate.
+        let unrelated = content.replace("add_year_months_opt", "format_iso_week");
+        let b = write(&dir, "unrelated.rs", &unrelated);
+        assert_eq!(run(&[&b, &filler]).len(), 1, "an unrelated sibling still flags");
+    }
+
+    // ripgrep's `Matcher` trait doc, repeated across its iteration entry points.
+    const CAPTURES_ITER_DOC: &str = "    /// Executes the given function over successive non-overlapping matches
+    /// in `haystack` with capture groups extracted from each single match. If no
+    /// match exists, then the given function is never called anywhere.
+";
+
+    #[test]
+    fn ignores_variant_named_siblings_of_one_api_surface_issue_8311() {
+        // Regression (#8311): `captures_iter` and `captures_iter_at` are two entry
+        // points to one operation declared side by side in one `trait`. Their
+        // shared root is two segments — under `MIN_VARIANT_ROOT_SEGMENTS` — but the
+        // floor exists to rule out *unrelated* declarations, and two members of one
+        // surface are related by construction.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "pub trait Matcher {{\n\
+             {CAPTURES_ITER_DOC}    fn captures_iter(&self, haystack: &[u8]) -> bool;\n\
+             {CAPTURES_ITER_DOC}    fn captures_iter_at(&self, haystack: &[u8], at: usize) -> bool;\n\
+             {CAPTURES_ITER_DOC}    fn try_captures_iter_at(&self, haystack: &[u8], at: usize) -> bool;\n}}\n"
+        );
+        let a = write(&dir, "lib.rs", &content);
+        let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(run(&[&a, &filler]).is_empty(), "variant-named trait siblings must not flag");
+
+        let unrelated = content.replace("captures_iter_at", "shutdown_pool");
+        let b = write(&dir, "unrelated.rs", &unrelated);
+        assert_eq!(run(&[&b, &filler]).len(), 2, "an unrelated sibling still flags");
+    }
+
+    #[test]
+    fn ignores_variant_named_siblings_split_across_impl_blocks_issue_8311() {
+        // One type's methods are routinely split across several `impl` blocks to
+        // vary the trait bounds — ripgrep's `Summary::new` and
+        // `Summary::new_no_color`. The surface is the type, not the block, so the
+        // two are still siblings.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// Return a summary printer with a default configuration that writes the
+    /// matches it is given to the writer it was handed at construction time.
+";
+        let content = format!(
+            "impl<W: WriteColor> Summary<W> {{\n{doc}    pub fn new(wtr: W) -> Summary<W> {{ Summary }}\n}}\n\
+             impl<W: io::Write> Summary<NoColor<W>> {{\n{doc}    pub fn new_no_color(wtr: W) -> Summary<NoColor<W>> {{ Summary }}\n}}\n"
+        );
+        let a = write(&dir, "summary.rs", &content);
+        let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
+        assert!(run(&[&a, &filler]).is_empty(), "two impl blocks of one type are one surface");
+
+        // Two *different* types are two surfaces, so the same pair of docs flags.
+        let split = content.replace("impl<W: io::Write> Summary<NoColor<W>>", "impl<W: io::Write> Standard<NoColor<W>>");
+        let b = write(&dir, "printers.rs", &split);
+        assert_eq!(run(&[&b, &filler]).len(), 1, "two types are two surfaces");
+    }
+
+    #[test]
+    fn still_flags_unrelated_names_as_siblings_of_one_impl_issue_8311() {
+        // Over-exclusion guard: sibling membership alone must not exempt. Two
+        // unrelated methods of one type carrying one rationale is the copy-paste
+        // the rule exists to report.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "    /// Reads the configuration file from disk and returns its parsed contents to
+    /// the caller, or an error describing precisely why the file could not be read.
+";
+        let content = format!(
+            "impl Runner {{\n{doc}    pub fn load_config(&self) -> u8 {{ 0 }}\n\
+             {doc}    pub fn spawn_worker_pool(&self) -> u8 {{ 1 }}\n}}\n"
+        );
+        let a = write(&dir, "runner.rs", &content);
+        let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "unrelated sibling names are still a copy-paste");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_short_rooted_variant_names_outside_any_api_surface_issue_8311() {
+        // The floor is waived for siblings only. The same two names as free
+        // functions at file top level have no surface to make them relatives, so
+        // `find` / `find_at` keeps flagging — and moving them into one trait
+        // clears it, which is what shows the surface is the discriminator.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Locates the leftmost match this matcher accepts inside the haystack given to
+/// it, or nothing at all when that haystack holds no match for the pattern.
+";
+        let free = format!("{doc}pub fn find(h: &[u8]) -> bool {{ true }}\n{doc}pub fn find_at(h: &[u8], at: usize) -> bool {{ true }}\n");
+        let a = write(&dir, "free.rs", &free);
+        let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "a one-segment root is too generic outside a surface");
+
+        let indented = doc.replace("///", "    ///");
+        let owned = format!(
+            "pub trait Matcher {{\n{indented}    fn find(&self, h: &[u8]) -> bool;\n\
+             {indented}    fn find_at(&self, h: &[u8], at: usize) -> bool;\n}}\n"
+        );
+        let b = write(&dir, "trait.rs", &owned);
+        assert!(run(&[&b, &filler]).is_empty(), "the same pair inside one trait is exempt");
+    }
+
+    // typeorm's `QueryRunner.isReleased` contract, stated on the interface and
+    // again on every class that implements it.
+    const IS_RELEASED_DOC: &str = "    /**
+     * Indicates if the connection for this query runner has been released.
+     * Once it is released, the query runner cannot run any more queries.
+     */
+";
+
+    #[test]
+    fn ignores_interface_property_jsdoc_mirrored_by_class_field_issue_8372() {
+        // Regression (#8372): the interface spells the member as a
+        // `property_signature`, which earns attribution, and the implementing
+        // class spells it as a `public_field_definition`, which did not — so the
+        // interface reported its own implementation as a near-duplicate.
+        let dir = tempfile::tempdir().unwrap();
+        let iface = write(
+            &dir,
+            "QueryRunner.ts",
+            &format!("export interface QueryRunner {{\n{IS_RELEASED_DOC}  readonly isReleased: boolean\n}}\n"),
+        );
+        let class = write(
+            &dir,
+            "MongoQueryRunner.ts",
+            &format!("export class MongoQueryRunner implements QueryRunner {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n"),
+        );
+        assert!(run(&[&iface, &class]).is_empty(), "a class field mirroring its interface must not flag");
+    }
+
+    #[test]
+    fn still_flags_duplicate_jsdoc_on_differently_named_class_fields_issue_8372() {
+        // Over-exclusion guard: the attribution is name-keyed, so the same JSDoc
+        // over two *differently named* fields is real duplication.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(
+            &dir,
+            "A.ts",
+            &format!("export class A {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n"),
+        );
+        let b = write(
+            &dir,
+            "B.ts",
+            &format!("export class B {{\n{IS_RELEASED_DOC}  isDetached = false\n}}\n"),
+        );
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "one JSDoc on two unrelated fields is a copy-paste");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_same_named_class_field_docs_across_classes_in_one_file_issue_8372() {
+        // The asymmetry the fix deliberately keeps: two classes are two surfaces,
+        // and a class body grants no owner, so a same-named field documented under
+        // each of them in one file stays reportable — the boundary #6870 drew for
+        // class methods, unchanged for class properties.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "export class MongoQueryRunner {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n\
+             export class SqlQueryRunner {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n"
+        );
+        let a = write(&dir, "runners.ts", &content);
+        let filler = write(&dir, "filler.ts", "export const x = 1;\n");
+        let diags = run(&[&a, &filler]);
+        assert_eq!(diags.len(), 1, "two classes in one file are two surfaces");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_plain_comment_above_a_class_field_issue_8372() {
+        // A class property goes through the declaration path, which keeps the
+        // doc-comment gate: a plain `//` above it earns no attribution.
+        let dir = tempfile::tempdir().unwrap();
+        let note = "  // Kept false until the pool hands the connection back, because the caller may still hold a cursor open.\n";
+        let a = write(&dir, "A.ts", &format!("export class A {{\n{note}  isReleased = false\n}}\n"));
+        let b = write(&dir, "B.ts", &format!("export class B {{\n{note}  isReleased = false\n}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "a plain `//` above a field earns no attribution");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn attributes_jsdoc_through_an_export_statement_issue_7125() {
+        // `export function` / `export class` nest their declaration under an
+        // `export_statement`; the name must be read through it.
+        assert_eq!(
+            first_comment_decl_name("/**\n * Caches the resolved schema output for later.\n */\nexport function cache() {}\n").as_deref(),
+            Some("cache")
+        );
+        assert_eq!(
+            first_comment_decl_name("/**\n * Caches the resolved schema output for later.\n */\nexport class Cache {}\n").as_deref(),
+            Some("Cache")
+        );
+    }
+
+    #[test]
+    fn ignores_exported_sync_async_twin_jsdoc_issue_7125() {
+        // End-to-end for the same seam, with a JSDoc past the word gate so the
+        // comment actually reaches the exemption: valibot's `cache` / `cacheAsync`
+        // twins, each `export function`.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/**
+ * Produces a cached copy of the given schema so repeated parses reuse the work
+ * already done for the first dataset the schema was handed.
+ *
+ * @param schema The schema to cache.
+ *
+ * @returns The cached schema.
+ */
+";
+        let a = write(&dir, "cache.ts", &format!("{doc}export function cache(schema: number) {{ return schema }}\n"));
+        let b = write(&dir, "cacheAsync.ts", &format!("{doc}export function cacheAsync(schema: number) {{ return schema }}\n"));
+        assert!(run(&[&a, &b]).is_empty(), "exported sync/async twins must not flag");
+
+        // The same doc on an unrelated export flags, so the block does clear the
+        // word gate and the exemption is what produced the emptiness above.
+        let c = write(&dir, "purge.ts", &format!("{doc}export function purgeEntries(schema: number) {{ return schema }}\n"));
+        assert_eq!(run(&[&a, &c]).len(), 1, "an unrelated export still flags");
+    }
+
+    #[test]
+    fn verdict_does_not_move_when_an_unrelated_third_file_joins_issue_8373() {
+        // Regression (#8373): the partner used to be an argmax over the whole
+        // bucket, so a third file could re-partner entries in files that had not
+        // changed and silence a genuine copy-paste. `b_unrelated.rs` shares the doc
+        // of `a_mirror.rs` / `z.rs` while documenting an unrelated function, so the
+        // pair must be reported whether or not `a_mirror.rs` is scanned.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Fully-fixsliced AES-128 decryption with the InvShiftRows step completely
+/// omitted so the four blocks are decrypted in place and in parallel across the
+/// whole fixsliced state.
+";
+        let mirror = write(&dir, "src/a_mirror.rs", &format!("{doc}pub fn aes128_decrypt(x: u8) -> u8 {{ x }}\n"));
+        let unrelated = write(&dir, "src/b_unrelated.rs", &format!("{doc}pub fn totally_unrelated_helper(x: u8) -> u8 {{ x }}\n"));
+        let z = write(&dir, "src/z.rs", &format!("{doc}pub fn aes128_decrypt(y: u8) -> u8 {{ y }}\n"));
+
+        let with_mirror = run(&[&mirror, &unrelated, &z]);
+        assert!(
+            with_mirror.iter().any(|d| d.path.ends_with("b_unrelated.rs")),
+            "the unrelated copy is reported against the mirror it duplicates"
+        );
+        assert!(
+            with_mirror.iter().any(|d| d.path.ends_with("z.rs")),
+            "and the mirror is reported against the unrelated copy it also duplicates"
+        );
+
+        let without_mirror = run(&[&unrelated, &z]);
+        assert_eq!(without_mirror.len(), 1, "removing an unrelated file does not silence the pair");
+        assert!(without_mirror[0].path.ends_with("z.rs"));
+    }
+
+    #[test]
+    fn cross_file_mirror_stays_exempt_without_an_unrelated_copy_issue_8373() {
+        // Control for the quantifier change: a bucket holding only a legitimate
+        // mirror set reports nothing, so the new "any earlier member" reading did
+        // not turn every mirror into a diagnostic.
+        let dir = tempfile::tempdir().unwrap();
+        let doc = "\
+/// Fully-fixsliced AES-128 decryption with the InvShiftRows step completely
+/// omitted so the four blocks are decrypted in place and in parallel across the
+/// whole fixsliced state.
+pub fn aes128_decrypt(x: u8) -> u8 { x }
+";
+        let a = write(&dir, "src/a_mirror.rs", doc);
+        let b = write(&dir, "src/z.rs", doc);
+        assert!(run(&[&a, &b]).is_empty(), "a pure mirror set stays exempt");
+    }
+
+    // jiff's provenance pointers: one Rust test per upstream test262 case.
+    fn tc39_pointer(case: &str) -> String {
+        format!(
+            "/// Source: https://github.com/tc39/test262/blob/29c6f7028a683b8259140e7d6352ae0ca6448a85/test/built-ins/Temporal/Duration/prototype/round/{case}.js\n\
+             pub fn {} () -> bool {{ true }}\n",
+            case.replace('-', "_")
+        )
+    }
+
+    #[test]
+    fn ignores_provenance_pointers_to_distinct_upstream_files_issue_8236() {
+        // Regression (#8236): three pointers to three different upstream files.
+        // Split on every non-alphanumeric character a URL becomes ~17 tokens of
+        // which only the last differs, so a family of references under one base
+        // scored near 1.0 on a measure that only reads the opening. Counted as one
+        // word each, the comments carry one word of prose and never reach the gate.
+        let dir = tempfile::tempdir().unwrap();
+        let content = format!(
+            "{}{}{}",
+            tc39_pointer("balance-negative-result"),
+            tc39_pointer("balance-subseconds"),
+            tc39_pointer("calendar-possibly-required")
+        );
+        let a = write(&dir, "src/lib.rs", &content);
+        let filler = write(&dir, "src/filler.rs", "pub fn x() {}\n");
+        assert!(run(&[&a, &filler]).is_empty(), "distinct provenance pointers are not copies");
+    }
+
+    #[test]
+    fn distinct_url_citations_do_not_report_against_each_other_issue_8236() {
+        // The same three references carried by prose long enough to clear the word
+        // gate. Two comments that cite different targets are two different
+        // pointers: there is no one comment to keep, so the remedy the diagnostic
+        // proposes cannot apply.
+        let dir = tempfile::tempdir().unwrap();
+        let rationale = |case: &str| {
+            format!(
+                "// Ported verbatim from the upstream conformance suite so the rounding \
+                 behaviour stays pinned to the specification text it came from originally: \
+                 https://github.com/tc39/test262/blob/29c6f70/round/{case}.js\n\
+                 pub fn {} () -> bool {{ true }}\n",
+                case.replace('-', "_")
+            )
+        };
+        let a = write(&dir, "a.rs", &rationale("balance-negative-result"));
+        let b = write(&dir, "b.rs", &rationale("balance-subseconds"));
+        assert!(run(&[&a, &b]).is_empty(), "different targets are different pointers");
+
+        let same = rationale("balance-subseconds");
+        let c = write(&dir, "c.rs", &same);
+        let d = write(&dir, "d.rs", &same);
+        let diags = run(&[&c, &d]);
+        assert_eq!(diags.len(), 1, "the same rationale citing the same target is a copy");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    #[test]
+    fn still_flags_duplicate_prose_differing_only_in_its_last_word_issue_8236() {
+        // Over-exclusion guard: the reference test is about *references*. Ordinary
+        // prose that differs only in its final word is still a copy-paste.
+        let dir = tempfile::tempdir().unwrap();
+        let rationale = |last: &str| {
+            format!("// Ported verbatim from the upstream conformance suite so the rounding behaviour stays pinned to the specification text it came from {last}.\nexport const x = 1;\n")
+        };
+        let a = write(&dir, "a.ts", &rationale("originally"));
+        let b = write(&dir, "b.ts", &rationale("initially"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "prose differing in one word is still a copy");
+        assert!(diags[0].message.contains("Near-duplicate comment"));
+    }
+
+    // The ttf-parser sbix fixture from #8159: a column of one-word field labels.
+    fn sbix_fixture(offsets: [&str; 3]) -> String {
+        format!(
+            "pub fn fixture() -> Vec<u32> {{\n    vec![\n        \
+             0x0001, // version\n        0x0000, // flags\n        \
+             0x0001, // number of strikes\n        0x000c, // strike offset for the first strike\n        \
+             0x0014, // pixels per em\n        0x0048, // pixels per inch\n        \
+             {}, // glyph data offset for glyph zero\n        \
+             {}, // glyph data offset for glyph one\n        \
+             {}, // glyph data offset for glyph two\n    ]\n}}\n",
+            offsets[0], offsets[1], offsets[2]
+        )
+    }
+
+    #[test]
+    fn ignores_column_aligned_trailing_field_labels_issue_8159() {
+        // Regression (#8159): a column of trailing labels satisfies the
+        // same-column, next-row merge test as well as a prose run does, so nine
+        // one-to-six-word field names were glued into one 35-word pseudo-paragraph
+        // that then cleared `min_words`. No comment in either fixture is a
+        // duplicate; the rule manufactured the length it flagged.
+        let dir = tempfile::tempdir().unwrap();
+        let a = write(&dir, "lib.rs", &sbix_fixture(["0x0010", "0x0030", "0x003a"]));
+        let b = write(&dir, "other.rs", &sbix_fixture(["0x0010", "0x001a", "0x0024"]));
+        assert!(run(&[&a, &b]).is_empty(), "a column of field labels is not a paragraph");
+
+        // The same nine texts written as a standalone run still merge into one
+        // block and still flag: only the trailing/standalone boundary changed, and
+        // the words were always enough to clear the gate.
+        let labels: String = [
+            "version",
+            "flags",
+            "number of strikes",
+            "strike offset for the first strike",
+            "pixels per em",
+            "pixels per inch",
+            "glyph data offset for glyph zero",
+            "glyph data offset for glyph one",
+            "glyph data offset for glyph two",
+        ]
+        .iter()
+        .map(|label| format!("    // {label}\n"))
+        .collect();
+        let c = write(&dir, "c.rs", &format!("pub fn c() {{\n{labels}}}\n"));
+        let d = write(&dir, "d.rs", &format!("pub fn d() {{\n{labels}}}\n"));
+        assert_eq!(run(&[&c, &d]).len(), 1, "a standalone run of the same lines still flags");
+    }
+
+    #[test]
+    fn trailing_comment_does_not_merge_with_the_standalone_line_below_it() {
+        // The two boundaries the merge has to respect, checked through the word
+        // gate: neither run reaches `min_words` unless the trailing label is glued
+        // to the standalone prose under it.
+        let dir = tempfile::tempdir().unwrap();
+        let block = "let x = 1; // pixels per em\n\
+             // and the remaining strike offsets follow in ascending order below\n\
+             // so a reader can diff two fixtures by their offsets alone here\n";
+        let a = write(&dir, "a.rs", &format!("pub fn a() {{\n{block}}}\n"));
+        let b = write(&dir, "b.rs", &format!("pub fn b() {{\n{block}}}\n"));
+        let diags = run(&[&a, &b]);
+        assert_eq!(diags.len(), 1, "the standalone run flags on its own words");
+        // The reported group starts at the standalone run, not at the label above.
+        assert_eq!(diags[0].line, 3);
     }
 
     #[test]
