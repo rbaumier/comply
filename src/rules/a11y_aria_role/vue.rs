@@ -2,7 +2,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{attr_value, extract_elements, is_vue_file};
+use crate::rules::vue_template_helpers::{
+    attr_value, bound_attr_expr, extract_elements, is_vue_file,
+};
 
 const VALID_ROLES: &[&str] = &[
     "alert",
@@ -88,28 +90,10 @@ const VALID_ROLES: &[&str] = &[
 /// is not a string literal (identifier, call, member access) are skipped, so
 /// they never produce a diagnostic.
 fn role_candidates(attrs: &str) -> Vec<String> {
-    if is_static_role(attrs)
-        && let Some(value) = attr_value(attrs, "role")
-    {
+    if let Some(value) = attr_value(attrs, "role") {
         return vec![value.to_string()];
     }
-    if let Some(expr) = attr_value(attrs, ":role").or_else(|| attr_value(attrs, "v-bind:role")) {
-        return extract_string_literals(expr);
-    }
-    Vec::new()
-}
-
-/// True when the element carries a static `role="..."` rather than a dynamic
-/// `:role` / `v-bind:role` binding. Guards against `attr_value`'s substring
-/// match treating the expression of a dynamic binding as a literal role.
-fn is_static_role(attrs: &str) -> bool {
-    let Some(pos) = attrs.find("role=") else {
-        return false;
-    };
-    // The char immediately before `role=` decides the form: the `:` of `:role`
-    // or `v-bind:role` marks a dynamic binding; anything else (whitespace, or
-    // the start of the string) is the static attribute.
-    !attrs[..pos].ends_with(':')
+    bound_attr_expr(attrs, "role").map_or_else(Vec::new, extract_string_literals)
 }
 
 /// Extract every string literal reachable in a bound `:role` expression as a
@@ -295,6 +279,23 @@ mod tests {
         let source =
             "<template>\n  <div :role=\"editable ? 'textbox' : ''\"></div>\n</template>";
         assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn skips_data_role() {
+        // #8424: `data-role` is a data attribute; its value is not an ARIA role.
+        let source = "<template>\n  <div :data-role=\"x\"></div>\n</template>";
+        assert!(run(source).is_empty());
+        let source = "<template>\n  <div data-role=\"banana\"></div>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn validates_a_role_binding_carrying_a_modifier_chain() {
+        let source = "<template>\n  <div :role.camel=\"'banana'\"></div>\n</template>";
+        let d = run(source);
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("banana"));
     }
 
     #[test]

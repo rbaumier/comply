@@ -2,9 +2,12 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::vue_template_helpers::{
-    attr_value, collect_attr_names, extract_elements, has_attr, is_vue_file,
-};
+use crate::rules::vue_template_helpers::{attr_value, extract_elements, has_attr, is_vue_file};
+
+/// The two spellings of an anchor's target: `href` in HTML, `xlink:href` on the
+/// `<a>` of an inline SVG. Both make the element a real link, so both satisfy
+/// this rule and both are read for the `#` / `javascript:` checks.
+const HREF_ATTRS: [&str; 2] = ["href", "xlink:href"];
 
 #[derive(Debug)]
 pub struct Check;
@@ -19,13 +22,14 @@ impl TextCheck for Check {
             if elem.tag != "a" {
                 continue;
             }
-            if !has_attr(elem.attrs, "href") {
+            if !HREF_ATTRS.iter().any(|name| has_attr(elem.attrs, name)) {
                 // An explicit non-link ARIA role overrides the anchor's implicit
                 // link semantics (WAI-ARIA): a static `role` other than "link"
                 // repurposes the element as a button/tab/menuitem, so `href` is
                 // not required. A dynamic `:role` has no statically known value
-                // and stays flagged.
-                if let Some(role) = static_role(elem.attrs)
+                // and stays flagged. An empty `role=""` overrides nothing.
+                if let Some(role) = attr_value(elem.attrs, "role")
+                    && !role.is_empty()
                     && role != "link"
                 {
                     continue;
@@ -40,7 +44,10 @@ impl TextCheck for Check {
                 ));
                 continue;
             }
-            if let Some(val) = attr_value(elem.attrs, "href") {
+            if let Some(val) = HREF_ATTRS
+                .iter()
+                .find_map(|name| attr_value(elem.attrs, name))
+            {
                 if val == "#" {
                     diagnostics.push(Diagnostic::at_offset(
                         std::sync::Arc::clone(&ctx.path_arc),
@@ -64,23 +71,6 @@ impl TextCheck for Check {
             }
         }
         diagnostics
-    }
-}
-
-/// Value of a standalone static `role` attribute (`role="…"`/`role='…'`), or
-/// `None` when no static `role` is present.
-///
-/// `attr_value` matches the `role="` substring, which also occurs inside a Vue
-/// binding (`:role`, `v-bind:role`) or another attribute name (`data-role`),
-/// none of which carry a statically known role. `collect_attr_names` tokenizes
-/// the attribute names, so requiring an exact `role` name keeps the exemption
-/// to a static `role` and leaves a bound `:role` flagged. An empty value
-/// (`role=""`) is not a role override and yields `None`.
-fn static_role(attrs: &str) -> Option<&str> {
-    if collect_attr_names(attrs).iter().any(|name| *name == "role") {
-        attr_value(attrs, "role").filter(|role| !role.is_empty())
-    } else {
-        None
     }
 }
 
@@ -160,6 +150,30 @@ mod tests {
     fn flags_missing_href_with_empty_role() {
         // An empty `role=""` is not a role override → still flagged.
         let source = "<template>\n  <a role=\"\">Empty</a>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn allows_svg_anchor_linking_through_xlink_href() {
+        // #8424: an SVG `<a>` links through `xlink:href`, which is a distinct
+        // attribute from `href` and no longer answers a query for it. The
+        // element is a genuine link, so this rule reads both spellings rather
+        // than reporting a missing target.
+        let source = "<template>\n  <svg><a xlink:href=\"#icon\"><rect /></a></svg>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_svg_anchor_whose_xlink_href_is_a_fragment_placeholder() {
+        // The `#` placeholder is the same anti-pattern in either spelling.
+        let source = "<template>\n  <svg><a xlink:href=\"#\"><rect /></a></svg>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
+
+    #[test]
+    fn flags_missing_href_with_data_role() {
+        // `data-role` is a data attribute, not an ARIA role override.
+        let source = "<template>\n  <a data-role=\"button\">Menu</a>\n</template>";
         assert_eq!(run(source).len(), 1);
     }
 }

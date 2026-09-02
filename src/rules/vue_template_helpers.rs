@@ -126,18 +126,14 @@ impl VueElement<'_> {
     /// reaches the element through a `v-bind` spread or a dynamic argument: no
     /// attribute span exists and the element is the narrowest construct that
     /// certainly does.
-    ///
-    /// TODO(#8424): [`has_attr`] matches a name inside a longer one — `scope`
-    /// inside `slot-scope` — so a caller can ask for an attribute the element
-    /// does not write. Until that is fixed the fallback absorbs those too.
     #[must_use]
     pub fn attr_span(&self, name: &str) -> (usize, usize) {
         attr_spans(self.attrs)
-            .find(|(attr, _)| *attr == name)
-            .or_else(|| attr_spans(self.attrs).find(|(attr, _)| attr_binds(attr, name)))
+            .find(|attr| attr.name == name)
+            .or_else(|| attr_spans(self.attrs).find(|attr| attr_binds(attr.name, name)))
             .map_or_else(
                 || self.span(),
-                |(attr, at)| (self.attrs_offset + at, attr.len()),
+                |attr| (self.attrs_offset + attr.offset, attr.name.len()),
             )
     }
 }
@@ -318,19 +314,16 @@ fn is_tag_boundary(bytes: &[u8], idx: usize) -> bool {
     }
 }
 
-/// Check if an element's attributes contain a specific attribute name.
+/// True when the element writes the attribute `attr_name`, either plainly
+/// (`scope="row"`, or valueless as in `<input autofocus>`) or through a
+/// `v-bind` (`:scope`, `v-bind:scope`, with or without a modifier chain).
 ///
-/// Handles both `attr="value"` and bare `attr` forms.
-/// Also checks subsequent lines for multi-line tags via the raw source.
+/// Names come from [`attr_spans`], so the match is on the whole name: a longer
+/// attribute that merely ends with `attr_name` (`slot-scope`, `data-role`,
+/// `xlink:href`) answers no, and so does a name that only appears inside
+/// another attribute's quoted value (`placeholder="autofocus"`).
 pub fn has_attr(attrs: &str, attr_name: &str) -> bool {
-    // Look for `attr_name=` or bare `attr_name` (followed by space, > or /)
-    if attrs.contains(&format!("{attr_name}="))
-        || attrs.contains(&format!("{attr_name} "))
-        || attrs.ends_with(attr_name)
-    {
-        return true;
-    }
-    false
+    attr_spans(attrs).any(|attr| attr.name == attr_name || attr_binds(attr.name, attr_name))
 }
 
 /// True when `attrs` binds the Vue event `event` (e.g. `"click"`), in either
@@ -355,26 +348,30 @@ fn binding_matches(attr_name: &str, prefix: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
-/// Extract the value of a specific attribute from an attributes string.
+/// The literal text an attribute spelled exactly `attr_name` carries between
+/// its quotes, or `None` when the element does not write that attribute, writes
+/// it without a value, or writes only a `v-bind` form of it.
 ///
-/// Returns the unquoted value, or `None` if the attribute is not found.
+/// The name is matched as spelled, so `attr_value(attrs, "role")` reads
+/// `role="dialog"` and never `data-role` nor `:role` — a binding carries a
+/// JavaScript expression, not a value, and is read through [`bound_attr_expr`].
 pub fn attr_value<'a>(attrs: &'a str, attr_name: &str) -> Option<&'a str> {
-    let pattern = format!("{attr_name}=\"");
-    if let Some(pos) = attrs.find(&pattern) {
-        let start = pos + pattern.len();
-        let rest = &attrs[start..];
-        let end = rest.find('"')?;
-        return Some(&rest[..end]);
-    }
-    // Try single quotes
-    let pattern = format!("{attr_name}='");
-    if let Some(pos) = attrs.find(&pattern) {
-        let start = pos + pattern.len();
-        let rest = &attrs[start..];
-        let end = rest.find('\'')?;
-        return Some(&rest[..end]);
-    }
-    None
+    attr_spans(attrs)
+        .find(|attr| attr.name == attr_name)
+        .and_then(|attr| attr.value)
+}
+
+/// The expression a `v-bind` of `attr_name` carries: `:name="expr"` or
+/// `v-bind:name="expr"`, with or without a modifier chain (`:name.camel`).
+/// `None` when the element writes no such binding.
+///
+/// The result is JavaScript source, not an attribute value: `:role="x ? 'a' :
+/// 'b'"` yields the whole ternary. A caller comparing it to a literal is
+/// asserting on the expression's spelling, not on what it evaluates to.
+pub fn bound_attr_expr<'a>(attrs: &'a str, attr_name: &str) -> Option<&'a str> {
+    attr_spans(attrs)
+        .find(|attr| attr_binds(attr.name, attr_name))
+        .and_then(|attr| attr.value)
 }
 
 /// Maximum number of lines scanned after the opening tag while looking for
@@ -491,14 +488,27 @@ pub fn is_obsolete_html_tag(tag: &str) -> bool {
 
 /// Collect all attribute names from an attributes string.
 pub fn collect_attr_names(attrs: &str) -> Vec<&str> {
-    attr_spans(attrs).map(|(name, _)| name).collect()
+    attr_spans(attrs).map(|attr| attr.name).collect()
 }
 
-/// Iterate every attribute name in an attributes string together with its byte
-/// offset inside `attrs`. Rules anchoring a diagnostic on the attribute it names
-/// read the offset here rather than searching for the name again, so the
-/// reported position is the one the tokenizer matched.
-fn attr_spans(attrs: &str) -> impl Iterator<Item = (&str, usize)> {
+/// One attribute of an opening tag, as it is written in the source.
+struct Attr<'a> {
+    /// The name exactly as spelled, directive prefix and modifier chain
+    /// included: `role`, `data-role`, `:role.camel`, `@click.stop`.
+    name: &'a str,
+    /// Byte offset of [`Self::name`] inside the attributes string it was read
+    /// from. Rules anchoring a diagnostic on the attribute they name read this
+    /// rather than searching for the name again, so the reported position is
+    /// the one the tokenizer matched.
+    offset: usize,
+    /// The text between the quotes of `name="…"` / `name='…'`. `None` for a
+    /// valueless attribute (`disabled`), for an unquoted value
+    /// (`align=center`), and for a value whose closing quote is missing.
+    value: Option<&'a str>,
+}
+
+/// Iterate every attribute an attributes string writes, in source order.
+fn attr_spans(attrs: &str) -> impl Iterator<Item = Attr<'_>> {
     let bytes = attrs.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -524,9 +534,9 @@ fn attr_spans(attrs: &str) -> impl Iterator<Item = (&str, usize)> {
             {
                 i += 1;
             }
-            let name = (i > name_start).then(|| (&attrs[name_start..i], name_start));
+            let name = (i > name_start).then(|| &attrs[name_start..i]);
 
-            // Skip = and value
+            let mut value = None;
             if i < len && bytes[i] == b'=' {
                 i += 1;
                 // Skip whitespace
@@ -536,25 +546,41 @@ fn attr_spans(attrs: &str) -> impl Iterator<Item = (&str, usize)> {
                 if i < len && (bytes[i] == b'"' || bytes[i] == b'\'') {
                     let quote = bytes[i];
                     i += 1;
+                    let value_start = i;
                     while i < len && bytes[i] != quote {
                         i += 1;
                     }
+                    // A missing closing quote means the tag was never
+                    // terminated: report no value rather than a run of source
+                    // that happens to reach the end of the attributes.
                     if i < len {
+                        value = Some(&attrs[value_start..i]);
                         i += 1; // skip closing quote
+                    }
+                } else {
+                    // An unquoted value ends at the next whitespace (HTML5
+                    // §13.1.2.3). Consuming it here is what keeps `<td
+                    // align=center>` from answering a query for `center`: it is
+                    // the value of `align`, not an attribute of its own.
+                    while i < len && !bytes[i].is_ascii_whitespace() {
+                        i += 1;
                     }
                 }
             }
 
             // Guarantee forward progress: when the cursor is parked on a bare
-            // delimiter that no branch above consumed (a `>` or `/`, e.g. from
-            // an unquoted value like `src=/a.css`), advance past it so the scan
-            // always terminates instead of spinning in place.
+            // delimiter that no branch above consumed (a `>` or `/`), advance
+            // past it so the scan always terminates instead of spinning.
             if i == name_start && i < len {
                 i += 1;
             }
 
-            if name.is_some() {
-                return name;
+            if let Some(name) = name {
+                return Some(Attr {
+                    name,
+                    offset: name_start,
+                    value,
+                });
             }
         }
     })
@@ -972,13 +998,44 @@ mod tests {
         assert!(!hardcodes_column_one("start_column: 1,"));
     }
 
+    /// The `(name, offset, value)` triples an attributes string tokenizes to,
+    /// flattened so a test can compare the whole list in one assertion.
+    fn tokenized(attrs: &str) -> Vec<(&str, usize, Option<&str>)> {
+        attr_spans(attrs)
+            .map(|attr| (attr.name, attr.offset, attr.value))
+            .collect()
+    }
+
     #[test]
-    fn attr_spans_reports_each_name_offset() {
-        let attrs = "class=\"foo\" aria-label=\"bar\" disabled";
+    fn attr_spans_reports_each_name_offset_and_value() {
+        let attrs = "class=\"foo\" aria-label='bar' disabled";
         assert_eq!(
-            attr_spans(attrs).collect::<Vec<_>>(),
-            vec![("class", 0), ("aria-label", 12), ("disabled", 29)]
+            tokenized(attrs),
+            vec![
+                ("class", 0, Some("foo")),
+                ("aria-label", 12, Some("bar")),
+                ("disabled", 29, None),
+            ]
         );
+    }
+
+    #[test]
+    fn attr_spans_reads_an_unquoted_value_as_a_value_not_a_name() {
+        // `<td align=center>` writes one attribute, not two: `center` is the
+        // value of `align`, so a rule asking for a `center` attribute — or for
+        // the obsolete `<center>` semantics — must not be answered by it. The
+        // value itself stays unreported: only quoted values are read.
+        assert_eq!(tokenized("align=center"), vec![("align", 0, None)]);
+        assert!(!has_attr("align=center", "center"));
+        assert_eq!(attr_value("align=center", "align"), None);
+    }
+
+    #[test]
+    fn attr_spans_reports_no_value_when_the_closing_quote_is_missing() {
+        // An unterminated value means the tag was never closed; reporting the
+        // run of source up to the end would invent a value the author didn't
+        // write.
+        assert_eq!(tokenized("role=\"button"), vec![("role", 0, None)]);
     }
 
     #[test]
@@ -986,6 +1043,46 @@ mod tests {
         assert!(has_attr("alt=\"hello\" src=\"x.png\"", "alt"));
         assert!(has_attr("src=\"x.png\" alt=\"\"", "alt"));
         assert!(!has_attr("src=\"x.png\"", "alt"));
+    }
+
+    #[test]
+    fn has_attr_rejects_a_name_that_is_only_a_suffix() {
+        // #8424: the repros. Each of these attributes merely ends with the
+        // queried name and carries unrelated semantics.
+        assert!(!has_attr("slot-scope=\"props\"", "scope"));
+        assert!(!has_attr(":data-role=\"x\"", "role"));
+        assert!(!has_attr(":aria-autocomplete=\"mode\"", "autocomplete"));
+        // A name inside another attribute's quoted value is not an attribute.
+        assert!(!has_attr("placeholder=\"autofocus\"", "autofocus"));
+    }
+
+    #[test]
+    fn has_attr_matches_the_plain_and_bound_spellings() {
+        for attrs in [
+            "scope=\"row\"",
+            "scope",
+            ":scope=\"s\"",
+            "v-bind:scope=\"s\"",
+            ":scope.camel=\"s\"",
+            // A valueless attribute on its own line of a multi-line tag: the
+            // separator is a newline, not the space a substring scan looked for.
+            "class=\"x\"\n  scope\n  id=\"t\"",
+        ] {
+            assert!(has_attr(attrs, "scope"), "for {attrs}");
+        }
+    }
+
+    #[test]
+    fn has_attr_keeps_a_namespaced_attribute_distinct_from_its_local_name() {
+        // `xlink:href` and `xml:lang` are their own attributes, not the HTML
+        // `href` / `lang`. `a11y-anchor-is-valid` therefore accepts `xlink:href`
+        // explicitly (an SVG anchor is a real link), while `a11y-html-has-lang`
+        // rightly starts flagging `<html xml:lang="en">`: in a text/html
+        // document `xml:lang` alone does not set the language, `lang` is
+        // required (HTML5 §3.2.6.2).
+        assert!(!has_attr("xlink:href=\"#icon\"", "href"));
+        assert!(!has_attr("xml:lang=\"en\"", "lang"));
+        assert!(has_attr("xlink:href=\"#icon\"", "xlink:href"));
     }
 
     #[test]
@@ -1028,6 +1125,32 @@ mod tests {
         assert_eq!(attr_value("role=\"button\"", "role"), Some("button"));
         assert_eq!(attr_value("class='x' role='nav'", "role"), Some("nav"));
         assert_eq!(attr_value("class=\"x\"", "role"), None);
+    }
+
+    #[test]
+    fn attr_value_reads_the_plain_spelling_only() {
+        // A binding carries a JS expression, not a value; a longer name is a
+        // different attribute. Neither may be served under the plain name.
+        assert_eq!(attr_value(":role=\"expr\"", "role"), None);
+        assert_eq!(attr_value("v-bind:role=\"expr\"", "role"), None);
+        assert_eq!(attr_value("data-role=\"x\"", "role"), None);
+        // A valueless attribute is present but has nothing to read.
+        assert!(has_attr("autofocus", "autofocus"));
+        assert_eq!(attr_value("autofocus", "autofocus"), None);
+    }
+
+    #[test]
+    fn bound_attr_expr_reads_every_binding_form() {
+        for attrs in [
+            ":role=\"expr\"",
+            "v-bind:role=\"expr\"",
+            ":role.camel=\"expr\"",
+        ] {
+            assert_eq!(bound_attr_expr(attrs, "role"), Some("expr"), "for {attrs}");
+        }
+        // The static spelling and a longer name are not bindings of `role`.
+        assert_eq!(bound_attr_expr("role=\"button\"", "role"), None);
+        assert_eq!(bound_attr_expr(":data-role=\"expr\"", "role"), None);
     }
 
     #[test]
@@ -1085,9 +1208,11 @@ mod tests {
     fn collect_attr_names_terminates_on_unquoted_value_with_slash() {
         // An unquoted value containing `/` must not spin the tokenizer forever.
         assert_eq!(collect_attr_names("href=/"), vec!["href"]);
+        // The unquoted value is consumed whole, so only the two real attribute
+        // names come back — no `.` or `a.css` fragment of the path.
         assert_eq!(
             collect_attr_names("src=./a.css module"),
-            vec!["src", ".", "a.css", "module"]
+            vec!["src", "module"]
         );
     }
 

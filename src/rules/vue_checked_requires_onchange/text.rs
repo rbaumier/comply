@@ -22,7 +22,9 @@ impl TextCheck for Check {
             if elem.tag != "input" {
                 continue;
             }
-            if !has_attr(elem.attrs, "checked") && !has_attr(elem.attrs, ":checked") {
+            // `has_attr` already covers the bound spellings (`:checked`,
+            // `v-bind:checked`) alongside the static one.
+            if !has_attr(elem.attrs, "checked") {
                 continue;
             }
             // Vue write-back handlers on the input itself (@change/@input, in
@@ -175,6 +177,20 @@ mod tests {
         // wrap it, so the input is still frozen.
         let src = "<template>\n  <label @click=\"a\">text</label>\n  <input :checked=\"f()\" type=\"checkbox\" />\n</template>";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_v_bind_checked_long_form() {
+        // `v-bind:checked` is the same uncontrolled input as `:checked`.
+        let src = "<template>\n  <input type=\"checkbox\" v-bind:checked=\"on\" />\n</template>";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn skips_an_attribute_merely_ending_in_checked() {
+        // `data-checked` sets no checked state on the input.
+        let src = "<template>\n  <input type=\"checkbox\" data-checked=\"1\" />\n</template>";
+        assert!(run(src).is_empty());
     }
 
     #[test]
