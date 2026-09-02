@@ -628,6 +628,28 @@ libfuzzer-sys = "0.4"
     }
 
     #[test]
+    fn repro_8340_todo_gated_by_debug_assertions_not_flagged() {
+        // rbaumier/comply#8340 — this rule is now the sole owner of `todo!`
+        // (`rust-no-todo-macro` was a strict subset and is retired), so the
+        // `#[cfg(debug_assertions)]` exemption must cover `todo!` the same way
+        // it covers `panic!`: the item is compiled out of the release artifact.
+        let source =
+            "#[cfg(debug_assertions)]\npub fn c() -> u8 {\n    todo!(\"debug-only path\")\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8340_todo_flagged_exactly_once() {
+        // rbaumier/comply#8340 — one `todo!` construct, one diagnostic. The
+        // retired `rust-no-todo-macro` doubled every report at the same
+        // line:column; this rule owns the macro and reports it once.
+        let source = "pub fn a() -> u8 {\n    todo!(\"not supported\")\n}";
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule_id.as_ref(), "rust-no-panic-macros");
+    }
+
+    #[test]
     fn flags_panic_gated_by_not_debug_assertions() {
         // `#[cfg(not(debug_assertions))]` ships in release — the panic can abort
         // production, so it must still flag.
