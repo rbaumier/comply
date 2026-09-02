@@ -18,15 +18,23 @@
 use crate::diagnostic::{Diagnostic, Severity};
 
 /// Return the method name of a call expression whose function is a
-/// `field_expression` (Rust's equivalent of `.method`). For non-method
-/// calls or generic call shapes returns `None`.
-fn method_name<'a>(call: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+/// `field_expression` (Rust's equivalent of `.method`), paired with the node
+/// that name comes from. For non-method calls or generic call shapes returns
+/// `None`.
+///
+/// The node travels with the name because it is the diagnostic's anchor: a
+/// `call_expression` span starts at the head of the receiver chain, and these
+/// calls are only ever reached through a builder chain.
+fn method_name<'t, 's>(
+    call: tree_sitter::Node<'t>,
+    source: &'s [u8],
+) -> Option<(&'s str, tree_sitter::Node<'t>)> {
     let func = call.child_by_field_name("function")?;
     if func.kind() != "field_expression" {
         return None;
     }
     let field = func.child_by_field_name("field")?;
-    field.utf8_text(source).ok()
+    Some((field.utf8_text(source).ok()?, field))
 }
 
 /// Iterate over the named argument nodes of a `call_expression`.
@@ -129,7 +137,7 @@ fn condition_references_runtime_value(condition: tree_sitter::Node) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    let Some(name) = method_name(node, source) else { return };
+    let Some((name, method_field)) = method_name(node, source) else { return };
 
     let is_violation = match name {
         "danger_accept_invalid_certs" | "danger_accept_invalid_hostnames" => {
@@ -158,16 +166,16 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
         return;
     }
 
-    let pos = node.start_position();
-    diagnostics.push(Diagnostic {
-        path: std::sync::Arc::clone(&ctx.path_arc),
-        line: pos.row + 1,
-        column: pos.column + 1,
-        rule_id: "no-unverified-certificate".into(),
-        message: "Disabled SSL certificate verification — enables MITM attacks.".into(),
-        severity: Severity::Error,
-        span: None,
-    });
+    // Which call disabled verification is the whole point of this diagnostic,
+    // so it anchors on the method name: two disabling calls in one builder
+    // chain share the chain head and would otherwise render as one finding twice.
+    diagnostics.push(Diagnostic::at_node(
+        std::sync::Arc::clone(&ctx.path_arc),
+        &method_field,
+        "no-unverified-certificate",
+        "Disabled SSL certificate verification — enables MITM attacks.".into(),
+        Severity::Error,
+    ));
 }
 
 
@@ -192,6 +200,38 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn anchors_each_disabling_call_of_a_builder_chain_on_its_own_method_name() {
+        // Regression for rbaumier/comply#8432 — which call disabled
+        // verification is the point of this diagnostic, yet both used to be
+        // reported at 2:5, the `reqwest::Client::builder()` chain head.
+        let source = r#"pub fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .build()
+        .unwrap()
+}
+"#;
+        let diags = run_on(source);
+        let mut positions: Vec<(usize, usize)> =
+            diags.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![(3, 10), (4, 10)]);
+        let mut names: Vec<&str> = diags
+            .iter()
+            .map(|d| {
+                let (offset, len) = d.span.expect("the anchor carries the method-name span");
+                &source[offset..offset + len]
+            })
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["danger_accept_invalid_certs", "danger_accept_invalid_hostnames"]
+        );
     }
 
     #[test]

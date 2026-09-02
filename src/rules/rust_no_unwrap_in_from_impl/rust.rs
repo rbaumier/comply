@@ -203,20 +203,20 @@ fn collect_unwraps_in(
             // so the unwrap is provably infallible at this point.
             && !preceded_by_is_none_guard(node, function, source)
         {
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "rust-no-unwrap-in-from-impl".into(),
-                message: format!(
+            // Anchor on the `unwrap`/`expect` name, not on `node`: a
+            // `call_expression` span starts at the head of the receiver chain,
+            // so two unwraps in one chain would report one shared position.
+            diagnostics.push(Diagnostic::at_node(
+                std::sync::Arc::clone(&ctx.path_arc),
+                &field,
+                "rust-no-unwrap-in-from-impl",
+                format!(
                     "`.{field_text}()` inside a `From` impl breaks the \
                      infallibility contract. Switch the impl to `TryFrom` \
                      so callers can handle the failure mode."
                 ),
-                severity: Severity::Error,
-                span: None,
-            });
+                Severity::Error,
+            ));
         }
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -1297,6 +1297,77 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Issue #8395: the arm carries `#[cfg(debug_assertions)]` as its own child,
+    /// so the `.unwrap()` inside it compiles out of release builds — exactly
+    /// what the exemption is for.
+    #[test]
+    fn allows_unwrap_in_a_cfg_debug_assertions_match_arm() {
+        let source = "\
+pub struct Wrapper(pub u8);
+
+impl From<Option<u8>> for Wrapper {
+    fn from(value: Option<u8>) -> Self {
+        match value {
+            #[cfg(debug_assertions)]
+            Some(_) => Wrapper(value.unwrap()),
+            _ => Wrapper(0),
+        }
+    }
+}
+";
+        assert!(run_on(source).is_empty());
+    }
+
+    /// …and the gate covers that arm alone: the same unwrap in the undecorated
+    /// neighbour ships in release and is still flagged.
+    #[test]
+    fn flags_unwrap_in_the_arm_beside_a_cfg_debug_assertions_arm() {
+        let source = "\
+pub struct Wrapper(pub u8);
+
+impl From<Option<u8>> for Wrapper {
+    fn from(value: Option<u8>) -> Self {
+        match value {
+            #[cfg(debug_assertions)]
+            Some(_) => Wrapper(0),
+            _ => Wrapper(value.unwrap()),
+        }
+    }
+}
+";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn anchors_each_unwrap_of_a_multi_line_chain_on_its_own_method_name() {
+        // Regression for rbaumier/comply#8432 — the enclosing `call_expression`
+        // starts at `Id(s`, so both unwraps used to be reported at 5:12, one
+        // finding rendered twice at a position holding no `unwrap` at all.
+        let source = r#"pub struct Id(u32);
+
+impl From<&str> for Id {
+    fn from(s: &str) -> Self {
+        Id(s
+            .split(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap())
+    }
+}
+"#;
+        let diags = run_on(source);
+        // The walk pops its stack in reverse, so compare as a set of positions.
+        let mut positions: Vec<(usize, usize)> =
+            diags.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![(8, 14), (10, 14)]);
+        for d in &diags {
+            let (offset, len) = d.span.expect("the anchor carries the method-name span");
+            assert_eq!(&source[offset..offset + len], "unwrap");
+        }
     }
 
     #[test]

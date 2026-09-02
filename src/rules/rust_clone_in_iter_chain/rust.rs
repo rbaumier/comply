@@ -55,9 +55,12 @@ impl AstCheck for Check {
         if !closure_is_clone_only(closure, source_bytes) {
             return;
         }
+        // Anchor on the `map` name, not on `node`: a `call_expression` span
+        // starts at the head of the receiver chain, so a multi-line chain would
+        // report a line that does not hold the `.map` the message names.
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
-            &node,
+            &field,
             "rust-clone-in-iter-chain",
             "`.map(|x| x.clone())` — use `.cloned()` (or `.copied()` for \
              `Copy` types) for clearer intent."
@@ -144,6 +147,25 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn anchors_on_the_map_of_a_multi_line_chain() {
+        // Regression for rbaumier/comply#8432 — the enclosing `call_expression`
+        // starts at `items`, so the diagnostic used to land on 2:5, a line that
+        // holds no `.map`.
+        let source = r#"pub fn b(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|x| x.clone())
+        .collect()
+}
+"#;
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (4, 10));
+        let (offset, len) = diags[0].span.expect("the anchor carries the method-name span");
+        assert_eq!(&source[offset..offset + len], "map");
     }
 
     #[test]

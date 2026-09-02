@@ -93,8 +93,10 @@ impl AstCheck for Check {
         let Some(func) = node.child_by_field_name("function") else {
             return;
         };
-        // We need `<receiver>.into_iter` as the function.
-        let (receiver, method) = match func.kind() {
+        // We need `<receiver>.into_iter` as the function. The `field` node
+        // travels along: it is the diagnostic's anchor, since `node`'s span
+        // starts at the head of the receiver chain.
+        let (receiver, method, method_field) = match func.kind() {
             "field_expression" => {
                 let value = func.child_by_field_name("value");
                 let field = func.child_by_field_name("field");
@@ -103,7 +105,7 @@ impl AstCheck for Check {
                 if name != "into_iter" {
                     return;
                 }
-                (value, name)
+                (value, name, field)
             }
             "generic_function" => {
                 // `.into_iter::<...>()` is not the typical form, skip.
@@ -145,7 +147,7 @@ impl AstCheck for Check {
         }
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
-            &node,
+            &method_field,
             "rust-collect-then-into-iter",
             format!(
                 "`.collect::<Vec<_>>().{method}()` round-trips through a \
@@ -656,6 +658,27 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn anchors_on_the_into_iter_of_a_multi_line_chain() {
+        // Regression for rbaumier/comply#8432 — the enclosing `call_expression`
+        // starts at `items`, so the diagnostic used to land on 2:5, a line that
+        // holds neither `.collect` nor `.into_iter`.
+        let source = r#"pub fn d(items: &[u32]) -> Vec<u32> {
+    items
+        .iter()
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect()
+}
+"#;
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (6, 10));
+        let (offset, len) = diags[0].span.expect("the anchor carries the method-name span");
+        assert_eq!(&source[offset..offset + len], "into_iter");
     }
 
     #[test]
