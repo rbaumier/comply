@@ -15,8 +15,12 @@
 //! No ancestor is exempt: the lock is just as replaceable as a struct field, a
 //! local, or the inner half of an `Arc<Mutex<bool>>`.
 //!
-//! Two escapes:
+//! Three escapes:
 //!
+//! - an atomic polyfill: a struct whose name starts with `Atomic` (tokio's
+//!   `AtomicU64 { inner: Mutex<u64> }` for targets without 64-bit atomics), or
+//!   a file that mentions `target_has_atomic` — the code is explicitly the
+//!   fallback for when the atomic the rule would suggest does not exist.
 //! - a file mentioning `Condvar` anywhere. There the mutex is the condvar's
 //!   companion — `Condvar::wait` takes the guard and needs a real lock to
 //!   release and reacquire — so the payload's shape says nothing about whether
@@ -57,6 +61,7 @@ crate::ast_check! { on ["generic_type"] prefilter = ["Mutex<", "RwLock<"] => |no
     let Some(atomic) = atomic_counterpart(primitive) else { return; };
 
     if file_uses_condvar(source) { return; }
+    if is_atomic_polyfill(node, source) { return; }
     if is_in_test_context(node, source) { return; }
 
     diagnostics.push(Diagnostic::at_node(
@@ -92,6 +97,26 @@ fn atomic_counterpart(primitive: &str) -> Option<&'static str> {
         .iter()
         .find(|(name, _)| *name == primitive)
         .map(|(_, atomic)| *atomic)
+}
+
+/// The lock IS the atomic on this target: a `struct Atomic…` built on a mutex,
+/// or a file gated on `target_has_atomic`, exists precisely because the atomic
+/// the diagnostic would name is unavailable there.
+fn is_atomic_polyfill(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if std::str::from_utf8(source).is_ok_and(|text| text.contains("target_has_atomic")) {
+        return true;
+    }
+    let mut cur = node.parent();
+    while let Some(parent) = cur {
+        if parent.kind() == "struct_item" {
+            return parent
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .is_some_and(|name| name.starts_with("Atomic"));
+        }
+        cur = parent.parent();
+    }
+    false
 }
 
 /// A `Condvar` anywhere in the file means some mutex is there to be handed to
@@ -141,7 +166,10 @@ mod tests {
 
     #[test]
     fn flags_mutex_usize_local() {
-        assert_eq!(run("fn f() { let c: Mutex<usize> = Mutex::new(0); }").len(), 1);
+        assert_eq!(
+            run("fn f() { let c: Mutex<usize> = Mutex::new(0); }").len(),
+            1
+        );
     }
 
     #[test]
@@ -167,6 +195,17 @@ mod tests {
         assert!(message("struct S { ready: Mutex<bool> }").contains("`AtomicBool`"));
         assert!(message("struct S { n: RwLock<usize> }").contains("`AtomicUsize`"));
         assert!(message("struct S { n: Mutex<u32> }").contains("`AtomicU32`"));
+    }
+
+    #[test]
+    fn allows_atomic_polyfill_struct() {
+        assert!(run("pub struct AtomicU64 { inner: Mutex<u64> }").is_empty());
+    }
+
+    #[test]
+    fn allows_file_gated_on_target_has_atomic() {
+        let src = "#[cfg(not(target_has_atomic = \"64\"))]\nstruct Counter { inner: Mutex<u64> }";
+        assert!(run(src).is_empty());
     }
 
     #[test]
