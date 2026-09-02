@@ -1,17 +1,20 @@
-//! no-mutation OXC backend — flag mutations on `const` bindings.
+//! no-mutation OXC backend — flag in-place mutating METHOD calls on a
+//! `const`-bound value (`arr.push(x)`, `Object.assign(obj, …)`).
+//!
+//! The assignment axis (`obj.prop = x`, `obj.prop++`) belongs to
+//! `no-property-mutation`, which owns `AssignmentExpression` and
+//! `UpdateExpression` outright — see the frontier test at the bottom of this
+//! file. Subscribing to a kind is what makes a rule speak on it, so not
+//! subscribing is how the frontier is enforced rather than asserted.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, expression_is_array, is_constant_index_expression,
-    is_get_context_call_binding, is_local_dispatch_table_binding, is_local_object_builder_binding,
-    is_locally_owned_array_binding, is_pinia_store_binding, is_react_display_name_assignment,
-    is_rtk_reducer_draft_param, is_typed_array_binding, is_valtio_proxy_binding,
-    is_vue_reactive_object_target, is_vue_ref_value_target, root_identifier_of_expr,
+    byte_offset_to_line_col, expression_is_array, is_call_ref_value_target,
+    is_locally_owned_array_binding, is_rtk_reducer_draft_param, is_valtio_proxy_binding,
+    is_vue_ref_value_target, root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{
-    AssignmentTarget, Expression, IdentifierReference, PropertyKey, VariableDeclarationKind,
-};
+use oxc_ast::ast::{Expression, PropertyKey, VariableDeclarationKind};
 use std::sync::Arc;
 
 const MUTATING_ARRAY_METHODS: &[&str] = &[
@@ -37,11 +40,7 @@ pub struct Check;
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[
-            AstType::AssignmentExpression,
-            AstType::UpdateExpression,
-            AstType::CallExpression,
-        ]
+        &[AstType::CallExpression]
     }
 
     fn run<'a>(
@@ -70,270 +69,142 @@ impl OxcCheck for Check {
         if is_inside_sentry_hook(node, semantic) {
             return;
         }
-        match node.kind() {
-            // obj.prop = x, obj.prop += x
-            AstKind::AssignmentExpression(assign) => {
-                // ref.current = ... (React useRef pattern)
-                if is_current_target(&assign.left) {
+        // The only kind this rule subscribes to: `arr.push(x)`,
+        // `Object.assign(obj, …)` — the mutating-CALL axis.
+        let AstKind::CallExpression(call) = node.kind() else {
+            return;
+        };
+        let Expression::StaticMemberExpression(member) = &call.callee else {
+            return;
+        };
+        let method = member.property.name.as_str();
+
+        // Object.assign(target, ...)
+        if OBJECT_MUTATOR_FUNCTIONS.contains(&method) {
+            if let Expression::Identifier(obj) = &member.object
+                && obj.name.as_str() == "Object"
+                && let Some(first_arg) = call.arguments.first()
+            {
+                // Skip `Object.assign(fn, { ...literal })` — attaching a
+                // static property to a function. JS has no immutable
+                // alternative; see rbaumier/comply#154.
+                if method == "assign" && is_assign_static_to_function(call, semantic) {
                     return;
                 }
-                // Component.displayName = "Component" (React naming convention)
-                if is_react_display_name_assignment(assign) {
-                    return;
-                }
-                // Vue 3 reactive ref: `count.value = x` drives reactivity. Also
-                // covers a `Ref<T>` a composable call returned
-                // (`const theme = useStorage(k, v); theme.value = x`).
-                if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
-                    && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
-                        || crate::oxc_helpers::is_call_ref_value_target(member, semantic))
-                {
-                    return;
-                }
-                // Vue 3 reactive() object: `state.n = x` is the idiomatic update.
-                if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
-                    && is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
-                // Pinia store instance: `store.count = x` writes reactive store
-                // state through the proxy the `useXStore()` factory returned — the
-                // documented Pinia state-write API, with no immutable alternative
-                // (parity with the `reactive()` object exemption above).
-                if let AssignmentTarget::StaticMemberExpression(member) = &assign.left
-                    && let Expression::Identifier(base) = &member.object
-                    && is_pinia_store_binding(base, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
-                // Vue 3 reactive ref array: `list.value[i] = x` writes an element of
-                // the deeply-reactive array a `ref([])` holds — the intended reactive
-                // update with no immutable alternative (reassigning a fresh array
-                // reallocates and drops the array's reactive identity). Parity with
-                // the exempt `list.value.push(…)` deep-write in the CallExpression arm
-                // and the `list.value = x` reassignment above; the computed member's
-                // `object` is the `<ref>.value` node passed to `is_vue_ref_value_target`.
-                if let AssignmentTarget::ComputedMemberExpression(member) = &assign.left
-                    && let Expression::StaticMemberExpression(inner) = &member.object
-                    && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
-                // TypedArray element write `buf[i] = v`: indexed assignment is the
-                // only way to populate a TypedArray (a fixed-length binary buffer
-                // with no immutable element-setter and no spread-then-build form).
-                if is_typed_array_element_target(&assign.left, semantic) {
-                    return;
-                }
-                // Sparse dispatch-table construction: `const handlers = [];
-                // handlers[0x01] = fn` builds a locally-owned lookup table by
-                // constant-index assignment — array construction, not mutation.
-                if is_dispatch_table_element_target(&assign.left, semantic) {
-                    return;
-                }
-                if let Some(id) = root_identifier_of_target(&assign.left)
-                    && (is_created_dom_element(id, semantic)
-                        || is_local_object_builder_binding(id, semantic)
-                        || is_rtk_reducer_draft_param(id, semantic)
-                        || is_valtio_proxy_binding(id, semantic)
-                        || is_get_context_call_binding(id, semantic))
-                {
-                    return;
-                }
-                let Some(root) = root_name_of_target(&assign.left) else {
-                    return;
+                let root = match first_arg.as_expression() {
+                    Some(Expression::Identifier(ident)) => Some(ident.name.as_str()),
+                    Some(expr) => root_name_of_expr(expr),
+                    None => None,
                 };
-                if is_declared_as_const(semantic, root) {
-                    report(diagnostics, ctx, assign.span.start, root, "Mutating property of");
+                if let Some(root) = root && is_declared_as_const(semantic, root) {
+                    report(diagnostics, ctx, call.span.start, root, "Mutating");
                 }
             }
-            // obj.count++, --obj.count
-            AstKind::UpdateExpression(update) => {
-                // Vue 3 reactive ref: `count.value++` drives reactivity. Also
-                // covers a `Ref<T>` a composable call returned.
-                if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
-                    &update.argument
-                    && (is_vue_ref_value_target(member, semantic, ctx.project, ctx.path)
-                        || crate::oxc_helpers::is_call_ref_value_target(member, semantic))
-                {
-                    return;
-                }
-                // Vue 3 reactive() object: `state.incrementedTimes++` is the idiomatic update.
-                if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
-                    &update.argument
-                    && is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
-                // Pinia store instance: `store.count++` — see the assignment arm.
-                if let oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(member) =
-                    &update.argument
-                    && let Expression::Identifier(base) = &member.object
-                    && is_pinia_store_binding(base, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
-                // TypedArray element update `buf[i]++`: same in-place-write idiom.
-                if is_typed_array_element_simple_target(&update.argument, semantic) {
-                    return;
-                }
-                if let Some(id) = root_identifier_of_simple_target(&update.argument)
-                    && (is_created_dom_element(id, semantic)
-                        || is_rtk_reducer_draft_param(id, semantic)
-                        || is_valtio_proxy_binding(id, semantic)
-                        || is_get_context_call_binding(id, semantic))
-                {
-                    return;
-                }
-                let Some(root) = root_name_of_simple_target(&update.argument) else {
-                    return;
-                };
-                if is_declared_as_const(semantic, root) {
-                    report(diagnostics, ctx, update.span.start, root, "Mutating property of");
-                }
-            }
-            // arr.push(x), Object.assign(obj, ...)
-            AstKind::CallExpression(call) => {
-                let Expression::StaticMemberExpression(member) = &call.callee else {
-                    return;
-                };
-                let method = member.property.name.as_str();
+            return;
+        }
 
-                // Object.assign(target, ...)
-                if OBJECT_MUTATOR_FUNCTIONS.contains(&method) {
-                    if let Expression::Identifier(obj) = &member.object
-                        && obj.name.as_str() == "Object"
-                            && let Some(first_arg) = call.arguments.first() {
-                                // Skip `Object.assign(fn, { ...literal })` — attaching a
-                                // static property to a function. JS has no immutable
-                                // alternative; see rbaumier/comply#154.
-                                if method == "assign"
-                                    && is_assign_static_to_function(call, semantic)
-                                {
-                                    return;
-                                }
-                                let root = match first_arg.as_expression() {
-                                    Some(Expression::Identifier(ident)) => {
-                                        Some(ident.name.as_str())
-                                    }
-                                    Some(expr) => root_name_of_expr(expr),
-                                    None => None,
-                                };
-                                if let Some(root) = root
-                                    && is_declared_as_const(semantic, root) {
-                                        report(
-                                            diagnostics,
-                                            ctx,
-                                            call.span.start,
-                                            root,
-                                            "Mutating",
-                                        );
-                                    }
-                            }
-                    return;
-                }
+        if !MUTATING_ARRAY_METHODS.contains(&method) {
+            return;
+        }
 
-                if !MUTATING_ARRAY_METHODS.contains(&method) {
-                    return;
-                }
+        // `state.ids.push(…)` mutates an intentional-mutation target: a
+        // Redux Toolkit reducer's Immer draft (the documented RTK pattern,
+        // not aliased state) or a valtio `proxy()` binding (direct mutation
+        // is valtio's entire API).
+        if let Some(id) = root_identifier_of_expr(&member.object)
+            && (is_rtk_reducer_draft_param(id, semantic)
+                || is_valtio_proxy_binding(id, semantic))
+        {
+            return;
+        }
 
-                // `state.ids.push(…)` mutates an intentional-mutation target: a
-                // Redux Toolkit reducer's Immer draft (the documented RTK pattern,
-                // not aliased state) or a valtio `proxy()` binding (direct mutation
-                // is valtio's entire API).
-                if let Some(id) = root_identifier_of_expr(&member.object)
-                    && (is_rtk_reducer_draft_param(id, semantic)
-                        || is_valtio_proxy_binding(id, semantic))
-                {
-                    return;
-                }
+        // Vue 3 reactive ref: `list.value.push(x)` / `list.value.splice(…)`
+        // mutates the deeply-reactive array a `ref([])` holds — the
+        // idiomatic, referentially-stable update, with no immutable
+        // alternative (`list.value = [...list.value, x]` reallocates and
+        // drops the array's reactive identity). The receiver `<ref>.value`
+        // is itself a `.value` member access whose base is the ref
+        // identifier, so `member.object` is the `<ref>.value` node passed to
+        // both predicates. `is_call_ref_value_target` covers the ref a
+        // composable returned (`const items = useLocalStorage(k, [])`), whose
+        // factory is not one of Vue's own — the same disjunction
+        // `no-property-mutation` applies to `items.value = x`.
+        if let Expression::StaticMemberExpression(inner) = &member.object
+            && (is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+                || is_call_ref_value_target(inner, semantic))
+        {
+            return;
+        }
 
-                // Vue 3 reactive ref: `list.value.push(x)` / `list.value.splice(…)`
-                // mutates the deeply-reactive array a `ref([])` holds — the
-                // idiomatic, referentially-stable update, with no immutable
-                // alternative (`list.value = [...list.value, x]` reallocates and
-                // drops the array's reactive identity). The receiver `<ref>.value`
-                // is itself a `.value` member access whose base is the ref
-                // identifier, so `member.object` is the `<ref>.value` node passed to
-                // `is_vue_ref_value_target`. Parity with the `ref.value = x`
-                // assignment and `ref.value++` update branches above.
-                if let Expression::StaticMemberExpression(inner) = &member.object
-                    && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
-                {
-                    return;
-                }
+        let root = match &member.object {
+            Expression::Identifier(ident) => Some(ident.name.as_str()),
+            expr => root_name_of_expr(expr),
+        };
+        let Some(root) = root else {
+            return;
+        };
 
-                let root = match &member.object {
-                    Expression::Identifier(ident) => Some(ident.name.as_str()),
-                    expr => root_name_of_expr(expr),
-                };
-                let Some(root) = root else {
-                    return;
-                };
+        // Skip `.push()` / `.unshift()` on a const local
+        // accumulator inside a loop body — a common,
+        // bounded, escape-free pattern. The structurally
+        // correct alternative (`Result.all`) is missing from
+        // better-result: tracking dmmulroy/better-result#32.
+        //
+        // Same exemption inside a `Result.gen(function*() { ... })`
+        // block — the generator body is the canonical
+        // accumulator site for sequencing `yield*` results,
+        // and the spread alternative breaks short-circuiting
+        // on the first error.
+        if matches!(method, "push" | "unshift")
+            && matches!(&member.object, Expression::Identifier(_))
+            && (is_inside_loop_body(node, semantic)
+                || is_inside_result_gen(node, semantic))
+        {
+            return;
+        }
 
-                // Skip `.push()` / `.unshift()` on a const local
-                // accumulator inside a loop body — a common,
-                // bounded, escape-free pattern. The structurally
-                // correct alternative (`Result.all`) is missing from
-                // better-result: tracking dmmulroy/better-result#32.
-                //
-                // Same exemption inside a `Result.gen(function*() { ... })`
-                // block — the generator body is the canonical
-                // accumulator site for sequencing `yield*` results,
-                // and the spread alternative breaks short-circuiting
-                // on the first error.
-                if matches!(method, "push" | "unshift")
-                    && matches!(&member.object, Expression::Identifier(_))
-                    && (is_inside_loop_body(node, semantic)
-                        || is_inside_result_gen(node, semantic))
-                {
-                    return;
-                }
+        // Skip ANY mutating array method on a locally-owned fresh array —
+        // a `VariableDeclarator` array-literal (or `new Array(...)`)
+        // binding in a non-module scope — regardless of loop context.
+        // Nothing outside the declaring function observes the mutation
+        // (the "build a local array, then return/consume it" pattern), so
+        // it is not the shared-state mutation this rule targets. The method
+        // name carries no information here: `out.sort()` on a fresh local is
+        // exactly as unobservable as `out.push(x)`, which is why the sibling
+        // `no-mutating-methods` exempts the whole set on the same predicate.
+        // A parameter, module-scope, or member-expression receiver is not
+        // locally owned and stays flagged.
+        if let Expression::Identifier(receiver) = &member.object
+            && is_locally_owned_array_binding(receiver, semantic)
+        {
+            return;
+        }
 
-                // Skip `.push()` / `.unshift()` on a locally-owned fresh array —
-                // a `VariableDeclarator` array-literal (or `new Array(...)`)
-                // binding in a non-module scope — regardless of loop context.
-                // Nothing outside the declaring function observes the mutation
-                // (the "build a local array, then return/consume it" pattern), so
-                // it is not the shared-state mutation this rule targets. Mirrors
-                // the sibling `no-mutating-methods` exemption. A parameter,
-                // module-scope, or member-expression receiver is not locally
-                // owned and stays flagged.
-                if matches!(method, "push" | "unshift")
-                    && let Expression::Identifier(receiver) = &member.object
-                    && is_locally_owned_array_binding(receiver, semantic)
-                {
-                    return;
-                }
+        // An array-mutation method on a plain-identifier receiver is an
+        // array mutation only with positive evidence that the binding is
+        // array-shaped: an array-literal / `new Array(...)` / array-returning
+        // initializer, or an explicit array type annotation (`T[]`,
+        // `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`) on its declarator or
+        // parameter. A receiver bound to a non-array factory
+        // (`const router = useRouter()`, `const s = new Subject()`) carries no
+        // such evidence and calls a same-named method on a different object
+        // (navigation, an event emitter), not an array. Member receivers
+        // (`store.items`, `this.children`) are not gated — their element type
+        // is not locally resolvable — so they stay flagged.
+        if matches!(&member.object, Expression::Identifier(_))
+            && !expression_is_array(&member.object, semantic)
+        {
+            return;
+        }
 
-                // An array-mutation method on a plain-identifier receiver is an
-                // array mutation only with positive evidence that the binding is
-                // array-shaped: an array-literal / `new Array(...)` / array-returning
-                // initializer, or an explicit array type annotation (`T[]`,
-                // `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`) on its declarator or
-                // parameter. A receiver bound to a non-array factory
-                // (`const router = useRouter()`, `const s = new Subject()`) carries no
-                // such evidence and calls a same-named method on a different object
-                // (navigation, an event emitter), not an array. Member receivers
-                // (`store.items`, `this.children`) are not gated — their element type
-                // is not locally resolvable — so they stay flagged.
-                if matches!(&member.object, Expression::Identifier(_))
-                    && !expression_is_array(&member.object, semantic)
-                {
-                    return;
-                }
-
-                if is_declared_as_const(semantic, root) {
-                    report(
-                        diagnostics,
-                        ctx,
-                        call.span.start,
-                        root,
-                        &format!("Calling `{method}()` on"),
-                    );
-                }
-            }
-            _ => {}
+        if is_declared_as_const(semantic, root) {
+            report(
+                diagnostics,
+                ctx,
+                call.span.start,
+                root,
+                &format!("Calling `{method}()` on"),
+            );
         }
     }
 }
@@ -394,40 +265,6 @@ fn is_inside_sentry_hook<'a>(
     false
 }
 
-fn is_current_target(target: &AssignmentTarget) -> bool {
-    match target {
-        AssignmentTarget::StaticMemberExpression(member) => {
-            member.property.name.as_str() == "current"
-        }
-        _ => false,
-    }
-}
-
-/// Extract the root identifier name from an assignment target (must be member access).
-fn root_name_of_target<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
-    match target {
-        // Plain identifier = reassignment, not property mutation
-        AssignmentTarget::AssignmentTargetIdentifier(_) => None,
-        AssignmentTarget::StaticMemberExpression(member) => root_name_of_expr(&member.object),
-        AssignmentTarget::ComputedMemberExpression(member) => root_name_of_expr(&member.object),
-        _ => None,
-    }
-}
-
-fn root_name_of_simple_target<'a>(
-    target: &'a oxc_ast::ast::SimpleAssignmentTarget<'a>,
-) -> Option<&'a str> {
-    match target {
-        oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(m) => {
-            root_name_of_expr(&m.object)
-        }
-        oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(m) => {
-            root_name_of_expr(&m.object)
-        }
-        _ => None,
-    }
-}
-
 fn root_name_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     match expr {
         Expression::Identifier(ident) => Some(ident.name.as_str()),
@@ -435,114 +272,6 @@ fn root_name_of_expr<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
         Expression::ComputedMemberExpression(member) => root_name_of_expr(&member.object),
         _ => None,
     }
-}
-
-fn root_identifier_of_target<'a>(
-    target: &'a AssignmentTarget<'a>,
-) -> Option<&'a IdentifierReference<'a>> {
-    match target {
-        AssignmentTarget::StaticMemberExpression(m) => root_identifier_of_expr(&m.object),
-        AssignmentTarget::ComputedMemberExpression(m) => root_identifier_of_expr(&m.object),
-        _ => None,
-    }
-}
-
-fn root_identifier_of_simple_target<'a>(
-    target: &'a oxc_ast::ast::SimpleAssignmentTarget<'a>,
-) -> Option<&'a IdentifierReference<'a>> {
-    match target {
-        oxc_ast::ast::SimpleAssignmentTarget::StaticMemberExpression(m) => {
-            root_identifier_of_expr(&m.object)
-        }
-        oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(m) => {
-            root_identifier_of_expr(&m.object)
-        }
-        _ => None,
-    }
-}
-
-/// True when `target` is a computed-member write `base[i]` whose `base` is a
-/// direct identifier resolving to a TypedArray binding — `buf[i] = v`. Indexed
-/// element assignment is the only way to write a TypedArray's contents, so this
-/// element write has no immutable alternative. A static-member write (`buf.length`)
-/// or a deeper chain (`obj.buf[i]`) is not exempt — only the direct indexed write.
-fn is_typed_array_element_target(
-    target: &AssignmentTarget,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let AssignmentTarget::ComputedMemberExpression(member) = target else {
-        return false;
-    };
-    matches!(
-        &member.object,
-        Expression::Identifier(id) if is_typed_array_binding(id, semantic)
-    )
-}
-
-/// True when `target` is a constant-keyed indexed write into a freshly-constructed,
-/// locally-owned array — `const handlers = []; handlers[0x01] = fn` — i.e. a sparse
-/// dispatch/lookup table being built. The base must be a direct identifier resolving
-/// to a local empty-array `const` binding, and the index a constant key (numeric
-/// literal or `const` opcode). A dynamic index, a foreign or parameter array, or a
-/// deeper chain (`obj.table[k]`) does not match, so post-construction or shared-state
-/// mutation stays flagged.
-fn is_dispatch_table_element_target(
-    target: &AssignmentTarget,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let AssignmentTarget::ComputedMemberExpression(member) = target else {
-        return false;
-    };
-    matches!(
-        &member.object,
-        Expression::Identifier(id) if is_local_dispatch_table_binding(id, semantic)
-    ) && is_constant_index_expression(&member.expression, semantic)
-}
-
-/// [`is_typed_array_element_target`] for an `UpdateExpression`'s
-/// `SimpleAssignmentTarget` (`buf[i]++`).
-fn is_typed_array_element_simple_target(
-    target: &oxc_ast::ast::SimpleAssignmentTarget,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let oxc_ast::ast::SimpleAssignmentTarget::ComputedMemberExpression(member) = target else {
-        return false;
-    };
-    matches!(
-        &member.object,
-        Expression::Identifier(id) if is_typed_array_binding(id, semantic)
-    )
-}
-
-/// True when `ident` resolves to a binding initialised via `document.createElement(...)`
-/// or `document.createElementNS(...)`. A freshly created DOM element is unattached and
-/// must be configured by property assignment before insertion — not a state mutation.
-fn is_created_dom_element(
-    ident: &IdentifierReference,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else { return false };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::VariableDeclarator(decl) = kind {
-            let Some(init) = &decl.init else { return false };
-            return is_create_element_call(init);
-        }
-    }
-    false
-}
-
-fn is_create_element_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else { return false };
-    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
-    let Expression::Identifier(obj) = &member.object else { return false };
-    if obj.name.as_str() != "document" { return false }
-    let method = member.property.name.as_str();
-    method == "createElement" || method == "createElementNS"
 }
 
 /// Check if a name is declared as `const` in the current scope chain.
@@ -697,35 +426,6 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
-    /// Build a temp project from `(rel_path, source)` pairs, index it so the
-    /// cross-file `ImportIndex` is populated, and run the rule on `target_rel`.
-    fn run_on_project(files: &[(&str, &str)], target_rel: &str) -> Vec<Diagnostic> {
-        use crate::files::{Language, SourceFile};
-        use crate::project::ProjectCtx;
-        use std::fs;
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let mut source_files: Vec<SourceFile> = Vec::new();
-        for (rel, content) in files {
-            let p = dir.path().join(rel);
-            if let Some(parent) = p.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(&p, content).unwrap();
-            if let Some(lang) = Language::from_path(&p) {
-                source_files.push(SourceFile { path: p, language: lang });
-            }
-        }
-        let refs: Vec<&SourceFile> = source_files.iter().collect();
-        let project = ProjectCtx::for_test_with_files(&refs);
-        let target_path = dir.path().join(target_rel);
-        let source = fs::read_to_string(&target_path).unwrap();
-        let canon = fs::canonicalize(&target_path).unwrap();
-        let file = crate::rules::file_ctx::default_static_file_ctx();
-        crate::rules::test_helpers::run_oxc_check(&Check, &source, &canon, &project, file)
-    }
-
     #[test]
     fn ignores_push_inside_result_gen_with_loop() {
         // Regression for rbaumier/comply#23 — canonical Result.gen accumulator.
@@ -820,145 +520,6 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
-    #[test]
-    fn allows_property_assignment_on_local_object_spread_builder() {
-        // Regression for rbaumier/comply#1930 — dnd-kit boundingRectangle:
-        // `value` is a fresh local copy via object spread, built up via
-        // conditional property assignments before being returned. No external
-        // state is mutated — the object analogue of the array accumulator.
-        let src = r#"
-            export function boundingRectangle(transform, shape, boundingRect) {
-                const value = { ...transform };
-                if (cond) {
-                    value.y = boundingRect.top - shape.boundingRectangle.top;
-                } else if (cond2) {
-                    value.y = boundingRect.bottom;
-                }
-                if (cond3) {
-                    value.x = boundingRect.left;
-                }
-                return value;
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_property_assignment_on_local_object_literal_builder() {
-        let src = r#"
-            function build() {
-                const value = { a: 1 };
-                value.b = 2;
-                return value;
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_property_assignment_on_object_literal_cast_builder_issue_7654() {
-        // Regression for rbaumier/comply#7654 — `{} as T` is a compile-time-only
-        // annotation over a fresh object literal, so an indexed write building it up
-        // in a loop stays exempt exactly like a bare `{}` builder.
-        let src = r#"
-            function getBaseURLs(items) {
-                const otherBaseURL = {} as Record<App.Service.OtherBaseURLKey, string>;
-                items.forEach((item) => {
-                    otherBaseURL[item.key] = item.url;
-                });
-                return otherBaseURL;
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_property_assignment_on_const_from_external_call() {
-        // A `const` initialized from a function call (not an object literal /
-        // spread) references external state — mutating it is still flagged.
-        let src = r#"
-            function mutate() {
-                const value = getConfig();
-                value.x = 1;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn allows_property_assignment_on_created_dom_element() {
-        let src = r#"
-            function download(objectUrl: string, filename: string) {
-                const anchor = document.createElement("a");
-                anchor.href = objectUrl;
-                anchor.download = filename;
-                anchor.rel = "noopener";
-                document.body.append(anchor);
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_property_assignment_on_created_svg_element() {
-        let src = r#"
-            function build() {
-                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-                svg.id = "chart";
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_mutation_on_unrelated_const() {
-        let src = r#"
-            function set(objectUrl: string) {
-                const anchor = getAnchorFromDom();
-                anchor.href = objectUrl;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Canvas rendering-context property assignment — issue #2277
-
-    #[test]
-    fn allows_property_assignment_on_get_context_binding_issue_2277() {
-        // Regression for rbaumier/comply#2277 — a CanvasRenderingContext2D from
-        // `canvas.getContext('2d')` is an imperative stateful API; setting
-        // `fillStyle`/`lineWidth`/etc. is the only way to use it, no immutable
-        // alternative exists.
-        let src = r#"
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = 'red';
-            ctx.lineWidth = 2;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_property_assignment_on_non_null_get_context_binding() {
-        // The issue's exact shape uses a non-null assertion on the call.
-        let src = r#"
-            const context = canvas.getContext('2d')!;
-            context.fillStyle = gradient;
-            context.globalAlpha = 0.5;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_property_assignment_on_ordinary_const_object_2277() {
-        // Negative space: a const not derived from getContext references
-        // external state — mutating it stays flagged.
-        let src = r#"
-            const o = makeThing();
-            o.count = 5;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
     // Sentry beforeSend/beforeBreadcrumb in-place scrub hooks — issue #478
 
     #[test]
@@ -966,8 +527,8 @@ mod tests {
         let src = r#"
             Sentry.init({
                 beforeBreadcrumb(breadcrumb) {
-                    const data = breadcrumb.data;
-                    data.url = scrubSensitiveQueryFromUrl(data.url);
+                    const trail: unknown[] = breadcrumb.trail;
+                    trail.push(scrubSensitiveQueryFromUrl(breadcrumb.url));
                     return breadcrumb;
                 },
             });
@@ -979,8 +540,8 @@ mod tests {
     fn allows_const_mutation_in_named_function_registered_as_before_send() {
         let src = r#"
             function scrubEvent(event) {
-                const req = event.request;
-                req.url = scrubSensitiveQueryFromUrl(req.url);
+                const frames: unknown[] = event.frames;
+                frames.sort();
                 return event;
             }
             Sentry.init({ beforeSend: scrubEvent });
@@ -990,80 +551,13 @@ mod tests {
 
     #[test]
     fn still_flags_const_mutation_outside_sentry_hook() {
+        // Negative space: the same call outside any registered hook is an
+        // ordinary mutation of a value the function did not build.
         let src = r#"
             function scrub() {
-                const data = getData();
-                data.url = scrubSensitiveQueryFromUrl(data.url);
+                const frames: unknown[] = getFrames();
+                frames.sort();
             }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // React displayName naming convention — issue #1779
-
-    #[test]
-    fn allows_display_name_assignment_on_forward_ref_component() {
-        // Regression for rbaumier/comply#1779 — setting `displayName` on a
-        // forwardRef-wrapped component is the standard React naming convention.
-        let src = r#"
-            const RadioGroup = React.forwardRef((props, ref) => {
-                return <RadioGroupPrimitives.Root ref={ref} {...props} />;
-            });
-            RadioGroup.displayName = "RadioGroup";
-        "#;
-        assert!(crate::rules::test_helpers::run_rule(&Check, src, "t.tsx").is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_string_display_name_assignment() {
-        // A call-expression RHS is a computed value, not the React DevTools
-        // naming convention, so mutating a const's property stays flagged.
-        let src = r#"
-            const RadioGroup = React.forwardRef((props, ref) => null);
-            RadioGroup.displayName = getName();
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_other_string_property_assignment() {
-        let src = r#"
-            const RadioGroup = React.forwardRef((props, ref) => null);
-            RadioGroup.label = "RadioGroup";
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn allows_display_name_inherited_from_wrapped_primitive() {
-        // Regression for rbaumier/comply#7844 — the Radix/shadcn wrapper pattern
-        // inherits `displayName` from the wrapped primitive
-        // (`Foo.displayName = Primitive.Foo.displayName`). Property-name identity
-        // on both sides is the React DevTools naming convention, not a mutation.
-        let src = r#"
-            const DropdownMenuGroup = React.forwardRef((props, ref) => null);
-            DropdownMenuGroup.displayName = DropdownMenuPrimitive.Group.displayName;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_display_name_from_template_literal() {
-        // The HOC naming pattern assigns a template literal.
-        let src = r#"
-            const Component = React.forwardRef((props, ref) => null);
-            Component.displayName = `Wrapped(${inner})`;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_display_name_from_non_display_name_member() {
-        // A member-access RHS whose property is not `displayName` is not the
-        // inherit convention and stays flagged.
-        let src = r#"
-            const RadioGroup = React.forwardRef((props, ref) => null);
-            RadioGroup.displayName = Bar.someOtherProp;
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -1081,320 +575,20 @@ mod tests {
     }
 
     #[test]
-    fn allows_csf2_story_property_assignments() {
-        // Regression for rbaumier/comply#1680 — CSF2 attaches story metadata
-        // via property assignment on the exported story function. No immutable
-        // alternative exists; story files must not be flagged.
-        let src = r#"
-            export const WithArgs = (args) => <Button {...args} />;
-            WithArgs.args = { label: "With args" };
-            WithArgs.storyName = "With args";
-            WithArgs.play = () => { /* interaction test */ };
-        "#;
-        assert!(
-            crate::rules::test_helpers::run_rule_with_ctx(
-                &Check,
-                src,
-                "Button.stories.tsx",
-                crate::project::default_static_project_ctx(),
-                &storybook_file_ctx(),
-            )
-            .is_empty()
+    fn allows_mutating_call_in_a_story_file_issue_1680() {
+        // A CSF2 story file configures its exported story function in place —
+        // the designed API the runner reads back, with no immutable form. The
+        // guard is on the file, so it covers the call axis this rule keeps.
+        let src = "const Story = () => null; Object.assign(Story, { args: {} });";
+        let file = storybook_file_ctx();
+        let diagnostics = crate::rules::test_helpers::run_rule_with_ctx(
+            &Check,
+            src,
+            "Button.stories.tsx",
+            crate::project::default_static_project_ctx(),
+            &file,
         );
-    }
-
-    #[test]
-    fn still_flags_same_pattern_in_non_story_file() {
-        // Negative space: the identical property-assignment-on-const pattern
-        // in a non-story file is still a mutation and must fire.
-        let src = r#"
-            const WithArgs = (args) => null;
-            WithArgs.args = { label: "With args" };
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Array.reduce() accumulator — issue #2239
-
-    #[test]
-    fn allows_mutation_on_reduce_accumulator_issue_2239() {
-        // Regression for rbaumier/comply#2239 — pinia mapHelpers: the reduce
-        // accumulator is a fresh local object literal passed as the seed; it
-        // never escapes until `reduce` returns, so building it up via property
-        // assignment is the canonical reduce-to-object pattern.
-        let src = r#"
-            function build(stores, suffix) {
-                return stores.reduce((reduced, useStore) => {
-                    reduced[useStore.$id + suffix] = function () {
-                        return useStore();
-                    };
-                    return reduced;
-                }, {});
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_const_mutation_on_non_accumulator_inside_reduce() {
-        // Negative space: a `const` declared inside a reduce callback (not the
-        // accumulator parameter) references whatever it was initialised from —
-        // mutating it stays flagged.
-        let src = r#"
-            arr.reduce((reduced, item) => {
-                const cfg = getConfig();
-                cfg.x = 1;
-                return reduced;
-            }, {});
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_const_mutation_on_accumulator_of_non_reduce_call() {
-        // Negative space: the callback of a non-`.reduce()` call has no local
-        // accumulator; mutating a const inside it stays flagged.
-        let src = r#"
-            arr.forEach((acc, item) => {
-                const cfg = getConfig();
-                cfg.x = item;
-            });
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Vue 3 reactive ref `.value` mutation — issue #2164
-
-    #[test]
-    fn allows_vue_ref_value_mutation_issue_2164() {
-        // Regression for rbaumier/comply#2164 — `ref()` returns a reactive
-        // wrapper whose `.value` assignment/update is the intended mutation
-        // point that drives Vue's reactivity.
-        let src = r#"
-            import { ref } from 'vue'
-            const count = ref(0)
-            const input = ref('')
-            function update(e) {
-                count.value++
-                input.value = e.target.value
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_value_mutation_on_non_call_initialized_const() {
-        // Negative space: no call produced `plain`, so it holds no composable
-        // ref and the `.value` write stays flagged.
-        let src = r#"
-            const plain = source;
-            plain.value = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_non_value_property_mutation_on_vue_ref() {
-        // Negative space: only `.value` is the reactive mutation point; writing
-        // any other property on a ref is still a mutation.
-        let src = r#"
-            import { ref } from 'vue'
-            const r = ref(0);
-            r.config = 5;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Vue 3 reactive ref `.value` array indexed write — issue #7856
-
-    #[test]
-    fn allows_indexed_write_into_vue_ref_value_array_issue_7856() {
-        // Regression for rbaumier/comply#7856 — v3-admin-vite tags-view store:
-        // `visitedViews.value[index] = { ...view }` writes an element of the
-        // deeply-reactive array a `ref([])` holds. The indexed write drives
-        // reactivity exactly like the sibling `visitedViews.value.push(…)`
-        // (already exempt); reassigning a fresh array drops reactive identity.
-        let src = r#"
-            import { ref } from 'vue'
-            const visitedViews = ref([])
-            const addVisitedView = (view) => {
-                const index = visitedViews.value.findIndex(v => v.path === view.path)
-                if (index !== -1) {
-                    visitedViews.value[index] = { ...view }
-                } else {
-                    visitedViews.value.push({ ...view })
-                }
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_indexed_write_into_non_ref_value_array_issue_7856() {
-        // Negative space: the exemption is ref-scoped. `list.value[i] = x` where
-        // `list` is not a `ref()` binding is an ordinary indexed write and stays
-        // flagged.
-        let src = r#"
-            const list = getList();
-            list.value[0] = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Vue ref via destructured composable / Ref-typed param / imported ref — issue #7603
-
-    #[test]
-    fn allows_value_mutation_on_composable_destructured_ref_issue_7603() {
-        // Parity with no-property-mutation: a `Ref<T>` destructured from a
-        // composable call is mutated only through `.value`.
-        let src = r#"
-            const { queryClicks } = useNav();
-            function bump() { queryClicks.value += 1; }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_value_mutation_on_ref_typed_parameter_issue_7603() {
-        // A `Ref<T>` / `ModelRef<T>` parameter is a ref by its type annotation;
-        // `.value` assignment is the intended reactive update.
-        let src = r#"
-            function useNavBase(queryClicks: Ref<number>) {
-                queryClicks.value += 1;
-            }
-            export function useIME(content: ModelRef<string>) {
-                content.value = 'x';
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_non_value_property_on_composable_destructured_binding_issue_7603() {
-        // Negative space for the parity fallback: the destructured-composable
-        // exemption is `.value`-restricted, so a non-`.value` property write on a
-        // const call-destructured binding stays flagged.
-        let src = r#"
-            const { cfg } = useThing();
-            cfg.enabled = true;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Vue ref bound directly from a composable call — issue #7734
-
-    #[test]
-    fn allows_value_mutation_on_non_destructured_composable_ref_issue_7734() {
-        // Regression for rbaumier/comply#7734 — `useStorage` (VueUse) returns a
-        // `RemovableRef<string>`; `.value =` is the reactive update, exactly as
-        // for a destructured composable ref.
-        let src = r#"
-            const themePalette = useStorage("theme-palette", "blue");
-            function apply(preset) { themePalette.value = preset.id; }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_value_update_expression_on_composable_ref_issue_7734() {
-        // The update handler takes the same exemption as the assignment handler.
-        let src = r#"
-            const count = useCounter();
-            function bump() { count.value++; }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_value_mutation_on_imported_ref_issue_7603() {
-        // A ref exported from a centralized state module; `.value =` on the
-        // imported binding is a reactive write.
-        let files = &[
-            (
-                "state/index.ts",
-                "import { ref } from 'vue'\nexport const hmrSkipTransition = ref(false)",
-            ),
-            (
-                "composables/useNav.ts",
-                "import { hmrSkipTransition } from '../state'\n\
-                 export function useNav() { hmrSkipTransition.value = false; }",
-            ),
-        ];
-        assert!(run_on_project(files, "composables/useNav.ts").is_empty());
-    }
-
-    // Vue 3 reactive() object property mutation — issue #7655
-
-    #[test]
-    fn allows_reactive_object_property_mutation_issue_7655() {
-        // Parity with no-property-mutation: `reactive()` returns a reactive
-        // proxy whose direct property write (`s.n = x`) and update (`s.n++`)
-        // are the intended Vue 3 reactivity path — there is no immutable
-        // alternative, so the proxy exists to be mutated.
-        let src = r#"
-            import { reactive } from 'vue'
-            const s = reactive({ n: 0 })
-            function update() {
-                s.n = 1
-                s.n++
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_reactive_object_mutation_through_as_cast_issue_7654() {
-        // Regression for rbaumier/comply#7654 — a `reactive({…}) as T` cast does not
-        // change the reactive proxy the factory returns, so property writes stay the
-        // intended Vue 3 reactivity path, same as an uncast `reactive(…)`.
-        let src = r#"
-            import { reactive } from 'vue'
-            const pagination = reactive({ page: 1, pageSize: 10 }) as PaginationProps;
-            function setPage(page) {
-                pagination.page = page;
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_nested_reactive_object_mutation_issue_7719() {
-        // Regression for rbaumier/comply#7719, parity with no-property-mutation:
-        // `reactive()` returns a deeply reactive proxy, so a write at any depth
-        // drives reactivity exactly like a top-level one.
-        let src = r#"
-            import { reactive } from 'vue'
-            const state = reactive({ pageable: { pageNum: 1, total: 0 }, list: [{ done: false }] })
-            function update(data) {
-                state.pageable.total = data.total
-                state.pageable.pageNum++
-                state.list[0].done = true
-            }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_nested_property_mutation_on_non_reactive_call_const() {
-        // Negative space: the deep-chain walk resolves the root binding, it does
-        // not blanket-allow nested writes — a const initialised by a non-reactive
-        // factory call stays flagged at depth too.
-        let src = r#"
-            const s = someNonReactive();
-            s.a.b = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_property_mutation_on_non_reactive_call_const() {
-        // Negative space: a const initialised by a non-reactive factory call is
-        // not a reactive proxy — the property write stays flagged.
-        let src = r#"
-            const s = someNonReactive();
-            s.n = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]
@@ -1404,177 +598,6 @@ mod tests {
         // subscribing to the kind is what makes that true; the engine never
         // dispatches it here.
         assert!(!Check.interested_kinds().contains(&AstType::UnaryExpression));
-    }
-
-    // Pinia store instance direct state write — issue #7857
-
-    #[test]
-    fn allows_direct_state_write_on_imported_pinia_store_issue_7857() {
-        // Regression for rbaumier/comply#7857 — v3-admin-vite useLayoutMode:
-        // `settingsStore.layoutMode = mode` writes reactive state through the
-        // store instance the `useSettingsStore()` factory returned.
-        // `useSettingsStore` is a `defineStore(...)` exported from a Pinia store
-        // module — the documented, only Pinia state-write API.
-        let files = &[
-            (
-                "pinia/stores/settings.ts",
-                "import { defineStore } from 'pinia'\n\
-                 export const useSettingsStore = defineStore('settings', () => ({}))",
-            ),
-            (
-                "composables/useLayoutMode.ts",
-                "import { useSettingsStore } from '../pinia/stores/settings'\n\
-                 const settingsStore = useSettingsStore()\n\
-                 function setLayoutMode(mode) { settingsStore.layoutMode = mode }",
-            ),
-        ];
-        assert!(run_on_project(files, "composables/useLayoutMode.ts").is_empty());
-    }
-
-    #[test]
-    fn allows_state_update_on_local_pinia_store_issue_7857() {
-        // The store factory and its consumer can live in one module; the
-        // update-expression arm takes the same exemption.
-        let src = r#"
-            import { defineStore } from 'pinia'
-            const useCounterStore = defineStore('counter', () => ({}))
-            const counter = useCounterStore()
-            function inc() { counter.count++ }
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_state_write_on_non_pinia_call_binding_issue_7857() {
-        // Negative space: `useThing()` does not resolve to a `defineStore(...)`
-        // factory, so the property write is an ordinary mutation and stays flagged.
-        let src = r#"
-            const thing = useThing();
-            thing.count = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_state_write_when_define_store_not_from_pinia_issue_7857() {
-        // Negative space: `defineStore` imported from a non-pinia module is not
-        // Pinia's factory, so the store-instance write stays flagged.
-        let src = r#"
-            import { defineStore } from './not-pinia'
-            const useX = defineStore('x', () => ({}))
-            const x = useX();
-            x.count = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // TypedArray indexed element assignment — issue #5328
-
-    #[test]
-    fn allows_typed_array_element_assignment_issue_5328() {
-        // Regression for rbaumier/comply#5328 — pdf-lib pdfDocEncoding: a
-        // Uint16Array lookup table populated by indexed writes during module
-        // init. Indexed assignment is the only way to write a TypedArray's
-        // contents; there is no immutable element-setter to suggest.
-        let src = r#"
-            const pdfDocEncodingToUnicode = new Uint16Array(256);
-            for (let idx = 0; idx < 256; idx++) {
-                pdfDocEncodingToUnicode[idx] = idx;
-            }
-            pdfDocEncodingToUnicode[0x16] = toCharCode('^W');
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_typed_array_element_compound_and_update() {
-        // Compound assignment (`buf[i] += v`) and update (`buf[i]++`) on a
-        // TypedArray element are the same in-place buffer write.
-        let src = r#"
-            const buf = new Float64Array(8);
-            buf[0] += 1.5;
-            buf[1]++;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_typed_array_element_assignment_via_type_annotation() {
-        // A `: Uint8Array` type annotation is the same TypedArray signal even
-        // when the initializer is an opaque call.
-        let src = r#"
-            const buf: Uint8Array = getBuffer();
-            buf[0] = 255;
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_plain_array_element_assignment() {
-        // Negative space: a plain `Array` element write has immutable
-        // alternatives (spread, map) — it stays flagged.
-        let src = r#"
-            const arr = new Array(3);
-            arr[0] = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_typed_array_length_property_write() {
-        // Negative space: only indexed element writes are exempt; a static
-        // property write on a TypedArray (`buf.foo = x`) stays flagged.
-        let src = r#"
-            const buf = new Uint8Array(4);
-            buf.foo = 1;
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    // Sparse dispatch-table construction — issue #5412
-
-    #[test]
-    fn allows_sparse_dispatch_table_construction_issue_5412() {
-        // Regression for rbaumier/comply#5412 — y-websocket message handlers: a
-        // locally-owned `const handlers = []` populated by constant-keyed indexed
-        // assignment to build an O(1) protocol dispatch table. The sparse layout
-        // can't be a constructor literal, so indexed assignment is construction,
-        // not mutation.
-        let src = r#"
-            const messageSync = 0
-            const messageAwareness = 1
-            const messageHandlers = []
-            messageHandlers[messageSync] = (encoder, decoder) => {}
-            messageHandlers[messageAwareness] = (encoder, decoder) => {}
-            messageHandlers[0x02] = (encoder, decoder) => {}
-        "#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_dynamic_index_write_on_local_empty_array_5412() {
-        // Negative space: a dynamic (non-constant) index is not the dispatch-table
-        // signature — `arr[i] = v` with a `let` loop variable stays flagged.
-        let src = r#"
-            const arr = [];
-            for (let i = 0; i < 3; i++) {
-                arr[i] = i;
-            }
-        "#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_object_property_mutation_alongside_dispatch_table_5412() {
-        // Negative space: the dispatch-table exemption must not leak — a property
-        // write on a const referencing external state stays flagged alongside it.
-        let src = r#"
-            const handlers = [];
-            handlers[0] = fn;
-            const cfg = getConfig();
-            cfg.x = 2;
-        "#;
-        assert_eq!(run(src).len(), 1);
     }
 
     // Redux Toolkit Immer draft mutations — issue #5596
@@ -1679,48 +702,27 @@ mod tests {
     #[test]
     fn allows_valtio_proxy_mutations_issue_5595() {
         // Regression for rbaumier/comply#5595 — valtio's `proxy()` returns a
-        // reactive Proxy whose direct mutation IS the API: property assignment,
-        // deep update, and mutating array methods on a `const` proxy binding all
-        // drive reactivity, with no immutable alternative.
+        // reactive Proxy whose direct mutation IS the API: a mutating array
+        // method on a `const` proxy binding drives reactivity, with no immutable
+        // alternative.
         let src = r#"
             import { proxy } from 'valtio'
             const state = proxy({ number: 0, nested: { ticks: 0 }, items: [] })
-            state.number = 1
-            state.nested.ticks++
             state.items.push(1)
         "#;
         assert!(run(src).is_empty());
     }
 
     #[test]
-    fn allows_valtio_proxy_mutation_through_type_only_wrappers() {
-        // A `proxy({…}) as Store` cast or a `proxy({…})!` non-null assertion is
-        // transparent to the reactive Proxy the factory returns, so direct
-        // mutation stays the intended valtio update path.
-        let cast = r#"
-            import { proxy } from 'valtio'
-            const state = proxy({ n: 0 }) as Store;
-            state.n = 1;
-        "#;
-        assert!(run(cast).is_empty());
-        let non_null = r#"
-            import { proxy } from 'valtio'
-            const state = proxy({ n: 0 })!;
-            state.n = 1;
-        "#;
-        assert!(run(non_null).is_empty());
-    }
-
-    #[test]
     fn still_flags_plain_const_mutation_not_valtio_proxy() {
-        // Negative space: a plain `const` object (not initialised by `proxy()`
+        // Negative space: a plain `const` array (not initialised by `proxy()`
         // from valtio) is not a reactive proxy — mutating it stays flagged, even
         // in a file that imports `proxy` from valtio.
         let src = r#"
             import { proxy } from 'valtio'
             const state = proxy({ n: 0 });
-            const plain = getConfig();
-            plain.n = 1;
+            const plain: unknown[] = getItems();
+            plain.push(1);
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -1728,11 +730,11 @@ mod tests {
     #[test]
     fn still_flags_local_proxy_not_imported_from_valtio() {
         // Negative space: a same-named local `proxy()` (not imported from valtio)
-        // returns a plain object — mutating its property stays flagged.
+        // returns a plain value — a mutating method on it stays flagged.
         let src = r#"
             function proxy(x) { return x; }
-            const state = proxy({ n: 0 });
-            state.n = 1;
+            const state: unknown[] = proxy([]);
+            state.push(1);
         "#;
         assert_eq!(run(src).len(), 1);
     }
@@ -1930,6 +932,82 @@ mod tests {
         let src = r#"
             const o = { value: [] };
             o.value.push(1);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Frontier with no-property-mutation — issue #8441
+
+    #[test]
+    fn leaves_the_assignment_axis_to_no_property_mutation_issue_8441() {
+        // Boundary for rbaumier/comply#8441 — one position, one rule. Property
+        // WRITES (`o.p = x`, `o.p++`) belong to `no-property-mutation`, which
+        // subscribes to both kinds and carries every exemption for them; this
+        // rule keeps the CALL axis. Not subscribing is what enforces the
+        // partition — the engine never dispatches those kinds here — so the
+        // assertion is on the subscription, not on a diagnostic count that a
+        // later exemption could make pass for the wrong reason.
+        assert!(!Check.interested_kinds().contains(&AstType::AssignmentExpression));
+        assert!(!Check.interested_kinds().contains(&AstType::UpdateExpression));
+    }
+
+    #[test]
+    fn stays_silent_on_a_property_write_it_no_longer_owns_issue_8441() {
+        // The other half of the boundary: a `const`-bound receiver whose property
+        // is assigned and incremented — the exact shape this rule used to double
+        // report — draws nothing here, while the mutating call on the same
+        // binding still does.
+        let src = r#"
+            const target = getTarget();
+            target.count = 1;
+            target.count++;
+        "#;
+        assert!(run(src).is_empty());
+        assert_eq!(run("const target = getTarget(); target.items.push(1);").len(), 1);
+    }
+
+    // Composable-returned ref holding an array — issue #7849
+
+    #[test]
+    fn allows_mutating_array_method_on_composable_ref_value_issue_7849() {
+        // Regression for rbaumier/comply#7849: `useLocalStorage` is not in
+        // `VUE_REF_FACTORIES`, so only `is_call_ref_value_target` recognises the
+        // `Ref<T[]>` it returns. Reassigning `items.value` was already exempt;
+        // mutating it in place was not, for the same binding.
+        let src = r#"
+            const items = useLocalStorage('k', []);
+            items.value.push(1);
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    // Locally-owned array, every mutating method — issue #7661
+
+    #[test]
+    fn allows_sort_on_a_locally_owned_fresh_array_issue_7661() {
+        // Regression for rbaumier/comply#7661: the locally-owned-array exemption
+        // was gated on `push`/`unshift`, so the sibling rule
+        // `no-mutating-methods` stayed silent on this very code while this one
+        // reported it. Ownership does not depend on which method reorders the
+        // array.
+        let src = r#"
+            function ordered(items) {
+                const out = [...items];
+                out.sort();
+                return out;
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_sort_on_a_module_scope_array_issue_7661() {
+        // Negative space: dropping the method gate did not drop the ownership
+        // gate — a module-scope array is reachable by every importer, so
+        // reordering it stays flagged whichever method does it.
+        let src = r#"
+            const cache = [];
+            cache.sort();
         "#;
         assert_eq!(run(src).len(), 1);
     }
