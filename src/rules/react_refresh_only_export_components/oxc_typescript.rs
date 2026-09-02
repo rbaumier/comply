@@ -2,12 +2,12 @@
 
 use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::project::Framework;
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Declaration, Expression, ExportDefaultDeclarationKind, ExportNamedDeclaration, Statement,
 };
+use oxc_span::Span;
 use std::sync::Arc;
 
 pub struct Check;
@@ -188,7 +188,10 @@ impl OxcCheck for Check {
         let next_magic_exports = next_router_magic_exports(ctx);
 
         let mut component_exports: Vec<String> = Vec::new();
-        let mut non_component_exports: Vec<(String, usize)> = Vec::new();
+        // Each offending export carries the byte range of its own `export`
+        // statement, so two exports declared on one line report at two columns
+        // instead of collapsing onto the left margin.
+        let mut non_component_exports: Vec<(String, Span)> = Vec::new();
 
         for stmt in &program.body {
             match stmt {
@@ -207,23 +210,19 @@ impl OxcCheck for Check {
                         if next_magic_exports.contains(name.as_str()) {
                             continue;
                         }
-                        let offset = named.span.start as usize;
-                        let (line, _) = byte_offset_to_line_col(ctx.source, offset);
                         if is_pascal_case(&name) {
                             component_exports.push(name);
                         } else {
-                            non_component_exports.push((name, line));
+                            non_component_exports.push((name, named.span));
                         }
                     }
                 }
                 Statement::ExportDefaultDeclaration(default_decl) => {
                     if let Some(name) = extract_default_export_name(&default_decl.declaration) {
-                        let offset = default_decl.span.start as usize;
-                        let (line, _) = byte_offset_to_line_col(ctx.source, offset);
                         if is_pascal_case(&name) {
                             component_exports.push(name);
                         } else {
-                            non_component_exports.push((name, line));
+                            non_component_exports.push((name, default_decl.span));
                         }
                     }
                 }
@@ -237,16 +236,17 @@ impl OxcCheck for Check {
 
         non_component_exports
             .iter()
-            .map(|(name, line)| Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line: *line,
-                column: 1,
-                rule_id: "react-refresh-only-export-components".into(),
-                message: format!(
-                    "Non-component export `{name}` alongside component exports breaks React Fast Refresh. Move it to a separate module."
-                ),
-                severity: Severity::Error,
-                span: None,
+            .map(|(name, span)| {
+                Diagnostic::at_offset(
+                    Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    (span.start as usize, span.size() as usize),
+                    super::META.id,
+                    format!(
+                        "Non-component export `{name}` alongside component exports breaks React Fast Refresh. Move it to a separate module."
+                    ),
+                    Severity::Error,
+                )
             })
             .collect()
     }
@@ -341,6 +341,21 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
+    #[test]
+    fn anchors_each_export_of_a_shared_line_on_its_own_column() {
+        // Regression for rbaumier/comply#8386 — the carrier held only the
+        // export's line, so two non-component exports declared on one line
+        // produced two records identical in every serialized field.
+        let src = "import React from 'react';\nexport const Comp = () => null;\nexport const helper = () => 1; export const other = () => 2;\n";
+        let diags = run(src);
+        let positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        assert_eq!(positions, vec![(3, 1), (3, 32)]);
+        for d in &diags {
+            let (offset, len) = d.span.expect("the anchor carries the export's span");
+            assert!(src[offset..offset + len].starts_with("export const"));
+        }
     }
 
     fn run_tanstack(source: &str) -> Vec<Diagnostic> {

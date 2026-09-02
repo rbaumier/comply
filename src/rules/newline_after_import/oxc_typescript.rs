@@ -70,18 +70,40 @@ impl OxcCheck for Check {
         // If the next statement starts on the line right after the import ends,
         // there is no blank line separator.
         if next_start_line == import_end_line + 1 {
-            let (line, _) = byte_offset_to_line_col(ctx.source, import_span.start as usize);
-            return vec![Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column: 1,
-                rule_id: super::META.id.into(),
-                message: "Expected a blank line after the last import statement.".into(),
-                severity: Severity::Error,
-                span: None,
-            }];
+            // Anchor on the import declaration itself, so the caret lands on the
+            // `import` keyword rather than on column 1 of that line.
+            return vec![Diagnostic::at_offset(
+                Arc::clone(&ctx.path_arc),
+                ctx.source,
+                (import_span.start as usize, import_span.size() as usize),
+                super::META.id,
+                "Expected a blank line after the last import statement.".into(),
+                Severity::Error,
+            )];
         }
 
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_by_id(super::super::META.id, source, "t.ts")
+    }
+
+    #[test]
+    fn anchors_on_the_import_declaration() {
+        // Regression for rbaumier/comply#8386 — the rule held the import's span
+        // and emitted `column: 1, span: None`, so nothing underlined the
+        // statement the message names.
+        let src = "import a from 'a';\nconst b = 1;\n";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (1, 1));
+        let (offset, len) = diags[0].span.expect("the anchor carries the import's span");
+        assert_eq!(&src[offset..offset + len], "import a from 'a';");
     }
 }

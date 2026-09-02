@@ -41,17 +41,20 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column: 1,
-                rule_id: super::META.id.into(),
-                message: "Workaround/hack comment without an issue reference — \
-                          add a link or ticket number."
+            // Anchor on the comment itself: two `// hack` comments on one line
+            // (e.g. after two statements) are two findings at two columns.
+            // `start`/`end` are the comment's own byte range, so the span
+            // highlights exactly the comment text.
+            diagnostics.push(Diagnostic::at_offset(
+                Arc::clone(&ctx.path_arc),
+                ctx.source,
+                (start, end - start),
+                super::META.id,
+                "Workaround/hack comment without an issue reference — \
+                 add a link or ticket number."
                     .into(),
-                severity: Severity::Error,
-                span: None,
-            });
+                Severity::Error,
+            ));
         }
         diagnostics
     }
@@ -70,5 +73,29 @@ impl crate::rules::test_helpers::RunRule for Check {
         file: &crate::rules::file_ctx::FileCtx,
     ) -> Vec<crate::diagnostic::Diagnostic> {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_on(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn anchors_each_comment_of_a_shared_line_on_its_own_column() {
+        // Regression for rbaumier/comply#8386 — two unreferenced hack comments
+        // on one line used to produce two records identical in every
+        // serialized field.
+        let src = "const a = 1; /* hack */ const b = 2; /* hack */";
+        let diags = run_on(src);
+        let positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        assert_eq!(positions, vec![(1, 14), (1, 38)]);
+        for d in &diags {
+            let (offset, len) = d.span.expect("the anchor carries the comment's span");
+            assert_eq!(&src[offset..offset + len], "/* hack */");
+        }
     }
 }

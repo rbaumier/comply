@@ -3,10 +3,9 @@
 
 use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -43,7 +42,10 @@ impl OxcCheck for Check {
         }
 
         let source = ctx.source;
-        let mut bodies: Vec<(usize, String)> = Vec::new();
+        // Each branch carries its own byte span, not just its line: two `if`
+        // arms written inline on one line are two findings, and the span is
+        // what tells them apart (and underlines the offending arm).
+        let mut bodies: Vec<(Span, String)> = Vec::new();
         collect_branch_bodies(stmt, source, &mut bodies);
 
         if bodies.len() < 2 {
@@ -60,27 +62,28 @@ impl OxcCheck for Check {
             if bodies[j].1.is_empty() || bodies[j - 1].1.is_empty() {
                 continue;
             }
-            if bodies[j].1 == bodies[j - 1].1 && reported.insert(bodies[j].0) {
-                diagnostics.push(Diagnostic {
-                    path: Arc::clone(&ctx.path_arc),
-                    line: bodies[j].0,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: "This branch has the same body as the previous branch — merge conditions or remove the duplicate.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+            if bodies[j].1 == bodies[j - 1].1 && reported.insert(bodies[j].0.start) {
+                let span = bodies[j].0;
+                diagnostics.push(Diagnostic::at_offset(
+                    Arc::clone(&ctx.path_arc),
+                    source,
+                    (span.start as usize, span.size() as usize),
+                    super::META.id,
+                    "This branch has the same body as the previous branch — merge conditions or remove the duplicate.".into(),
+                    Severity::Error,
+                ));
             }
         }
     }
 }
 
-/// Recursively collect branch bodies from an if/else-if/else chain.
-fn collect_branch_bodies(stmt: &IfStatement, source: &str, bodies: &mut Vec<(usize, String)>) {
+/// Recursively collect branch bodies from an if/else-if/else chain, each paired
+/// with the span of the branch body it came from — the span is the anchor the
+/// diagnostic reports on.
+fn collect_branch_bodies(stmt: &IfStatement, source: &str, bodies: &mut Vec<(Span, String)>) {
     // Get the consequence body text.
     let body_text = block_body_text(&stmt.consequent, source);
-    let (line, _) = byte_offset_to_line_col(source, stmt.consequent.span().start as usize);
-    bodies.push((line, body_text));
+    bodies.push((stmt.consequent.span(), body_text));
 
     // Check alternative.
     if let Some(ref alt) = stmt.alternate {
@@ -90,13 +93,11 @@ fn collect_branch_bodies(stmt: &IfStatement, source: &str, bodies: &mut Vec<(usi
             }
             Statement::BlockStatement(block) => {
                 let text = block_stmt_body_text(block, source);
-                let (line, _) = byte_offset_to_line_col(source, block.span().start as usize);
-                bodies.push((line, text));
+                bodies.push((block.span(), text));
             }
             _ => {
                 let text = stmt_text(alt, source);
-                let (line, _) = byte_offset_to_line_col(source, alt.span().start as usize);
-                bodies.push((line, text));
+                bodies.push((alt.span(), text));
             }
         }
     }
@@ -155,6 +156,21 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn anchors_each_branch_of_a_shared_line_on_its_own_column() {
+        // Regression for rbaumier/comply#8386 — the carrier held the branch's
+        // line, so inline arms collapsed onto one position (and the by-line
+        // dedup then dropped the second finding entirely).
+        let src = "if (a) { z(); } else if (b) { z(); } else if (c) { z(); }";
+        let diags = run_on(src);
+        let positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        assert_eq!(positions, vec![(1, 29), (1, 50)]);
+        for d in &diags {
+            let (offset, len) = d.span.expect("the anchor carries the branch body's span");
+            assert_eq!(&src[offset..offset + len], "{ z(); }");
+        }
     }
 
     #[test]
