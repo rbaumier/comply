@@ -88,7 +88,7 @@ pub const CLIPPY_THRESHOLD_LINTS: &[ClippyArg] = &[
         kind: ArgKind::Int,
     },
     ClippyArg {
-        lint: "clippy::trivial_copy_pass_by_ref",
+        lint: "clippy::trivially_copy_pass_by_ref",
         clippy_toml_key: "trivial-copy-size-limit",
         kind: ArgKind::Int,
     },

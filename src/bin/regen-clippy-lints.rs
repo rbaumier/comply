@@ -142,7 +142,7 @@ const THRESHOLD_LINTS: &[(&str, &str, &str)] = &[
         "Int",
     ),
     (
-        "clippy::trivial_copy_pass_by_ref",
+        "clippy::trivially_copy_pass_by_ref",
         "trivial-copy-size-limit",
         "Int",
     ),
