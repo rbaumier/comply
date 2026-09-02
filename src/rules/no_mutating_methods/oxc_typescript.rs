@@ -1,9 +1,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, expression_is_array, is_array_evident_initializer,
-    is_node_module_system_target, is_pinia_store_binding, is_reduce_accumulator_param,
-    is_vue_ref_value_target, locally_owned_binding_init, resolves_to_import_from,
-    root_identifier_of_expr,
+    is_call_ref_value_target, is_node_module_system_target, is_pinia_store_binding,
+    is_reduce_accumulator_param, is_vue_ref_value_target, locally_owned_binding_init,
+    resolves_to_import_from, root_identifier_of_expr,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
@@ -67,12 +67,17 @@ impl OxcCheck for Check {
         // mutates the deeply-reactive array a `ref([])` holds — the idiomatic,
         // referentially-stable Vue 3 update. The receiver `<ref>.value` is itself
         // a member access whose base is the ref identifier, so the receiver's
-        // `.object` is the `<ref>.value` node passed to `is_vue_ref_value_target`.
-        // The non-mutating alternative (`tabs.value = [...tabs.value, x]`)
-        // reallocates the array and drops its reactive identity. Parity with
-        // `no-mutation` / `no-property-mutation`, which exempt `<ref>.value` writes.
+        // `.object` is the `<ref>.value` node passed to both predicates. The
+        // non-mutating alternative (`tabs.value = [...tabs.value, x]`) reallocates
+        // the array and drops its reactive identity. `is_call_ref_value_target`
+        // covers the ref a composable returned (`const list = useStorage(k, [])`),
+        // whose factory is not one of Vue's own — a `Ref<T>` is mutated through
+        // `.value` whichever call produced it. Parity with `no-mutation` /
+        // `no-property-mutation`, which apply the same disjunction to `<ref>.value`
+        // writes.
         if let Expression::StaticMemberExpression(inner) = &member.object
-            && is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+            && (is_vue_ref_value_target(inner, semantic, ctx.project, ctx.path)
+                || is_call_ref_value_target(inner, semantic))
         {
             return;
         }
@@ -111,20 +116,26 @@ impl OxcCheck for Check {
         // Reduce accumulator: `menus.reduce((acc, cur) => { acc.push(cur); return
         // acc; }, [])` mutates the callback's accumulator parameter — the canonical
         // reduce pattern, where the accumulator is threaded through and returned,
-        // never observed elsewhere until `reduce` completes. Parity with
-        // `no-mutation` / `no-property-mutation`, which exempt reduce-accumulator
-        // mutations via the same helper.
-        if let Expression::Identifier(receiver) = &member.object
-            && is_reduce_accumulator_param(receiver, semantic)
+        // never observed elsewhere until `reduce` completes. A sub-array the
+        // accumulator holds is just as private (`acc[key].push(x)`,
+        // `all['Page Views'].push(x)`, `acc.foo.push(x)` — the groupBy/bucketing
+        // idiom), so the receiver chain's root identifier is what resolves to the
+        // callback parameter, mirroring the Pinia-consumer exemption above. The
+        // root walk descends member links only, so a chain broken by a call
+        // (`getAcc()[key].push(x)`) resolves to no binding and stays flagged.
+        // Parity with `no-mutation` / `no-property-mutation`, which exempt
+        // reduce-accumulator mutations via the same helper.
+        if let Some(root) = root_identifier_of_expr(&member.object)
+            && is_reduce_accumulator_param(root, semantic)
         {
             return;
         }
 
         // Mutation of a locally-owned array is not externally observable: the
         // receiver resolves to a `const`/`let` declared in an inner (non-module)
-        // scope whose initialiser is an array-evident expression — an array
-        // literal (`[...]`, `[]`), a `new Array(...)`, or a fresh-array-producing
-        // call (`data.map(...)`, `items.filter(...)`, `str.split(...)`,
+        // scope whose initialiser allocates a fresh array — an array literal
+        // (`[...]`, `[]`), a `new Array(...)`, or a fresh-array-producing call
+        // (`data.map(...)`, `items.filter(...)`, `str.split(...)`,
         // `Array.from(...)`, `Object.keys(...)`). This covers both the
         // "build up an accumulator then return it" pattern (`const actions =
         // [a, b]; actions.push(c); return v.pipe(...actions)`) and the
@@ -133,8 +144,7 @@ impl OxcCheck for Check {
         // array, a module-scope array, or a property (`this.items`, `obj.list`)
         // is not exempt — those may be observed by other code.
         if let Expression::Identifier(receiver) = &member.object
-            && locally_owned_binding_init(receiver, semantic)
-                .is_some_and(is_array_evident_initializer)
+            && locally_owned_binding_init(receiver, semantic).is_some_and(is_fresh_array_expression)
         {
             return;
         }
@@ -150,11 +160,11 @@ impl OxcCheck for Check {
         //   or a static one (`Object.keys(o).sort()`, `Array.from(x).sort()`).
         // In every case nothing else references the array — the canonical
         // "sort/reverse/fill a fresh array" idiom. A receiver whose call is not
-        // a fresh-array producer (`obj.getList().reverse()`) may return a shared
-        // array, so it stays flagged; a plain-identifier or member receiver is
-        // never array-evident here and is handled by the binding checks
-        // above/below.
-        if is_array_evident_initializer(&member.object) {
+        // a fresh-array producer (`obj.getList().reverse()`, `shared.fill(0)`)
+        // may return a shared array, so it stays flagged; a plain-identifier or
+        // member receiver is never fresh here and is handled by the binding
+        // checks above/below.
+        if is_fresh_array_expression(&member.object) {
             return;
         }
 
@@ -208,6 +218,27 @@ impl OxcCheck for Check {
     }
 }
 
+/// True when `expr` allocates a *fresh* array — one no other code can already
+/// hold a reference to, so mutating it in place is unobservable.
+///
+/// Narrows [`is_array_evident_initializer`], which answers the different
+/// question "does this expression evaluate to an array?". That set includes
+/// `fill`, because `sharedParam.fill(0)` is indeed an array — but it is the
+/// *receiver's* array: `Array.prototype.fill` mutates in place and returns the
+/// same reference, so a `fill` call inherits its receiver's freshness instead of
+/// producing it. `new Array(n).fill(0)` and `[...xs].fill(0)` stay fresh through
+/// that recursion, while `sharedParam.fill(0)` does not.
+fn is_fresh_array_expression(expr: &Expression) -> bool {
+    // `x.fill(v)` evaluates to `x`, so ask the receiver, not the call.
+    if let Expression::CallExpression(call) = expr
+        && let Expression::StaticMemberExpression(member) = &call.callee
+        && member.property.name.as_str() == "fill"
+    {
+        return is_fresh_array_expression(&member.object);
+    }
+    is_array_evident_initializer(expr)
+}
+
 /// True when a `.fill(...)` call is not an `Array.prototype.fill` mutation.
 ///
 /// `Array.prototype.fill(value, start?, end?)` always passes a fill value, so
@@ -227,6 +258,11 @@ impl OxcCheck for Check {
 ///   to an arbitrary member-chain such as a Playwright `Locator`
 ///   (`const field = page.getByLabel(...)`) is not array-evident, so the
 ///   single-argument `field.fill(value)` is a Locator interaction.
+///
+/// This is the array-detection role, not the freshness role
+/// ([`is_fresh_array_expression`]): a receiver bound to `other.fill(0)` is an
+/// array, so `.fill()` on it is an array mutation even though the array is
+/// shared.
 fn is_non_array_fill(
     member: &oxc_ast::ast::StaticMemberExpression,
     call: &oxc_ast::ast::CallExpression,
@@ -1267,11 +1303,11 @@ mod tests {
 
     #[test]
     fn still_flags_push_on_non_ref_value_array_issue_7656() {
-        // Negative space for #7656 — `.value` on a plain const (not bound to a Vue
-        // ref factory, no `vue` import) is an ordinary array mutation, still
-        // flagged; only a genuine `<ref>.value` receiver is exempt.
+        // Negative space for #7656 — no call produced `notARef`, so it holds no
+        // ref and `.value.push(1)` is an ordinary array mutation, still flagged;
+        // only a genuine `<ref>.value` receiver is exempt.
         let src = r#"
-            const notARef = getThing();
+            const notARef = source;
             notARef.value.push(1);
         "#;
         assert_eq!(run(src).len(), 1);
@@ -1455,5 +1491,154 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 2);
+    }
+
+    // Sub-array of a reduce accumulator — issue #8067
+
+    #[test]
+    fn ignores_push_on_reduce_accumulator_sub_array_issue_8067() {
+        // Regression for rbaumier/comply#8067 — postiz `linkedin.provider.ts`
+        // groupBy: `acc[upload.postId].push(upload.id)` mutates a bucket held by
+        // the accumulator being built. The whole accumulator graph is private
+        // until `reduce` returns, so the sub-array is as unobservable as `acc`.
+        let src = r#"
+            function groupUploads(mediaUploads) {
+                return mediaUploads.reduce((acc, upload) => {
+                    if (!upload?.id) return acc;
+                    acc[upload.postId] = acc[upload.postId] || [];
+                    acc[upload.postId].push(upload.id);
+                    return acc;
+                }, {} as Record<string, string[]>);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_string_keyed_reduce_accumulator_bucket_issue_8067() {
+        // #8067 — postiz `linkedin.page.provider.ts`: the same shape with
+        // string-literal keys, over an accumulator seeded with the buckets.
+        let src = r#"
+            function analytics(elements) {
+                return elements.reduce(
+                    (all, current) => {
+                        all['Page Views'].push({ total: current.views, date: current.date });
+                        all['Organic Followers'].push({ total: current.followers });
+                        return all;
+                    },
+                    { 'Page Views': [], 'Organic Followers': [] },
+                );
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_push_on_sub_array_of_call_result_issue_8067() {
+        // Negative space for #8067 — the root walk descends member links only, so
+        // a receiver chain broken by a call resolves to no binding: `getAcc()` may
+        // hand back an accumulator someone else already holds, so it stays
+        // flagged. (`obj.items.push(x)` on a non-accumulator receiver is pinned by
+        // `still_flags_push_on_plain_property_array_issue_7656`.)
+        let src = r#"
+            function bucket(key, value) {
+                getAcc()[key].push(value);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    // Composable-returned ref `.value` — issue #7801
+
+    #[test]
+    fn ignores_push_on_composable_ref_value_array_issue_7801() {
+        // Regression for rbaumier/comply#7801 — `useStorage` (VueUse) returns a
+        // `Ref<string[]>`; `list.value.push(x)` is the same reactive,
+        // identity-preserving update as on a `ref([])`, whichever call produced
+        // the ref. Parity with the disjunction `no-mutation` /
+        // `no-property-mutation` already apply to `<ref>.value` writes.
+        let src = r#"
+            const list = useStorage<string[]>('list', []);
+            function add(x: string) {
+                list.value.push(x);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_push_on_imported_vue_ref_value_array_issue_7801() {
+        // #7801 — the ref-provenance lever stays load-bearing beside the
+        // call-initialiser one: an imported binding has no initialiser to read, so
+        // resolving `tabs` to a `ref(...)` export of another module is the only
+        // thing that can exempt `tabs.value.push(tab)`.
+        let files = &[
+            (
+                "state/index.ts",
+                "import { ref } from 'vue'\nexport const tabs = ref<string[]>([])",
+            ),
+            (
+                "composables/useTabs.ts",
+                "import { tabs } from '../state'\n\
+                 export function addTab(tab: string) {\n\
+                     tabs.value.push(tab);\n\
+                 }",
+            ),
+        ];
+        assert!(run_on_project(files, "composables/useTabs.ts").is_empty());
+    }
+
+    // `Array.prototype.fill` returns its receiver — issue #7710
+
+    #[test]
+    fn still_flags_pop_on_binding_of_shared_fill_call_issue_7710() {
+        // Regression for rbaumier/comply#7710 — `.fill()` mutates in place and
+        // returns the same reference, so `const a = sharedParam.fill(0)` aliases
+        // the caller's array and `a.pop()` shortens it observably.
+        let src = r#"
+            function f(sharedParam: number[]) {
+                const a = sharedParam.fill(0);
+                a.pop();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_pop_on_inline_shared_fill_chain_issue_7710() {
+        // #7710 — the inline chain aliases just the same: `sharedArr.fill(0)`
+        // evaluates to `sharedArr`, so the chained `.pop()` is the caller's.
+        let src = r#"
+            function f(sharedArr: number[]) {
+                return sharedArr.fill(0).pop();
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_sort_on_fresh_new_array_fill_chain_issue_7710() {
+        // Negative space for #7710 — freshness comes from the receiver of
+        // `.fill()`, never from `.fill()` itself: `new Array(n)` allocates, so the
+        // filled array is nobody else's and sorting it stays exempt.
+        let src = r#"
+            function zeros(n: number) {
+                return new Array(n).fill(0).sort();
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_pop_on_local_binding_of_fresh_fill_call_issue_7710() {
+        // Negative space for #7710 — the identifier-bound path keeps the same
+        // recursion: `const buf = new Array(n).fill(0)` holds a brand-new array.
+        let src = r#"
+            function drain(n: number) {
+                const buf = new Array(n).fill(0);
+                return buf.pop();
+            }
+        "#;
+        assert!(run(src).is_empty());
     }
 }
