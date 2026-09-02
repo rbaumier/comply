@@ -1587,8 +1587,8 @@ fn is_named_type_reference(ty: &oxc_ast::ast::TSType) -> bool {
 /// external state.
 ///
 /// Two declarators allocate:
-/// - the whole initializer, when it constructs a fresh object
-///   (`is_fresh_copy_expression`): an object literal / object-spread
+/// - the whole initializer, when it constructs a fresh COPY
+///   ([`Allocation::Copy`]): an object literal / object-spread
 ///   (`{ key: val }` / `{ ...other }`), `Object.assign(<fresh>, …)`, or
 ///   `structuredClone(…)`;
 /// - the rest element of an object pattern (`const { a, ...rest } = props`),
@@ -1610,6 +1610,48 @@ pub fn is_local_object_builder_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    local_binding_allocates(ident, semantic, Allocation::Copy)
+}
+
+/// True when `ident` resolves to a local `const`/`let` binding whose declarator
+/// ALLOCATES the object it holds — [`is_local_object_builder_binding`]'s copies
+/// plus every other construction that hands back a value nobody else names
+/// ([`Allocation::Any`]): `new URL(raw)`, `JSON.parse(text)`,
+/// `buildDefaults()`.
+///
+/// This says the object was born here; it does NOT say it is still private.
+/// A caller that needs privacy pairs it with the escape walk in
+/// [`is_sole_owned_fresh_object_at`], which is the only reason the two tiers are
+/// separate: a copy is answerable on its own (a spread of the source is a new
+/// object either way), while `new Foo()` becomes shared the moment the binding
+/// is handed out.
+#[must_use]
+pub fn is_local_fresh_object_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    local_binding_allocates(ident, semantic, Allocation::Any)
+}
+
+/// Which initializers count as "this declarator allocated the object".
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Allocation {
+    /// A fresh copy of existing values: an object literal / spread,
+    /// `Object.assign(<fresh>, …)`, `structuredClone(x)`.
+    Copy,
+    /// Every `Copy` form, plus the constructions that allocate without copying:
+    /// `new X(…)`, an allocating global built-in, a local factory call.
+    Any,
+}
+
+/// The shared resolution both tiers use: `ident` → symbol → declaration node →
+/// the `VariableDeclarator` that introduced it, then the initializer test named
+/// by `allocation`.
+fn local_binding_allocates(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    allocation: Allocation,
+) -> bool {
     use oxc_ast::AstKind;
     use oxc_ast::ast::{BindingPattern, VariableDeclarationKind};
 
@@ -1627,9 +1669,10 @@ pub fn is_local_object_builder_binding(
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let allocates = match &decl.id {
-                BindingPattern::BindingIdentifier(_) => {
-                    decl.init.as_ref().is_some_and(is_fresh_copy_expression)
-                }
+                BindingPattern::BindingIdentifier(_) => decl
+                    .init
+                    .as_ref()
+                    .is_some_and(|init| initializer_allocates(init, semantic, allocation)),
                 BindingPattern::ObjectPattern(pattern) => {
                     pattern.rest.as_ref().is_some_and(|rest| {
                         matches!(&rest.argument, BindingPattern::BindingIdentifier(rest_id)
@@ -1668,7 +1711,7 @@ pub fn is_local_object_builder_binding(
 /// as the bare identifier.
 ///
 /// The fresh object comes either from the binding's own declarator
-/// (`is_local_object_builder_binding`) or from a reassignment before the
+/// (`is_local_fresh_object_binding`) or from a reassignment before the
 /// mutation — the `options = { ...options }` normalisation idiom.
 /// `fresh_origin_before` decides which, and rejects a binding any write may hand
 /// an object the function did not build. Either way the object is born at one
@@ -1735,8 +1778,17 @@ pub fn is_sole_owned_fresh_object_at(
             let span = nodes.kind(assignment_id).span();
             FreshObject { origin: span, owned_from: span.end }
         }
-        FreshOrigin::Declarator | FreshOrigin::BranchAssignment => {
-            if !is_local_object_builder_binding(ident, semantic) {
+        FreshOrigin::Declarator
+        | FreshOrigin::BranchAssignment
+        | FreshOrigin::ExclusiveAssignment => {
+            // The mutation may act on whatever the DECLARATOR left in the
+            // binding, so that value has to be one this function built —
+            // unless the declarator left no value at all. `let model;` declares
+            // nothing, and every write that could have filled it is fresh, or
+            // the classification above would have said `Foreign`.
+            if !is_local_fresh_object_binding(ident, semantic)
+                && !binding_declared_without_initializer(sym_id, semantic)
+            {
                 return false;
             }
             let span = nodes.kind(declaration_id).span();
@@ -1772,6 +1824,28 @@ pub fn is_sole_owned_fresh_object_at(
     })
 }
 
+/// True when the binding `sym_id` was declared with no initializer at all
+/// (`let model;`). Such a declarator hands the binding `undefined`, not an
+/// object some caller may also hold, so it is never the foreign value an
+/// ownership test has to rule out.
+fn binding_declared_without_initializer(
+    sym_id: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    let nodes = semantic.nodes();
+    let decl_node_id = semantic.scoping().symbol_declaration(sym_id);
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        if let AstKind::VariableDeclarator(decl) = kind {
+            return decl.init.is_none();
+        }
+    }
+    false
+}
+
 /// A freshly-built object a binding holds: where it is built, and the offset
 /// from which the binding names it rather than the value it held before.
 struct FreshObject {
@@ -1788,9 +1862,12 @@ enum FreshOrigin {
     Assignment(oxc_semantic::NodeId),
     /// A write before the mutation builds a fresh object, but it does not
     /// dominate the mutation, so the mutation may still act on the declarator's
-    /// object — including when the write sits in a branch the mutation can
-    /// never follow.
+    /// object.
     BranchAssignment,
+    /// Every fresh write before the mutation sits in a branch the mutation can
+    /// never follow (`if (c) { o = { ...o } } else { o.x = 1 }`), so the
+    /// mutation provably acts on the declarator's object.
+    ExclusiveAssignment,
     /// A write may hand the binding an object the function did not build.
     Foreign,
 }
@@ -1829,6 +1906,7 @@ fn fresh_origin_before(
     let nodes = semantic.nodes();
     let mut nearest: Option<(u32, oxc_semantic::NodeId)> = None;
     let mut any_fresh = false;
+    let mut any_reachable_fresh = false;
     let mut last_unclassified: Option<u32> = None;
     for reference in semantic.scoping().get_resolved_references(sym_id) {
         if !reference.flags().contains(ReferenceFlags::Write) {
@@ -1845,16 +1923,21 @@ fn fresh_origin_before(
         let builds_fresh_object = matches!(assignment.kind(), AstKind::AssignmentExpression(assign)
             if assign.operator == AssignmentOperator::Assign
                 && matches!(assign.left, AssignmentTarget::AssignmentTargetIdentifier(_))
-                && is_fresh_copy_expression(&assign.right));
+                && initializer_allocates(&assign.right, semantic, Allocation::Any));
         if !builds_fresh_object {
             last_unclassified = last_unclassified.max(Some(write_start));
             continue;
         }
         any_fresh = true;
-        if assignment_reaches_mutation(assignment.id(), mutation_span, scope_id, nodes)
-            && nearest.is_none_or(|(start, _)| write_start > start)
-        {
-            nearest = Some((write_start, assignment.id()));
+        if assignment_reaches_mutation(assignment.id(), mutation_span, scope_id, nodes) {
+            if nearest.is_none_or(|(start, _)| write_start > start) {
+                nearest = Some((write_start, assignment.id()));
+            }
+        } else if !assignment_excludes_mutation(assignment.id(), mutation_span, scope_id, nodes) {
+            // A write that does not dominate the mutation but is not mutually
+            // exclusive with it either — the mutation sits after the whole `if`,
+            // so it may well see the copy.
+            any_reachable_fresh = true;
         }
     }
     let unclassified_write_is_dead = match (nearest, last_unclassified) {
@@ -1867,9 +1950,56 @@ fn fresh_origin_before(
     }
     match nearest {
         Some((_, id)) => FreshOrigin::Assignment(id),
-        None if any_fresh => FreshOrigin::BranchAssignment,
+        None if any_reachable_fresh => FreshOrigin::BranchAssignment,
+        None if any_fresh => FreshOrigin::ExclusiveAssignment,
         None => FreshOrigin::Declarator,
     }
+}
+
+/// True when the assignment at `assignment_id` and `mutation_span` sit in
+/// branches of the same statement that never both run — the `if` consequent and
+/// its `alternate`, two `switch` cases, `try` and `catch`.
+///
+/// This is the sharp end of "the assignment does not dominate the mutation".
+/// `assignment_reaches_mutation` answers only "not on every path", which covers
+/// both a copy the mutation MAY see (`if (c) { o = {…o} } o.x = 1` — after the
+/// whole `if`) and one it provably never sees (`if (c) { o = {…o} } else { o.x =
+/// 1 }`). Only the second is indefensible, and only the second is what this
+/// reports.
+///
+/// The walk climbs from the assignment to the first branching ancestor whose own
+/// branch does not hold the mutation. If that STATEMENT nevertheless contains
+/// the mutation, the mutation is in one of its other arms; if it does not, the
+/// mutation is outside the statement altogether and merely conditional.
+fn assignment_excludes_mutation(
+    assignment_id: oxc_semantic::NodeId,
+    mutation_span: oxc_span::Span,
+    scope_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    let mut branch_span = nodes.kind(assignment_id).span();
+    for node in nodes.ancestors(assignment_id) {
+        if node.id() == scope_id {
+            return false;
+        }
+        let kind = node.kind();
+        let branches = matches!(
+            kind,
+            AstKind::IfStatement(_)
+                | AstKind::SwitchStatement(_)
+                | AstKind::TryStatement(_)
+                | AstKind::ConditionalExpression(_)
+                | AstKind::LogicalExpression(_)
+        );
+        if branches && !branch_span.contains_inclusive(mutation_span) {
+            return kind.span().contains_inclusive(mutation_span);
+        }
+        branch_span = kind.span();
+    }
+    false
 }
 
 /// True when `kind` is a node whose body runs once per call — the scope that
@@ -2090,47 +2220,266 @@ fn declares_binding_in_head(kind: oxc_ast::AstKind, origin_span: oxc_span::Span)
         .is_some_and(|init| init.span().contains_inclusive(origin_span))
 }
 
-/// True when `expr` constructs a brand-new object that copies from existing
-/// values — a fresh shallow copy whose properties can be assigned without
-/// touching the source:
+/// True when `expr`, used as a declarator's initializer, allocates the object it
+/// evaluates to — i.e. hands back a value no other code can already hold.
+/// `allocation` selects how much counts (see [`Allocation`]).
+///
+/// Always allocating (both tiers):
 /// - an object literal / object-spread `{ ...x }` / `{ a: 1 }`
 ///   (`Expression::ObjectExpression`);
 /// - `Object.assign(<fresh>, …)` where the first argument is itself a fresh
 ///   target — an object literal (`{}`) or `Object.create(null)`. The result
-///   object is the (new) first argument, so the assignment produces a fresh
-///   object rather than mutating an existing one. `Object.assign(existing, …)`,
-///   whose first argument is an identifier or member expression, is NOT fresh —
-///   it mutates `existing` in place and stays subject to the rule;
+///   object IS the (new) first argument, so the call produces a fresh object
+///   rather than mutating an existing one. `Object.assign(existing, …)`, whose
+///   first argument is an identifier or member expression, is NOT fresh — it
+///   mutates `existing` in place and stays subject to the rule;
 /// - `structuredClone(x)`, which always allocates a new object graph.
-fn is_fresh_copy_expression<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> bool {
+///
+/// Allocating under [`Allocation::Any`] only:
+/// - a `new X(…)` construction. Unless the constructor explicitly returns
+///   another object, `new` allocates — `new URL(raw)`, `new TypeError(msg)` and
+///   `new Foo()` hand back a value nobody else names, which is the most direct
+///   evidence of local ownership there is;
+/// - the global built-ins the specification requires to construct their result
+///   (`is_allocating_global_call`);
+/// - a call to a function declared in this file whose every `return` is itself
+///   an allocation (`returns_fresh_object_call`).
+///
+/// An ordinary call is never an allocation: `makeObj()` may hand back a cached
+/// singleton, and nothing in the expression says otherwise.
+fn initializer_allocates<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+    allocation: Allocation,
+) -> bool {
+    initializer_allocates_bounded(expr, semantic, allocation, 0, &mut Vec::new())
+}
+
+/// [`initializer_allocates`] carrying the recursion budget and the cycle break
+/// that `returns_fresh_object_call` needs when it re-enters this test on a
+/// callee's `return` values.
+fn initializer_allocates_bounded<'a>(
+    expr: &'a oxc_ast::ast::Expression<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+    allocation: Allocation,
+    depth: usize,
+    visiting: &mut Vec<oxc_span::Span>,
+) -> bool {
     use oxc_ast::ast::Expression;
     // Peel transparent wrappers first: `{} as ThemePalette` (and `satisfies T` /
     // `!` / `(…)`) evaluates to the same fresh object as the bare `{}`. See
     // `peel_value_wrappers` for the full set of value-preserving wrappers stripped.
     match peel_value_wrappers(expr) {
         Expression::ObjectExpression(_) => true,
-        Expression::CallExpression(call) => match &call.callee {
-            Expression::Identifier(callee) => {
-                callee.name.as_str() == "structuredClone" && !call.arguments.is_empty()
+        Expression::NewExpression(_) => allocation == Allocation::Any,
+        Expression::CallExpression(call) => {
+            if allocation == Allocation::Any
+                && (is_allocating_global_call(call, semantic)
+                    || matches!(&call.callee, Expression::Identifier(callee)
+                        if returns_fresh_object_call(callee, semantic, depth, visiting)))
+            {
+                return true;
             }
-            Expression::StaticMemberExpression(member) => {
-                let Expression::Identifier(obj) = &member.object else {
-                    return false;
-                };
-                if obj.name.as_str() != "Object" || member.property.name.as_str() != "assign" {
-                    return false;
+            match &call.callee {
+                Expression::Identifier(callee) => {
+                    callee.name.as_str() == "structuredClone" && !call.arguments.is_empty()
                 }
-                // First argument must itself be a freshly-created target.
-                match call.arguments.first().and_then(|arg| arg.as_expression()) {
-                    Some(Expression::ObjectExpression(_)) => true,
-                    Some(Expression::CallExpression(inner)) => is_object_create_null(inner),
-                    _ => false,
+                Expression::StaticMemberExpression(member) => {
+                    let Expression::Identifier(obj) = &member.object else {
+                        return false;
+                    };
+                    if obj.name.as_str() != "Object" || member.property.name.as_str() != "assign" {
+                        return false;
+                    }
+                    // First argument must itself be a freshly-created target.
+                    match call.arguments.first().and_then(|arg| arg.as_expression()) {
+                        Some(Expression::ObjectExpression(_)) => true,
+                        Some(Expression::CallExpression(inner)) => is_object_create_null(inner),
+                        _ => false,
+                    }
                 }
+                _ => false,
             }
-            _ => false,
-        },
+        }
         _ => false,
     }
+}
+
+/// Global built-ins whose specification requires the call to CONSTRUCT its
+/// result, so no other code can hold the object it hands back. `JSON.parse`
+/// builds every object and array in the graph it returns during the call;
+/// `Object.fromEntries`, `Object.create`, `Array.from` and `Array.of` likewise
+/// allocate. This is a language contract, not a project convention: an ordinary
+/// call (`makeObj()`) may hand back a cached singleton and stays foreign.
+///
+/// The receiver is checked as well as the method, and it must resolve to no
+/// local binding — a local `parse(raw)` import, a `db.create(x)` model call, or
+/// a shadowing `const JSON = …` is not the global built-in.
+fn is_allocating_global_call(
+    call: &oxc_ast::ast::CallExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    let Expression::Identifier(object) = &member.object else {
+        return false;
+    };
+    if !reference_resolves_to_no_local_binding(object, semantic) {
+        return false;
+    }
+    matches!(
+        (object.name.as_str(), member.property.name.as_str()),
+        ("JSON", "parse") | ("Object", "fromEntries" | "create") | ("Array", "from" | "of")
+    )
+}
+
+/// How deep [`returns_fresh_object_call`] follows a chain of local factories
+/// before giving up. A factory calling a factory calling a factory is already
+/// past the shape this analysis is for, and the bound is what makes it
+/// guaranteed to terminate alongside the visited-function set.
+const FRESH_OBJECT_CALL_MAX_DEPTH: usize = 4;
+
+/// The function `callee` names, when it is declared in this file and cannot be
+/// re-pointed: a `function` declaration, or a `const`/`let` bound to an arrow or
+/// function expression. Returns the body, its span (which identifies the
+/// function when matching `return` statements to their owner), and whether the
+/// body is a concise arrow expression.
+///
+/// A parameter, an imported binding, a method, or a callee any write reassigns
+/// resolves to no readable body, so the caller treats the call as foreign.
+fn local_callee_body<'a>(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<(&'a oxc_ast::ast::FunctionBody<'a>, oxc_span::Span, bool)> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_semantic::ReferenceFlags;
+
+    let ref_id = callee.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    // `let build = …; build = other` names a different function at run time.
+    if scoping
+        .get_resolved_references(sym_id)
+        .any(|reference| reference.flags().contains(ReferenceFlags::Write))
+    {
+        return None;
+    }
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    for kind in
+        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
+        match kind {
+            // `async` yields a promise and `function*` an iterator — neither is
+            // the object literal the body writes.
+            AstKind::Function(func) if func.r#async || func.generator => return None,
+            AstKind::Function(func) => {
+                return func.body.as_ref().map(|body| (&**body, func.span, false));
+            }
+            AstKind::VariableDeclarator(decl) => {
+                return match decl.init.as_ref().map(peel_value_wrappers) {
+                    Some(Expression::ArrowFunctionExpression(arrow)) if !arrow.r#async => {
+                        Some((&arrow.body, arrow.span, arrow.expression))
+                    }
+                    Some(Expression::FunctionExpression(func))
+                        if !func.r#async && !func.generator =>
+                    {
+                        func.body.as_ref().map(|body| (&**body, func.span, false))
+                    }
+                    _ => None,
+                };
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// True when calling `callee` provably yields an object this call allocated:
+/// `callee` resolves to a function in this file whose EVERY `return` hands back
+/// an allocation ([`initializer_allocates`], applied recursively), and whose
+/// body cannot fall off the end into an implicit `return undefined`.
+///
+/// The last statement must itself be the `return`, which is what rules out the
+/// fall-through path without a control-flow graph: `if (c) return {}` leaves a
+/// path that returns nothing, and that path hands the caller a value this test
+/// cannot vouch for.
+///
+/// Returning a fresh object says nothing about the freshness of the properties
+/// inside it — `build(src)` may put `src.rows` under a new key — which is why
+/// the ownership tests that read this only ever exempt a DIRECT property of the
+/// binding.
+fn returns_fresh_object_call<'a>(
+    callee: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+    depth: usize,
+    visiting: &mut Vec<oxc_span::Span>,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Statement;
+    use oxc_span::GetSpan;
+
+    if depth >= FRESH_OBJECT_CALL_MAX_DEPTH {
+        return false;
+    }
+    let Some((body, fn_span, concise)) = local_callee_body(callee, semantic) else {
+        return false;
+    };
+    // A callee that reaches itself would loop the walk; `visiting` is the cycle
+    // break, so a self- or mutually-recursive factory stays foreign.
+    if visiting.contains(&fn_span) {
+        return false;
+    }
+    visiting.push(fn_span);
+    let verdict = (|| {
+        // `(s) => ({ rows: s.rows })` has no `return` node: the body expression
+        // IS the returned value.
+        if concise {
+            return matches!(body.statements.first(), Some(Statement::ExpressionStatement(stmt))
+                if initializer_allocates_bounded(
+                    &stmt.expression,
+                    semantic,
+                    Allocation::Any,
+                    depth + 1,
+                    visiting,
+                ));
+        }
+        if !matches!(body.statements.last(), Some(Statement::ReturnStatement(_))) {
+            return false;
+        }
+        let nodes = semantic.nodes();
+        nodes.iter().all(|node| {
+            let AstKind::ReturnStatement(ret) = node.kind() else {
+                return true;
+            };
+            // A `return` inside a callback declared in the body belongs to that
+            // callback, not to this function.
+            let owner = nodes.ancestors(node.id()).find(|ancestor| {
+                matches!(
+                    ancestor.kind(),
+                    AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+                )
+            });
+            if owner.map(|node| node.kind().span()) != Some(fn_span) {
+                return true;
+            }
+            ret.argument.as_ref().is_some_and(|argument| {
+                initializer_allocates_bounded(
+                    argument,
+                    semantic,
+                    Allocation::Any,
+                    depth + 1,
+                    visiting,
+                )
+            })
+        })
+    })();
+    visiting.pop();
+    verdict
 }
 
 /// True when `call` is `Object.create(null)` — produces a fresh prototype-less
@@ -2234,12 +2583,26 @@ pub fn is_array_initializer(expr: &oxc_ast::ast::Expression) -> bool {
 }
 
 /// True when there is static evidence that the target of `delete member` is an
-/// array: the index is a numeric literal (`arr[0]`), or the target identifier
-/// resolves to a binding declared as an array — an array initializer
-/// (`is_array_initializer`) or an array type annotation (`type_is_array`).
+/// array. **The receiver decides whenever it resolves; the index decides only
+/// when it does not.**
+///
+/// A receiver that resolves to a declaration — a `VariableDeclarator` or a
+/// `FormalParameter` — is judged on that declaration's own array evidence: an
+/// array/tuple type annotation (`type_is_array`) or an array initializer
+/// (`is_array_initializer`). Anything else it may be annotated with is not array
+/// evidence, whatever the index looks like: `delete cache[0]` on a
+/// `Record<number, string>` is an object-key deletion, and advising `splice` on
+/// it names a method the receiver does not have.
+///
+/// Only when the receiver resolves to nothing usable — an undeclared or imported
+/// name, a declaration of another kind, or a non-identifier object such as
+/// `delete getRows()[0]` — does a numeric-literal index stand as the sole
+/// evidence available.
 ///
 /// `delete` on an array leaves a sparse hole instead of shortening it, so the
-/// array case has its own remediation (`splice`) and its own rule.
+/// array case has its own remediation (`splice`) and its own rule; this
+/// predicate is what routes a statement to one rule or the other, so a wrong
+/// verdict replaces the right message rather than adding a second one.
 #[must_use]
 pub fn is_array_delete_target(
     member: &oxc_ast::ast::ComputedMemberExpression,
@@ -2248,30 +2611,32 @@ pub fn is_array_delete_target(
     use oxc_ast::AstKind;
     use oxc_ast::ast::Expression;
 
-    if matches!(member.expression, Expression::NumericLiteral(_)) {
-        return true;
+    let resolved_declaration = match &member.object {
+        Expression::Identifier(id) => id
+            .reference_id
+            .get()
+            .and_then(|ref_id| semantic.scoping().get_reference(ref_id).symbol_id())
+            .map(|sym_id| {
+                semantic.nodes().kind(semantic.scoping().symbol_declaration(sym_id))
+            }),
+        _ => None,
+    };
+    match resolved_declaration {
+        Some(AstKind::VariableDeclarator(decl)) => {
+            if let Some(annotation) = &decl.type_annotation
+                && type_is_array(&annotation.type_annotation)
+            {
+                return true;
+            }
+            matches!(&decl.init, Some(init) if is_array_initializer(init))
+        }
+        Some(AstKind::FormalParameter(param)) => param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|annotation| type_is_array(&annotation.type_annotation)),
+        // No declaration to read: the index is the only evidence there is.
+        _ => matches!(member.expression, Expression::NumericLiteral(_)),
     }
-    let Expression::Identifier(id) = &member.object else {
-        return false;
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let AstKind::VariableDeclarator(decl) =
-        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
-    else {
-        return false;
-    };
-    if let Some(annotation) = &decl.type_annotation
-        && type_is_array(&annotation.type_annotation)
-    {
-        return true;
-    }
-    matches!(&decl.init, Some(init) if is_array_initializer(init))
 }
 
 /// `true` when `expr` proves its value is a fresh array: an array literal
@@ -2548,8 +2913,7 @@ pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) ->
 
 /// True when, at the point of a mutation starting at byte offset `mutation_start`,
 /// the receiver `ident` provably holds a freshly-created local object because a
-/// preceding write reassigned its binding to a fresh-copy expression
-/// (`is_fresh_copy_expression`):
+/// preceding write reassigned its binding to an allocation:
 ///
 /// ```ts
 /// function f(options = {}) {
@@ -2561,14 +2925,16 @@ pub fn is_json_method_call(call: &oxc_ast::ast::CallExpression, method: &str) ->
 /// `fresh_origin_before` classifies the writes, the same classification
 /// [`is_sole_owned_fresh_object_at`] reads for the same binding. The two apply it
 /// at different strengths, deliberately. A write that may hand the binding an
-/// object the function did not build leaves the mutation flagged for both. Past
-/// that they diverge three ways: a fresh copy only one branch builds is enough
-/// here, while sole ownership needs one that runs on every path; this predicate
-/// does not ask who else holds the object, and sole ownership does; and this
-/// predicate reads a binding at any nesting depth, while sole ownership needs
-/// one declared inside a call scope. A binding never reassigned to a fresh copy
-/// (a plain parameter, or a `const` from an external call) has no qualifying
-/// write and stays flagged.
+/// object the function did not build leaves the mutation flagged for both, and
+/// so does a copy built only in a branch the mutation can never follow
+/// (`FreshOrigin::ExclusiveAssignment`) — no measurement defends exempting a
+/// mutation whose only path is the one that did NOT copy. Past that they diverge
+/// three ways: a copy that merely MAY reach the mutation is enough here, while
+/// sole ownership needs one that runs on every path; this predicate does not ask
+/// who else holds the object, and sole ownership does; and this predicate reads a
+/// binding at any nesting depth, while sole ownership needs one declared inside a
+/// call scope. A binding never reassigned to a fresh copy (a plain parameter, or
+/// a `const` from an external call) has no qualifying write and stays flagged.
 #[must_use]
 pub fn is_reassigned_fresh_copy_at(
     ident: &oxc_ast::ast::IdentifierReference,
@@ -2597,7 +2963,7 @@ pub fn is_reassigned_fresh_copy_at(
         semantic,
     ) {
         FreshOrigin::Assignment(_) | FreshOrigin::BranchAssignment => true,
-        FreshOrigin::Declarator | FreshOrigin::Foreign => false,
+        FreshOrigin::Declarator | FreshOrigin::ExclusiveAssignment | FreshOrigin::Foreign => false,
     }
 }
 
@@ -2820,16 +3186,52 @@ pub fn is_local_fresh_array_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    local_fresh_array_binding(ident, semantic).is_some()
+}
+
+/// True when `ident` names a local array binding that passes the same
+/// no-escape walk as [`is_local_fresh_array_binding`] AND whose initializer is
+/// provably an array — a literal, a preallocation (`Array(n)`, `new Array(n)`),
+/// or a built-in copy method. In other words: the function built this array and
+/// still owns it.
+///
+/// The extra demand is what makes the predicate usable where the receiver's
+/// TYPE is not otherwise established. `.sort()` on a receiver proves it is an
+/// array, so [`is_local_fresh_array_binding`] can accept an opaque
+/// `const xs = getItems()`; an indexed write `el['hidden'] = true` proves
+/// nothing, and accepting an opaque call there would exempt every local object
+/// written through a computed key.
+#[must_use]
+pub fn is_owned_fresh_array_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    local_fresh_array_binding(ident, semantic) == Some(ArrayFreshness::Provable)
+}
+
+/// How solid the evidence is that a binding holds a freshly allocated array.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrayFreshness {
+    /// The initializer is a call whose result may be an array the callee shares
+    /// (`const xs = getItems()`).
+    Opaque,
+    /// The initializer allocates the array here (`[]`, `[a, b]`, `Array(n)`,
+    /// `xs.slice()`), so nothing else can name it at creation.
+    Provable,
+}
+
+/// The freshness tier of the array binding `ident` names, or `None` when it is
+/// not a local array binding at all or some reference lets an alias escape.
+fn local_fresh_array_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<ArrayFreshness> {
     use oxc_ast::AstKind;
     use oxc_ast::ast::{Expression, VariableDeclarationKind};
 
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
+    let ref_id = ident.reference_id.get()?;
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
 
@@ -2848,7 +3250,11 @@ pub fn is_local_fresh_array_binding(
                 VariableDeclarationKind::Const | VariableDeclarationKind::Let
             ) && matches!(
                 init,
-                Some(Expression::CallExpression(_) | Expression::ArrayExpression(_))
+                Some(
+                    Expression::CallExpression(_)
+                        | Expression::ArrayExpression(_)
+                        | Expression::NewExpression(_)
+                )
             );
             init_is_provably_fresh =
                 is_fresh_local && init.is_some_and(initializer_is_provably_fresh_array);
@@ -2856,17 +3262,25 @@ pub fn is_local_fresh_array_binding(
         }
     }
     if !is_fresh_local {
-        return false;
+        return None;
     }
 
     // The array must not leak a pre-sort alias. Every reference consumes the
     // array without keeping it (`reference_consumes_without_retaining`), and —
     // only for a provably-fresh array — a `return` may hand out the
     // already-sorted array.
-    scoping.get_resolved_references(sym_id).all(|reference| {
+    let keeps_no_alias = scoping.get_resolved_references(sym_id).all(|reference| {
         reference_consumes_without_retaining(reference.node_id(), nodes)
             || (init_is_provably_fresh
                 && reference_escapes_only_via_return(reference.node_id(), semantic))
+    });
+    if !keeps_no_alias {
+        return None;
+    }
+    Some(if init_is_provably_fresh {
+        ArrayFreshness::Provable
+    } else {
+        ArrayFreshness::Opaque
     })
 }
 
@@ -2916,17 +3330,26 @@ const FRESH_ARRAY_COPY_METHODS: &[&str] = &[
 ];
 
 /// True when `init` provably evaluates to a freshly allocated array no other code
-/// can alias: any array literal (`[]`, `[a, b]`, `[...x]`), a call to a built-in
-/// copy method (`x.slice(…)`, `.filter`, `.map`, …), or `Array.from(…)`. An array
-/// literal allocates a brand-new array nothing can alias at creation — more
-/// provably-private than a copy method call. A `return` of a binding with such an
-/// initializer only exposes the sorted array, unlike an opaque call (`getItems()`)
-/// whose result may be a shared array.
+/// can alias: any array literal (`[]`, `[a, b]`, `[...x]`), a preallocation
+/// (`Array(n)`, `new Array(n)`, `new Uint8Array(n)` — see
+/// [`is_fresh_array_ctor_name`]), a call to a built-in copy method
+/// (`x.slice(…)`, `.filter`, `.map`, …), or `Array.from(…)`. Each allocates a
+/// brand-new array nothing can alias at creation, so a `return` of a binding
+/// with such an initializer only exposes the array the function built — unlike
+/// an opaque call (`getItems()`) whose result may be a shared array.
+///
+/// A preallocated array is no less private than a literal: `const map =
+/// Array(n)` and `const map = []` differ only in the length they start at.
 fn initializer_is_provably_fresh_array(init: &oxc_ast::ast::Expression) -> bool {
     use oxc_ast::ast::Expression;
 
     match init {
         Expression::CallExpression(call) => {
+            if matches!(&call.callee, Expression::Identifier(callee)
+                if is_fresh_array_ctor_name(callee.name.as_str()))
+            {
+                return true;
+            }
             let Expression::StaticMemberExpression(callee) = &call.callee else {
                 return false;
             };
@@ -2934,6 +3357,10 @@ fn initializer_is_provably_fresh_array(init: &oxc_ast::ast::Expression) -> bool 
             FRESH_ARRAY_COPY_METHODS.contains(&method)
                 || (method == "from"
                     && matches!(&callee.object, Expression::Identifier(obj) if obj.name.as_str() == "Array"))
+        }
+        Expression::NewExpression(new_expr) => {
+            matches!(&new_expr.callee, Expression::Identifier(callee)
+                if is_fresh_array_ctor_name(callee.name.as_str()))
         }
         Expression::ArrayExpression(_) => true,
         _ => false,
@@ -4725,22 +5152,24 @@ pub fn is_get_context_call_binding(
     false
 }
 
-/// True when `expr` is a `*.getContext(...)` call, looking through a trailing
-/// non-null assertion (`canvas.getContext('2d')!`).
+/// True when `expr` is a `*.getContext(...)` call, looking through the
+/// value-preserving wrappers TypeScript DOM code puts around it — a non-null
+/// assertion (`canvas.getContext('2d')!`), an `as` / `<T>` cast
+/// (`<CanvasRenderingContext2D>can.getContext('2d')`), `satisfies`, parentheses.
+/// A cast is a no-op at run time and does not change what the call returns, so
+/// the origin is the same object either way.
 fn is_get_context_call(expr: &oxc_ast::ast::Expression) -> bool {
     use oxc_ast::ast::Expression;
 
-    match expr {
-        Expression::TSNonNullExpression(nn) => is_get_context_call(&nn.expression),
-        Expression::CallExpression(call) => {
-            matches!(
+    matches!(
+        peel_value_wrappers(expr),
+        Expression::CallExpression(call)
+            if matches!(
                 &call.callee,
                 Expression::StaticMemberExpression(member)
                     if member.property.name.as_str() == "getContext"
             )
-        }
-        _ => false,
-    }
+    )
 }
 
 /// True when `ident` resolves to the Immer draft `state` of a Redux Toolkit
@@ -5560,9 +5989,7 @@ pub fn is_vue_reactive_object_target(
 ) -> bool {
     use oxc_ast::ast::Expression;
 
-    if root_identifier_of_expr(&member.object).is_some_and(|base| {
-        is_vue_factory_binding(base, semantic, VUE_DEEP_REACTIVE_FACTORIES, project, path)
-    }) {
+    if is_vue_deep_reactive_receiver(&member.object, semantic, project, path) {
         return true;
     }
     matches!(
@@ -5570,6 +5997,26 @@ pub fn is_vue_reactive_object_target(
         Expression::Identifier(base)
             if is_vue_factory_binding(base, semantic, VUE_SHALLOW_REACTIVE_FACTORIES, project, path)
     )
+}
+
+/// True when `object` — the RECEIVER a write goes through, rather than the write
+/// target itself — is reached through a `reactive()` binding at any depth.
+/// `reactive()` converts every nesting level, so `state.list` is itself a deep
+/// proxy and an indexed write on it (`state.list[0] = item`) is intercepted
+/// exactly like the property write `state.list[0].done = true`.
+///
+/// `shallowReactive()` is deliberately absent: it proxies the root object only,
+/// so a write below the root drives no reactivity and is an ordinary mutation.
+#[must_use]
+pub fn is_vue_deep_reactive_receiver(
+    object: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    root_identifier_of_expr(object).is_some_and(|base| {
+        is_vue_factory_binding(base, semantic, VUE_DEEP_REACTIVE_FACTORIES, project, path)
+    })
 }
 
 /// Pinia's store-factory function. A `defineStore(id, setup | options)` call
@@ -7758,104 +8205,6 @@ fn expression_produces_typed_array(
                 }
                 _ => false,
             }
-        }
-        _ => false,
-    }
-}
-
-/// True when `ident` resolves to a `const`-declared local array that was
-/// initialised as an empty array literal — `const x = []`. Such a binding is a
-/// locally-owned array being *built* into a sparse dispatch / lookup table by
-/// constant-index assignment (`handlers[0x01] = fn`), the array analogue of the
-/// `const items = []; items.push(x)` accumulator: the sparse layout can't be a
-/// constructor literal, so indexed assignment is the only way to populate it and
-/// there is no immutable element-setter to suggest.
-///
-/// Only the empty array *literal* `[]` qualifies — a populated literal (`[a, b]`)
-/// is a complete array, and a pre-sized `new Array(n)` is a fixed-length buffer
-/// whose plain-array element writes the rules deliberately keep flagged; later
-/// indexed writes on either are mutation, not table construction. Resolution uses
-/// the same `reference_id` → symbol → declaration path as [`is_typed_array_binding`]:
-/// a function parameter, import, `let`/`var` binding, or non-`[]` initializer
-/// resolves to no signal and returns `false`, so mutation through it stays flagged.
-#[must_use]
-pub fn is_local_dispatch_table_binding(
-    ident: &oxc_ast::ast::IdentifierReference,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_ast::ast::{Expression, VariableDeclarationKind};
-
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::VariableDeclarator(decl) = kind {
-            return decl.kind == VariableDeclarationKind::Const
-                && matches!(
-                    &decl.init,
-                    Some(Expression::ArrayExpression(arr)) if arr.elements.is_empty()
-                );
-        }
-    }
-    false
-}
-
-/// True when `index` is a constant/static dispatch-table key: a numeric literal
-/// (`handlers[0x01]`) or an identifier resolving to a `const` binding (a named
-/// opcode constant `handlers[messageSync]`). A dynamic index (a loop variable, a
-/// `let`/parameter, or a computed expression) does not qualify, keeping the
-/// dispatch-table exemption tight: only constant-keyed table construction is
-/// exempt, not arbitrary runtime indexed writes.
-#[must_use]
-pub fn is_constant_index_expression(
-    index: &oxc_ast::ast::Expression,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_ast::ast::{Expression, VariableDeclarationKind};
-
-    match index {
-        Expression::NumericLiteral(_) => true,
-        Expression::Identifier(id) => {
-            let Some(ref_id) = id.reference_id.get() else {
-                return false;
-            };
-            let scoping = semantic.scoping();
-            let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-                return false;
-            };
-            let decl_node_id = scoping.symbol_declaration(sym_id);
-            let nodes = semantic.nodes();
-            for kind in std::iter::once(nodes.kind(decl_node_id))
-                .chain(nodes.ancestor_kinds(decl_node_id))
-            {
-                match kind {
-                    AstKind::VariableDeclaration(decl) => {
-                        return decl.kind == VariableDeclarationKind::Const;
-                    }
-                    // A parameter / function / module scope reached before any
-                    // `VariableDeclaration` means the index is not a `const`
-                    // binding — stop here so a parameter index never resolves to
-                    // an enclosing `const f = (k) => …` declarator.
-                    AstKind::FormalParameter(_)
-                    | AstKind::Function(_)
-                    | AstKind::ArrowFunctionExpression(_)
-                    | AstKind::Program(_) => {
-                        return false;
-                    }
-                    _ => {}
-                }
-            }
-            false
         }
         _ => false,
     }
