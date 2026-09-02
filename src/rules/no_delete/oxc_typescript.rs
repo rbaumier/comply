@@ -1290,4 +1290,52 @@ export function wipe(o: Record<string, unknown>, k: string): void {
         "#;
         assert_eq!(run(src).len(), 2);
     }
+
+    #[test]
+    fn allows_delete_on_a_binding_a_local_factory_built_issue_8443() {
+        // Regression for rbaumier/comply#8443, the `no-delete` half: `build` is
+        // declared in this file and its only `return` is an object literal, so
+        // both branches hand `model` an object allocated in this call. Before,
+        // any call the freshness test could not classify disqualified the whole
+        // binding.
+        let src = r#"
+            function build(src: { rows: number[] }): { rows: number[]; flat: number[] } {
+              return { rows: src.rows, flat: [] };
+            }
+
+            export function paginate(src: { rows: number[] }, expanded: boolean) {
+              let model: { rows: number[]; flat: number[] };
+              if (expanded) {
+                model = build(src);
+              } else {
+                model = { rows: src.rows, flat: [] };
+              }
+              delete model.flat;
+              return model;
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_delete_when_a_branch_calls_an_imported_factory_issue_8443() {
+        // Negative space: the freshness evidence is the callee's body, which an
+        // import does not give. An unreadable callee may hand back a cached
+        // object, so the binding stays foreign.
+        let src = r#"
+            import { build } from './build';
+
+            export function paginate(src: { rows: number[] }, expanded: boolean) {
+              let model: { rows: number[]; flat: number[] };
+              if (expanded) {
+                model = build(src);
+              } else {
+                model = { rows: src.rows, flat: [] };
+              }
+              delete model.flat;
+              return model;
+            }
+        "#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
 }
