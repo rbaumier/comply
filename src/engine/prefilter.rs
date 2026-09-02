@@ -69,6 +69,53 @@ mod tests {
 }
 
 #[cfg(test)]
+mod prefilter_is_file_scoped_tests {
+    use crate::config::default_static_config;
+    use crate::engine::lint_in_memory;
+    use crate::files::Language;
+    use std::path::Path;
+
+    /// Issue #8507: the prefilter answers "does this FILE mention the literal",
+    /// never "does this node". `ci-cache-key-includes-lockfile` anchors on the
+    /// `uses:` pair of an `actions/cache` step and reads `hashFiles(` from the
+    /// step's sibling `with: key:` pair, so the literal is never inside the
+    /// visited node. Judged per node, the rule could not fire at all — while
+    /// its own unit tests, which call the check directly, all passed.
+    #[test]
+    fn rule_fires_when_its_literal_lives_in_a_sibling_node() {
+        // Two cache steps: the first spells `hashFiles`, so the file clears
+        // the prefilter; the second is the unkeyed cache to report.
+        let workflow = "\
+on: push
+jobs:
+  build:
+    steps:
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('**/package-lock.json') }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo
+          key: cargo-static
+";
+        let diagnostics = lint_in_memory(
+            Path::new(".github/workflows/ci.yml"),
+            Language::Yaml,
+            workflow,
+            default_static_config(),
+            None,
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.rule_id.as_ref() == "ci-cache-key-includes-lockfile"),
+            "expected the second cache step to be flagged, got: {diagnostics:?}",
+        );
+    }
+}
+
+#[cfg(test)]
 mod lint_in_memory_prefilter_tests {
     use crate::config::default_static_config;
     use crate::engine::lint_in_memory;
