@@ -1,8 +1,13 @@
 //! expression-complexity oxc backend — flag lines with 4+ logical/conditional operators.
+//!
+//! The threshold is counted per source line, so one crowded line yields one
+//! diagnostic however many expressions it holds. The diagnostic is anchored on
+//! the first operator expression of that line, not on the left margin.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_span::Span;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -23,31 +28,42 @@ impl OxcCheck for Check {
         // Counting nodes rather than raw bytes means `?`/`&`/`|` characters
         // inside regex, string, and template literals never count: literal
         // content carries no operator nodes.
-        let mut ops_per_line: BTreeMap<usize, usize> = BTreeMap::new();
+        //
+        // Alongside the count, keep the span of the leftmost operator expression
+        // on the line: the count decides whether to report, that span decides
+        // where. Reporting the line at column 1 would point at the indentation.
+        let mut ops_per_line: BTreeMap<usize, (usize, Span)> = BTreeMap::new();
         for node in semantic.nodes().iter() {
-            let start = match node.kind() {
-                AstKind::LogicalExpression(expr) => expr.span.start,
-                AstKind::ConditionalExpression(expr) => expr.span.start,
+            let span = match node.kind() {
+                AstKind::LogicalExpression(expr) => expr.span,
+                AstKind::ConditionalExpression(expr) => expr.span,
                 _ => continue,
             };
-            let (line, _) = byte_offset_to_line_col(ctx.source, start as usize);
-            *ops_per_line.entry(line).or_insert(0) += 1;
+            let (line, _) = byte_offset_to_line_col(ctx.source, span.start as usize);
+            let entry = ops_per_line.entry(line).or_insert((0, span));
+            entry.0 += 1;
+            // Node iteration order is not specified, so keep the earliest
+            // start seen rather than assuming the first one is it.
+            if span.start < entry.1.start {
+                entry.1 = span;
+            }
         }
 
         ops_per_line
-            .into_iter()
-            .filter(|&(_, count)| count >= max_ops)
-            .map(|(line, _)| Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column: 1,
-                rule_id: super::META.id.into(),
-                message: format!(
-                    "Expression has {max_ops}+ logical/conditional operators — \
-                     extract to named variables."
-                ),
-                severity: Severity::Error,
-                span: None,
+            .into_values()
+            .filter(|&(count, _)| count >= max_ops)
+            .map(|(_, span)| {
+                Diagnostic::at_offset(
+                    Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    (span.start as usize, span.size() as usize),
+                    super::META.id,
+                    format!(
+                        "Expression has {max_ops}+ logical/conditional operators — \
+                         extract to named variables."
+                    ),
+                    Severity::Error,
+                )
             })
             .collect()
     }
@@ -74,6 +90,19 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
+    }
+
+    #[test]
+    fn anchors_on_the_first_operator_of_the_line() {
+        // Regression for rbaumier/comply#8386 — the rule groups by line by
+        // design, but the anchor still belongs on the expression, not on the
+        // indentation.
+        let src = "  const x = a && b || c ?? d ? e : f;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (1, 13));
+        let (offset, len) = diags[0].span.expect("the anchor carries the expression's span");
+        assert!(src[offset..offset + len].starts_with("a &&"));
     }
 
     #[test]

@@ -129,15 +129,16 @@ impl OxcCheck for Check {
             return;
         }
 
-        diagnostics.push(Diagnostic {
-            path: Arc::clone(&ctx.path_arc),
-            line,
-            column: 1,
-            rule_id: super::META.id.into(),
-            message: "Complex regex without a comment — add a description of what it matches.".into(),
-            severity: Severity::Error,
-            span: None,
-        });
+        // Anchor on the literal itself, not on the left margin: two regexes
+        // sharing a line are two findings, and only the column tells them apart.
+        diagnostics.push(Diagnostic::at_offset(
+            Arc::clone(&ctx.path_arc),
+            ctx.source,
+            (span.start as usize, span.size() as usize),
+            super::META.id,
+            "Complex regex without a comment — add a description of what it matches.".into(),
+            Severity::Error,
+        ));
     }
 }
 
@@ -162,6 +163,20 @@ mod tests {
 
     fn run(src: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn anchors_each_literal_of_a_shared_line_on_its_own_column() {
+        // Regression for rbaumier/comply#8386 — two undocumented regexes on one
+        // line used to produce two records identical in every serialized field.
+        let src = r#"const rs = [/^[a-z]+@[a-z]+\.[a-z]{2,4}$/, /^[0-9]{3}-[0-9]{4}-[a-z]+$/];"#;
+        let diags = run(src);
+        let positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        assert_eq!(positions, vec![(1, 13), (1, 44)]);
+        for d in &diags {
+            let (offset, len) = d.span.expect("the anchor carries the literal's span");
+            assert!(src[offset..offset + len].starts_with('/'));
+        }
     }
 
     #[test]
