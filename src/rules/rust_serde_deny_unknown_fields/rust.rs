@@ -41,6 +41,18 @@
 //! no field-name map, so `deny_unknown_fields` is inert and they are
 //! never flagged.
 //!
+//! Every exception below is one statement: *the set of field names this
+//! declaration accepts from input is not fixed at compile time, or the
+//! declaration has no field-name map of its own*. `#[non_exhaustive]`,
+//! `#[serde(flatten)]` and a `#[cfg]`-gated field are three spellings of the
+//! first half; `transparent`, `from`/`try_from` and a tuple body are the
+//! second. A new case belongs under that statement, not beside the list.
+//!
+//! Field *visibility* is deliberately not one of them. A `Deserialize` struct's
+//! wire names are its field identifiers whatever their Rust visibility, and the
+//! document is written outside Rust — a binary crate's config type is usually
+//! private and is exactly what a user hand-writes and mistypes.
+//!
 //! **Exception:** a struct with any `#[serde(flatten)]` field is
 //! deliberately NOT flagged. `deny_unknown_fields` and `flatten` are
 //! mutually exclusive in serde — the flatten's target HashMap/struct
@@ -59,6 +71,18 @@
 //! **Exception:** a `#[serde(transparent)]` struct is NOT flagged. It
 //! delegates all (de)serialization to its single inner field and has no
 //! field-name map of its own, so `deny_unknown_fields` is a no-op there.
+//!
+//! **Exception:** a `#[serde(from = "T")]` / `#[serde(try_from = "T")]`
+//! struct is NOT flagged. serde builds its `Deserialize` impl by
+//! deserializing `T` and converting, so the struct's own field names never
+//! parse anything — the `transparent` situation, and serde rejects
+//! combining either attribute with `deny_unknown_fields`.
+//!
+//! **Exception:** a struct with a `#[cfg(...)]`-gated field is NOT flagged.
+//! `deny_unknown_fields` is whole-struct, so it would turn a feature
+//! mismatch between the build that wrote a value and the build that reads
+//! it into a hard deserialization failure, with no way to exempt the one
+//! conditional key.
 //!
 //! **Exception:** a `#[non_exhaustive]` struct is NOT flagged. It is the
 //! explicit forward-compatibility opt-in — the struct may gain fields in
@@ -85,7 +109,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{enclosing_fn, has_attribute_option, is_in_test_context};
+use crate::rules::rust_helpers::{
+    enclosing_fn, has_attribute_option, has_outer_attribute_path, is_in_test_context,
+};
 
 const KINDS: &[&str] = &["struct_item"];
 
@@ -155,6 +181,15 @@ impl AstCheck for Check {
         if has_flatten_field(node, source_bytes) {
             return;
         }
+        // A `#[cfg(...)]`-gated field makes the accepted key set depend on how
+        // the crate was compiled, not on the declaration. `deny_unknown_fields`
+        // is whole-struct, so enabling it would make a value written by a build
+        // that has the field fail to load in a build that does not — the same
+        // version, two feature sets. There is no way to spell "reject unknown
+        // keys except this one".
+        if has_cfg_gated_field(node, source_bytes) {
+            return;
+        }
         // `#[non_exhaustive]` is the explicit forward-compatibility opt-in: the
         // struct may gain fields in future versions. `deny_unknown_fields` has
         // the opposite semantics (reject any not-yet-declared field), so the two
@@ -169,18 +204,20 @@ impl AstCheck for Check {
         if has_attribute_option(node, source_bytes, "serde", "transparent") {
             return;
         }
+        // `#[serde(from = "T")]` / `#[serde(try_from = "T")]` build the
+        // `Deserialize` impl by deserializing `T` and converting, so this
+        // struct's own field names never take part in parsing — the same
+        // no-field-map-of-its-own situation as `transparent`. serde rejects
+        // combining either with `deny_unknown_fields` outright.
+        if has_attribute_option(node, source_bytes, "serde", "from")
+            || has_attribute_option(node, source_bytes, "serde", "try_from")
+        {
+            return;
+        }
         // ORM structs (Diesel Queryable / Selectable) deserialize from
         // internal query results, not user input — forward-compat is
         // more important than strict field validation.
         if has_orm_derive(&attrs) {
-            return;
-        }
-        // Structs marked with a forward-compat doc comment are mirrors
-        // of external contracts we don't own. Accepted marker phrases:
-        //   "external wire format mirror" (legacy)
-        //   "external api response"
-        //   "versioned protocol"
-        if has_forward_compat_marker(node, source_bytes) {
             return;
         }
         // `deny_unknown_fields` only affects structs deserialized from a
@@ -331,34 +368,6 @@ fn has_orm_derive(attrs: &[String]) -> bool {
         .any(|a| a.contains("derive(") && (a.contains("Queryable") || a.contains("Selectable")))
 }
 
-/// True if the struct's preceding doc comments contain any of the
-/// forward-compat marker phrases:
-/// - `"external wire format mirror"` (legacy)
-/// - `"external api response"` — GitHub/Svix-style API mirrors
-/// - `"versioned protocol"` — DAP, dump readers, forward-compat formats
-fn has_forward_compat_marker(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {
-                if let Ok(text) = s.utf8_text(source) {
-                    let lowered = text.to_ascii_lowercase();
-                    if lowered.contains("external wire format mirror")
-                        || lowered.contains("external api response")
-                        || lowered.contains("versioned protocol")
-                    {
-                        return true;
-                    }
-                }
-            }
-            "attribute_item" => {}
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
-}
-
 /// True only for a struct with a named-field body
 /// (`field_declaration_list`). Tuple / newtype structs
 /// (`ordered_field_declaration_list`) and unit structs (no body) return
@@ -383,6 +392,40 @@ fn has_flatten_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
         field.kind() == "field_declaration"
             && has_attribute_option(field, source, "serde", "flatten")
     })
+}
+
+/// True if any field of the struct carries a `#[cfg(...)]` attribute, i.e. the
+/// field set is decided at compile time rather than by the declaration.
+///
+/// Keyed on the attribute *path* being exactly `cfg`, read from the AST, so
+/// `#[cfg_attr(feature = "serde", serde(skip_serializing_if = "…"))]` — a serde
+/// helper applied conditionally, not a conditional field — does not match. Which
+/// predicate the `cfg` names is irrelevant: `feature`, `target_os` and
+/// `debug_assertions` all make the field's presence a property of the build.
+fn has_cfg_gated_field(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
+    named_fields(struct_node).is_some_and(|fields| {
+        fields
+            .into_iter()
+            .any(|field| has_outer_attribute_path(field, source, &["cfg"]))
+    })
+}
+
+/// The `field_declaration` children of a named-field struct body, or `None` for
+/// a tuple / newtype / unit struct that has no field-name map at all. Collected
+/// eagerly because the `TreeCursor` the traversal needs cannot outlive the call.
+fn named_fields<'tree>(
+    struct_node: tree_sitter::Node<'tree>,
+) -> Option<Vec<tree_sitter::Node<'tree>>> {
+    let body = struct_node.child_by_field_name("body")?;
+    if body.kind() != "field_declaration_list" {
+        return None;
+    }
+    let mut cursor = body.walk();
+    Some(
+        body.children(&mut cursor)
+            .filter(|child| child.kind() == "field_declaration")
+            .collect(),
+    )
 }
 
 /// Walk up from `node` to the enclosing `source_file` root.
@@ -656,15 +699,20 @@ mod tests {
     }
 
     #[test]
-    fn allows_external_api_response_with_marker() {
+    fn repro_8438_external_api_response_phrase_no_longer_exempts() {
+        // rbaumier/comply#8438 — the three-phrase comment allowlist is retired.
+        // It exempted on what the author happened to write in prose, matched no
+        // struct in any of the five measured corpora, and duplicated comply's own
+        // `// comply-ignore: <rule-id> — <reason>` directive, which names the rule
+        // and requires a justification.
         let source = "// external api response — version-compatible\n#[derive(Deserialize)]\nstruct GithubUser { login: String }";
-        assert!(run_on(source).is_empty(), "FP: external API response flagged");
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
-    fn allows_versioned_protocol_with_marker() {
+    fn repro_8438_versioned_protocol_phrase_no_longer_exempts() {
         let source = "// versioned protocol — accepts future fields\n#[derive(Deserialize)]\nstruct DapMessage { seq: i32 }";
-        assert!(run_on(source).is_empty(), "FP: versioned protocol flagged");
+        assert_eq!(run_on(source).len(), 1);
     }
 
     #[test]
@@ -862,13 +910,6 @@ mod tests {
             1,
             "should still flag a non-fuzz Deserialize struct missing deny_unknown_fields"
         );
-    }
-
-    #[test]
-    fn flags_despite_incidental_api_mention() {
-        // "external api" alone does NOT trigger the exemption — must be "external api response"
-        let source = "// fetches data from external api of payment provider\n#[derive(Deserialize)]\nstruct PaymentData { amount: u64 }";
-        assert_eq!(run_on(source).len(), 1, "should still flag: comment mentions external api but not 'external api response'");
     }
 
     #[test]
@@ -1177,4 +1218,86 @@ mod tests {
             "should still flag: `sats` in a serde arg list is not the #[sats] attribute"
         );
     }
+
+    #[test]
+    fn repro_8075_serde_try_from_container_not_flagged() {
+        // rbaumier/comply#8075 — `#[serde(try_from = "T")]` (oxc's `BabelPresets`)
+        // deserializes `T` and converts, so this struct's field names never parse
+        // input. serde also rejects pairing it with `deny_unknown_fields`.
+        let source = "#[derive(Debug, Default, Clone, Deserialize)]\n\
+                      #[serde(try_from = \"PluginPresetEntries\")]\n\
+                      pub struct BabelPresets { pub errors: Vec<String> }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8075_serde_from_container_not_flagged() {
+        let source = "#[derive(Deserialize)]\n\
+                      #[serde(from = \"Raw\")]\n\
+                      pub struct Cooked { pub v: u8 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8075_serde_rename_naming_from_still_flagged() {
+        // `from` must be a container option, not a value spelled inside another
+        // one — `#[serde(rename = "from")]` says nothing about the impl.
+        let source = "#[derive(Deserialize)]\n\
+                      #[serde(rename = \"from\")]\n\
+                      pub struct Cooked { pub v: u8 }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
+
+
+    #[test]
+    fn repro_8323_cfg_gated_field_not_flagged() {
+        // ratatui's `Style`: a build with `underline-color` on writes a key a build
+        // with it off has no field for. `deny_unknown_fields` is whole-struct, so
+        // it would turn that into an `unknown field` error instead of an ignored key.
+        let source = "#[derive(Debug, Default, Clone, Copy)]\n\
+                      #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n\
+                      pub struct Style {\n\
+                          pub fg: Option<u8>,\n\
+                          #[cfg(feature = \"underline-color\")]\n\
+                          pub underline_color: Option<u8>,\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8323_cfg_target_os_field_not_flagged() {
+        // The test is on `cfg`, not on which predicate it carries.
+        let source = "#[derive(Deserialize)]\n\
+                      pub struct Paths {\n\
+                          pub home: String,\n\
+                          #[cfg(target_os = \"linux\")]\n\
+                          pub xdg: String,\n\
+                      }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8323_cfg_attr_serde_helper_on_field_still_flagged() {
+        // A serde helper applied through `cfg_attr` is not a conditional field —
+        // the field exists in every build, so the field set is still fixed.
+        let source = "#[derive(Deserialize)]\n\
+                      pub struct Style {\n\
+                          #[cfg_attr(feature = \"serde\", serde(skip_serializing_if = \"Option::is_none\"))]\n\
+                          pub fg: Option<u8>,\n\
+                      }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8323_all_public_plain_data_struct_still_flagged() {
+        // ratatui's `Rect` — the control the exemptions must not swallow.
+        let source = "#[derive(Debug, Default, Clone, Copy)]\n\
+                      #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n\
+                      pub struct Rect { pub x: u16, pub y: u16, pub width: u16, pub height: u16 }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+
 }

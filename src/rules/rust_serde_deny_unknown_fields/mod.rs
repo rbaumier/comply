@@ -8,6 +8,12 @@
 //! `#[serde(deny_unknown_fields)]` flips this behavior: unknown fields
 //! become parse errors. Always opt in on types deserialized from
 //! external input.
+//!
+//! A struct that mirrors a schema *another* program defines — an API
+//! response, a sibling tool's JSON output — must stay lenient, and the
+//! rule cannot tell that from the declaration alone (rbaumier/comply#8438).
+//! Suppress those sites with `// comply-ignore: rust-serde-deny-unknown-fields
+//! — <who owns the schema>`, which names the rule and requires the reason.
 
 mod rust;
 
