@@ -21,6 +21,7 @@ pub use options::for_rule as options_for;
 
 use anyhow::{Context, Result, bail};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -435,13 +436,22 @@ fn timeout_exit_status() -> std::process::ExitStatus {
 
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
 ///
-/// The type-aware backend (tsgolint, written in Go) can panic on a TypeScript
-/// shape it does not handle — e.g. an ambient `module "x";` declaration
-/// (`KindModuleDeclaration` in a `MemberList`). The panic crashes the oxlint
-/// subprocess, which leaves non-JSON output. A third-party checker panicking on
-/// one file must not crash the whole comply run, so when the output carries a
-/// Go panic signature the batch's diagnostics are dropped with a warning instead
-/// of propagating a parse error.
+/// Two recoveries sit ahead of the error path, because one file oxlint chokes
+/// on must not cost the whole batch its diagnostics:
+///
+/// 1. oxlint's `--format json` writer copies source text into `message`
+///    without escaping it, so a file holding a raw control byte (an ANSI
+///    golden fixture, say) yields JSON that RFC 8259 forbids. The output is
+///    otherwise well-formed, so a rewrite that escapes those bytes is retried
+///    before giving up. This recovery is silent: it is complete for every
+///    diagnostic comply keeps.
+/// 2. The type-aware backend (tsgolint, written in Go) can panic on a
+///    TypeScript shape it does not handle — e.g. an ambient `module "x";`
+///    declaration (`KindModuleDeclaration` in a `MemberList`). The panic
+///    crashes the oxlint subprocess, leaving non-JSON output; the batch's
+///    diagnostics are dropped with a warning.
+///
+/// Anything else — truncated output, a changed envelope shape — still errors.
 fn parse_json_bytes(
     stdout: &[u8],
     stderr: &[u8],
@@ -449,27 +459,77 @@ fn parse_json_bytes(
 ) -> Result<Vec<Diagnostic>> {
     let envelope: OxlintOutput = match serde_json::from_slice(stdout) {
         Ok(envelope) => envelope,
-        Err(parse_err) => {
-            if let Some(panic) = tsgolint_panic_summary(stdout, stderr) {
-                eprintln!(
-                    "comply: the type-aware checker (tsgolint) crashed on a file in this \
-                     batch; skipping its type-aware diagnostics. tsgolint panic: {panic}"
-                );
-                return Ok(Vec::new());
+        Err(parse_err) => match serde_json::from_str(&escape_control_bytes(stdout)) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                if let Some(panic) = tsgolint_panic_summary(stdout, stderr) {
+                    eprintln!(
+                        "comply: the type-aware checker (tsgolint) crashed on a file in this \
+                         batch; skipping its type-aware diagnostics. tsgolint panic: {panic}"
+                    );
+                    return Ok(Vec::new());
+                }
+                // The first error is the one that describes the real output;
+                // the retry only ever fails for the same reason or worse.
+                return Err(parse_err).with_context(|| {
+                    format!(
+                        "failed to parse oxlint JSON output. oxlint stderr: {}",
+                        String::from_utf8_lossy(stderr)
+                    )
+                });
             }
-            return Err(parse_err).with_context(|| {
-                format!(
-                    "failed to parse oxlint JSON output. oxlint stderr: {}",
-                    String::from_utf8_lossy(stderr)
-                )
-            });
-        }
+        },
     };
     Ok(envelope
         .diagnostics
         .into_iter()
         .filter_map(|d| into_diagnostic(d, remap))
         .collect())
+}
+
+/// Rewrite the `U+0000`–`U+001F` bytes that sit *inside* JSON strings so the
+/// envelope parses, leaving everything else byte-identical.
+///
+/// The replacement is a doubled backslash — the recovered message reads
+/// `\u001b` as six printable characters. A plain JSON escape would decode back
+/// to the control byte and put it in `OxlintDiag::message`, which comply prints
+/// to the terminal and the delegated post-filters match on; source text is
+/// attacker-controlled, so it must not reach either as a live escape sequence.
+///
+/// Bytes outside strings stay untouched: oxlint's envelope really does hold a
+/// newline between the diagnostics array and the trailing metadata, and that
+/// whitespace is legal JSON. Decoding is lossy, which also covers oxlint
+/// stdout that is not valid UTF-8; multi-byte sequences are above `0x20` and
+/// pass through whole.
+fn escape_control_bytes(stdout: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stdout);
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    // True for exactly the one character following an unescaped backslash, so
+    // a `\"` inside a string is not mistaken for the string's closing quote.
+    let mut after_backslash = false;
+    for ch in text.chars() {
+        if after_backslash {
+            after_backslash = false;
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '\\' if in_string => {
+                after_backslash = true;
+                out.push(ch);
+            }
+            '"' => {
+                in_string = !in_string;
+                out.push(ch);
+            }
+            control if in_string && (control as u32) < 0x20 => {
+                let _ = write!(out, "\\\\u{:04x}", control as u32);
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Detect a tsgolint/typescript-go (Go) panic in the subprocess output and
@@ -654,10 +714,62 @@ mod tests {
     #[test]
     fn non_panic_parse_failure_still_errors() {
         // Truncated/corrupt oxlint output with no Go panic signature must still
-        // surface as an error — graceful degradation is scoped to tsgolint panics.
+        // surface as an error. `{ not json` holds no control byte, so the escape
+        // retry rewrites nothing and cannot turn this into a false recovery.
         let remap = FxHashMap::default();
         let result = parse_json_bytes(b"{ not json", b"some unrelated stderr", &remap);
         assert!(result.is_err(), "a non-panic parse failure must still error");
+    }
+
+    #[test]
+    fn raw_control_byte_in_a_message_is_recovered_issue_8402() {
+        // oxlint's json writer copies source text into `message` unescaped, so a
+        // golden fixture whose bytes start with ESC (0x1B) makes the envelope
+        // illegal JSON. Its batch-mates — up to 500 files — must survive it.
+        let remap = FxHashMap::default();
+        let json = b"{ \"diagnostics\": [{\"message\": \"Invalid Character `\x1b`\", \
+            \"code\": \"eslint(no-control-regex)\", \"severity\": \"error\", \
+            \"filename\": \"/tmp/ansi.ts\", \"labels\": [{\"span\": {\"line\": 4, \"column\": 2}}]}] }";
+        let result = parse_json_bytes(json, b"", &remap).expect("control byte must be recovered");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].line, 4);
+        assert_eq!(result[0].column, 2);
+        // comply prints `message` to the terminal and the delegated post-filters
+        // match on it, so a recovered control byte must arrive as printable text.
+        assert!(
+            !result[0].message.chars().any(char::is_control),
+            "recovered message must stay printable, got {:?}",
+            result[0].message
+        );
+    }
+
+    #[test]
+    fn structural_whitespace_survives_the_control_byte_rewrite() {
+        // Real oxlint output puts a newline between diagnostics and before the
+        // trailing metadata. That whitespace is outside any string and legal
+        // JSON — escaping it would break the very retry it has to allow.
+        let remap = FxHashMap::default();
+        let json = b"{ \"diagnostics\": [{\"message\": \"esc \x1b here\", \
+            \"code\": \"eslint(no-debugger)\", \"severity\": \"error\", \
+            \"filename\": \"/tmp/x.ts\", \"labels\": [{\"span\": {\"line\": 1, \"column\": 1}}]}],\n\
+            \"number_of_files\": 1 }";
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn escaped_quote_does_not_end_the_string_during_the_rewrite() {
+        // A `\"` inside a message is not the closing quote. Reading it as one
+        // would leave the rewrite outside string state at the control byte and
+        // the retry would fail exactly like the first parse.
+        let remap = FxHashMap::default();
+        let json = b"{ \"diagnostics\": [{\"message\": \"says \\\" then \x1b\", \
+            \"code\": \"eslint(no-debugger)\", \"severity\": \"error\", \
+            \"filename\": \"/tmp/x.ts\", \"labels\": [{\"span\": {\"line\": 2, \"column\": 3}}]}] }";
+        let result = parse_json_bytes(json, b"", &remap).expect("must parse");
+        assert_eq!(result.len(), 1);
+        assert!(result[0].message.contains('"'), "the quote is kept verbatim");
+        assert!(!result[0].message.chars().any(char::is_control));
     }
 
     #[test]
