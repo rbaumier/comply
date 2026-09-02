@@ -325,8 +325,6 @@ disabled = true
 # `disabled = true` to opt out per-project.
 # ---------------------------------------------------------------
 
-[rules.rust-no-todo-macro]
-
 [rules.rust-no-sleep-in-test]
 
 [rules.rust-prefer-tracing-over-log]
