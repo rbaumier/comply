@@ -90,6 +90,12 @@
 //! `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer, so `as` is the only
 //! float→integer conversion and both the `from` and `try_from` remediations
 //! would fail to compile. `x.floor() as i32` is the idiomatic truncation.
+//!
+//! A cast covered by an `#[allow]` / `#[expect]` of one of the clippy lints this
+//! rule re-implements (`cast_possible_truncation`, `cast_sign_loss`,
+//! `cast_precision_loss`, `cast_possible_wrap`, `cast_lossless`) is exempt:
+//! comply runs clippy in the same pass, so repeating the finding under a second
+//! id would make the author's suppression unusable.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -106,9 +112,22 @@ use crate::rules::rust_helpers::{
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
     cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    is_suppressed_by_clippy_allow,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
+
+/// The clippy lints this rule re-implements. An `#[allow]` / `#[expect]` of any
+/// of them is the author saying "I read this exact finding and the value is
+/// nonetheless exact" — comply honors it instead of repeating the diagnostic
+/// under its own id (#8270).
+const MIRRORED_CLIPPY_LINTS: &[&str] = &[
+    "cast_possible_truncation",
+    "cast_sign_loss",
+    "cast_precision_loss",
+    "cast_possible_wrap",
+    "cast_lossless",
+];
 
 #[derive(Debug)]
 pub struct Check;
@@ -202,6 +221,15 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
         return false;
     };
     if target == "usize" || target == "isize" {
+        return false;
+    }
+    // The author suppressed the clippy lint this rule mirrors, at the cast, the
+    // enclosing item, the enclosing statement or the crate root. `#[expect]` is
+    // even stronger than `#[allow]`: it asserts the lint *does* apply and that
+    // the value is exact anyway (a SIMD movemask, an FFI width guarantee). Since
+    // comply runs clippy in the same pass, re-reporting it here would leave no
+    // way to acknowledge the finding that both tools honor (#8270).
+    if is_suppressed_by_clippy_allow(node, MIRRORED_CLIPPY_LINTS, source_bytes) {
         return false;
     }
     if cast_operand_is_raw_pointer(node, source_bytes) {
@@ -2837,6 +2865,47 @@ name = "normal_lib"
                    y if y < 0 => 0, \
                    y if y > 0xFF => 0xFF, \
                    val => val as u8 } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_8270_expect_of_mirrored_lint_on_enclosing_block_not_flagged() {
+        // rbaumier/comply#8270 — hashbrown's SIMD movemask shape: `#[expect]` on
+        // the block, with the exactness argument written inside the attribute.
+        // comply mirrors `cast_possible_truncation`/`cast_sign_loss`, so it must
+        // honor the author's suppression instead of repeating it under its own id.
+        let src = "pub fn a(mask: i32) -> u16 {\n\
+                   #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]\n\
+                   { mask as u16 }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_8270_allow_of_mirrored_lint_on_enclosing_fn_not_flagged() {
+        let src = "#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]\n\
+                   pub fn b(mask: i32) -> u16 { mask as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_8270_crate_root_allow_of_mirrored_lint_not_flagged() {
+        let src = "#![allow(clippy::cast_possible_truncation)]\n\
+                   pub fn b(mask: i32) -> u16 { mask as u16 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_8270_no_suppression_still_flagged() {
+        assert_eq!(run_on("pub fn c(mask: i32) -> u16 { mask as u16 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_8270_allow_of_unrelated_lint_still_flagged() {
+        // The suppression must name a lint this rule mirrors; `needless_return`
+        // says nothing about the cast.
+        let src = "#[allow(clippy::needless_return)]\n\
+                   pub fn d(mask: i32) -> u16 { mask as u16 }";
         assert_eq!(run_on(src).len(), 1);
     }
 }

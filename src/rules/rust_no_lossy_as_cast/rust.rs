@@ -79,6 +79,12 @@
 //! ch as u8 }` — is exempt: an ASCII char is `0..=127`, which fits any integer
 //! at least 8 bits wide, so the guarded cast cannot truncate.
 //!
+//! A cast covered by an `#[allow]` / `#[expect]` of one of the clippy lints this
+//! rule re-implements (`cast_possible_truncation`, `cast_sign_loss`,
+//! `cast_precision_loss`, `cast_possible_wrap`) is exempt: comply runs clippy in
+//! the same pass, so repeating the finding under a second id would make the
+//! author's suppression unusable.
+//!
 //! Casts that `rust-no-as-numeric-cast` already flags are suppressed here so
 //! the pair emits one diagnostic per span.
 
@@ -97,12 +103,24 @@ use crate::rules::rust_helpers::{
     cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
     cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
+    is_suppressed_by_clippy_allow,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
 const KINDS: &[&str] = &["type_cast_expression"];
 
 const NARROWING_TARGETS: &[&str] = &["u8", "u16", "u32", "i8", "i16", "i32", "f32"];
+
+/// The clippy lints this rule re-implements. An `#[allow]` / `#[expect]` of any
+/// of them is the author saying "I read this exact finding and the value is
+/// nonetheless exact" — comply honors it instead of repeating the diagnostic
+/// under its own id (#8270).
+const MIRRORED_CLIPPY_LINTS: &[&str] = &[
+    "cast_possible_truncation",
+    "cast_sign_loss",
+    "cast_precision_loss",
+    "cast_possible_wrap",
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NumericKind {
@@ -146,6 +164,16 @@ impl AstCheck for Check {
         let Some(target_type) = numeric_type(target) else {
             return;
         };
+        // The author suppressed the clippy lint this rule mirrors, at the cast,
+        // the enclosing item, the enclosing statement or the crate root.
+        // `#[expect]` is even stronger than `#[allow]`: it asserts the lint *does*
+        // apply and that the value is exact anyway (a SIMD movemask, an FFI width
+        // guarantee). Since comply runs clippy in the same pass, re-reporting it
+        // here would leave no way to acknowledge the finding that both tools
+        // honor (#8270).
+        if is_suppressed_by_clippy_allow(node, MIRRORED_CLIPPY_LINTS, source_bytes) {
+            return;
+        }
         // Test scaffolding casts bounded fixtures, not runtime data; the
         // companion `rust-no-as-numeric-cast` exempts the same scope (#6130).
         if is_in_test_context(node, source_bytes) {
@@ -1897,5 +1925,36 @@ mod tests {
         // is a `unary_expression` (ceded by `rust-no-as-numeric-cast`), so this
         // rule remains its sole owner and conservatively flags it.
         assert_eq!(run_on("fn f(a: i32, b: i32) -> u8 { -(a + b) as u8 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_8270_expect_of_mirrored_lint_on_enclosing_block_not_flagged() {
+        // rbaumier/comply#8270 — same suppression contract as the sibling rule.
+        // `f64 as f32` is a span this rule owns alone (the sibling cedes float
+        // narrowing), so the `#[expect]` has to be honored here too.
+        let src = "pub fn a(x: f64) -> f32 {\n\
+                   #[expect(clippy::cast_possible_truncation)]\n\
+                   { x as f32 }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_8270_allow_of_mirrored_lint_on_enclosing_fn_not_flagged() {
+        let src = "#[allow(clippy::cast_precision_loss)]\n\
+                   pub fn b(x: f64) -> f32 { x as f32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_8270_no_suppression_still_flagged() {
+        assert_eq!(run_on("pub fn c(x: f64) -> f32 { x as f32 }").len(), 1);
+    }
+
+    #[test]
+    fn repro_8270_allow_of_unrelated_lint_still_flagged() {
+        let src = "#[allow(clippy::needless_return)]\n\
+                   pub fn d(x: f64) -> f32 { x as f32 }";
+        assert_eq!(run_on(src).len(), 1);
     }
 }
