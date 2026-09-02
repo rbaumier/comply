@@ -50,9 +50,8 @@ crate::ast_check! { on ["component"] prefilter = ["ref(", "shallowRef("] => |nod
     }
 
     let shadow_scopes = collect_shadow_scopes(ctx.source);
-    let base_line = ctx.source[..start].matches('\n').count();
 
-    for (idx, line) in script.lines().enumerate() {
+    for line in script.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ") {
             continue;
@@ -95,17 +94,18 @@ crate::ast_check! { on ["component"] prefilter = ["ref(", "shallowRef("] => |nod
             }) {
                 continue;
             }
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: base_line + idx + 1,
-                column: 1,
-                rule_id: super::META.id.into(),
-                message: format!(
+            // `name_offset` already locates the bare-name use in `ctx.source`;
+            // anchoring there separates two uses of the same ref on one line.
+            diagnostics.push(Diagnostic::at_offset(
+                std::sync::Arc::clone(&ctx.path_arc),
+                ctx.source,
+                (name_offset, name.len()),
+                super::META.id,
+                format!(
                     "`{name}` is a ref — comparing it without `.value` compares the Ref object, not the inner value. Use `{name}.value`."
                 ),
-                severity: Severity::Error,
-                span: None,
-            });
+                Severity::Error,
+            ));
             break;
         }
     }
@@ -124,6 +124,18 @@ mod tests {
             .expect("vue grammar");
         let tree = parser.parse(source, None).expect("parser");
         Check.check(&CheckCtx::for_test(Path::new("t.vue"), source), &tree)
+    }
+
+    #[test]
+    fn anchors_on_the_bare_ref_use_not_the_left_margin() {
+        // Regression for rbaumier/comply#8428 — `name_offset` already located
+        // the use; the diagnostic threw it away and reported column 1.
+        let sfc = "<script setup>\nconst x = ref(0)\n  if (x > 0) {}\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (3, 7));
+        let (offset, len) = diags[0].span.expect("the anchor carries the name's span");
+        assert_eq!(&sfc[offset..offset + len], "x");
     }
 
     #[test]

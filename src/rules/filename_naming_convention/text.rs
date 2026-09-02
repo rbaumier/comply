@@ -1,3 +1,9 @@
+//! filename-naming-convention — TS/JS text backend.
+//!
+//! The finding is the file's name, which lives outside its contents, so the
+//! diagnostic is file-scoped and reports `1:1` by declaration, not because a
+//! position was left uncomputed.
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
 
