@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2040 rules across 149 categories.
+2061 rules across 152 categories.
 
 ## Categories
 
@@ -102,15 +102,18 @@
 - [react-native](#react-native) (17 rules)
 - [react-native > security](#react-native-security) (1 rules)
 - [regex](#regex) (33 rules)
-- [rust](#rust) (73 rules)
+- [rust](#rust) (80 rules)
+- [rust > api](#rust-api) (3 rules)
 - [rust > architecture](#rust-architecture) (1 rules)
+- [rust > async](#rust-async) (1 rules)
 - [rust > concurrency](#rust-concurrency) (2 rules)
 - [rust > configuration](#rust-configuration) (1 rules)
-- [rust > correctness](#rust-correctness) (1 rules)
+- [rust > correctness](#rust-correctness) (3 rules)
 - [rust > observability](#rust-observability) (1 rules)
-- [rust > performance](#rust-performance) (6 rules)
+- [rust > performance](#rust-performance) (11 rules)
+- [rust > security](#rust-security) (2 rules)
 - [rust > serde](#rust-serde) (1 rules)
-- [rust > testing](#rust-testing) (1 rules)
+- [rust > testing](#rust-testing) (2 rules)
 - [security](#security) (65 rules)
 - [security > api-design](#security-api-design) (1 rules)
 - [security > code-quality](#security-code-quality) (3 rules)
@@ -1862,9 +1865,12 @@
 | `rust-clone-in-iter-chain` | `.map(\|x\| x.clone())` in an iterator chain — use `.cloned()`. | `Iterator::cloned()` (or `.copied()` for `Copy` types) expresses intent more clearly and is the same in performance. The closure form makes readers ask whether anything else is going on inside the closure. |
 | `rust-collect-then-into-iter` | `.collect::<Vec<_>>().into_iter()` materialises and immediately re-iterates a collection. | Drop the `.collect()` + `.into_iter()` pair — the preceding iterator chain already produces an iterator. Materialising into `Vec` only to re-iterate allocates a heap buffer for nothing. |
 | `rust-const-for-static-no-interior-mut` | Use `const` instead of `static` for plain-literal values without interior mutability. | Change `static FOO: T = …;` to `const FOO: T = …;` when `T` has no interior mutability (`Cell`, `Mutex`, `OnceLock`, …) and the value is a literal or `const fn` expression. `const` inlines at every use site; `static` reserves a fixed address you don't need. |
+| `rust-doc-sections-required` | Public rustdoc carries `# Errors`, `# Panics` and `# Safety`. | Add the section the signature implies: `# Errors` on a public `fn` returning `Result` (which conditions produce which `Err`), `# Panics` on one that can panic (which inputs make it), `# Safety` on a `pub unsafe fn` (the invariants the caller must uphold). The caller reads the doc, not the body — if the section is hard to write, the failure mode is probably worth removing instead. Enforced by `clippy::missing_errors_doc`, `clippy::missing_panics_doc` and `clippy::missing_safety_doc`. |
 | `rust-drop-calls-self-lock` | `Drop::drop` body calls `.lock()` / `.read()` / `.write()` on a `self.field`. | Acquiring a lock during `Drop` deadlocks if the same lock is already held on the dropping thread, and risks panic if the lock is poisoned. Restructure so locking happens before drop, or store data in a way that doesn't require re-locking on cleanup. |
 | `rust-duration-over-integer-with-unit` | Prefer `Duration` over integers whose name encodes a time unit. | Replace `window_days: u32` with `window: std::time::Duration`. For config parsing, use a humantime crate or similar to accept "30d" / "24h" at the config boundary. The type then carries the unit through the codebase. |
 | `rust-eprintln-in-library` | `eprintln!` / `eprint!` invoked from library code. | Library code shouldn't write to stderr directly — consumers can't redirect, configure, or capture it. Use `tracing::warn!` / `tracing::error!` so the consumer's subscriber controls the output. |
+| `rust-error-variant-stringly` | Error enum variant carries a `String` or a catch-all payload instead of typed fields. | Give the variant the fields the caller needs to act on: `SchemaMismatch { expected: Type, got: Type }` instead of `Other(String)` or `InvalidSchema(String)`. When the variant only forwards another error, name that error and let thiserror wire it: `Io(#[from] std::io::Error)`. Where `rust-string-as-error` rejects `Result<T, String>` for having no error type at all, this rule rejects an error type whose variants carry no information. |
+| `rust-expect-over-allow` | Suppress lints with `#[expect(…)]`, not `#[allow(…)]`. | Replace `#[allow(lint)]` with `#[expect(lint, reason = "…")]`. `#[expect]` fails the build the day the warning it suppresses disappears, so the suppression dies with the problem; an `#[allow]` outlives it and silently covers the next offender that lands under it. Keep `#[allow]` only where the lint fires conditionally (a `cfg`-gated build, a generated file) and `#[expect]` would itself warn. Enforced by `clippy::allow_attributes`. |
 | `rust-explicit-enum-match-arms` | Wildcard `_` arm on a `match` that looks like it covers an enum. | Replace `_ => …` with the remaining variants explicitly (`Foo::A \| Foo::B => …`). The compile error on enum expansion is the whole point: it forces you to consciously handle each new case. |
 | `rust-explicit-iter-loop` | Use iterator chains, not raw index loops. | Replace `for i in 0..vec.len() { vec[i] }` with `for x in &vec`. Iterator chains let the compiler vectorize the loop body and eliminate bounds checks. Enable `clippy::needless_range_loop` and `clippy::explicit_iter_loop`. |
 | `rust-hash-partial-eq-mismatch` | `Hash` and `PartialEq` are not implemented consistently (one derived, the other manual). | If two values are equal (`a == b`) they MUST produce the same hash. Mixing a derived `Hash` with a manual `PartialEq` (or vice versa) almost always breaks that invariant. Either derive both or implement both manually with care to keep them in sync. |
@@ -1872,6 +1878,7 @@
 | `rust-impl-debug-on-public-types` | Public structs and enums must derive `Debug`. | Add `#[derive(Debug)]` (or `#[derive(Debug, …)]`) above the type definition. Every public type should be loggable for free, and consumers shouldn't have to wrap your type to get a `Debug` impl. If a field can't be Debug (e.g. a closure), implement `Debug` by hand instead. |
 | `rust-iter-count-vs-len` | `.iter().count()` walks the whole collection to compute its length. | Use `.len()` directly on the collection — `Vec`, slices, `VecDeque`, `String`, `HashMap`, and `HashSet` all expose it in O(1). `.count()` consumes an iterator linearly. |
 | `rust-large-enum-variant` | Enum size equals the largest variant — box big variants. | Wrap the large variant's payload in `Box<T>` so the enum stays small. Otherwise every instance of the enum — even the small-variant case — pays the full size cost. Enable `clippy::large_enum_variant`. |
+| `rust-lib-without-missing-docs` | A library crate root exposes public API with no `missing_docs` lint level — undocumented `pub` items ship without a single warning. | Add `#![deny(missing_docs)]` (or `#![warn(missing_docs)]` while catching up) at the top of `src/lib.rs`, or declare `missing_docs = "warn"` under `[lints.rust]` in the crate's `Cargo.toml`. |
 | `rust-mod-tests-without-cfg-test` | `mod tests` must be gated by `#[cfg(test)]`. | Add `#[cfg(test)]` immediately above the `mod tests` declaration. Without it, every test function ships in the release binary — bloat plus a risk of pulling in dev-dependencies that aren't built for release. |
 | `rust-no-allow-without-reason` | `#[allow(...)]` without a justification comment hides problems silently. | Add a `//` comment on the same line or the line above explaining why the lint is suppressed. |
 | `rust-no-arc-mutex-tree` | Tree/graph node typed as `Arc<Mutex<_>>` or `Rc<RefCell<_>>`. | Replace the shared-ownership + interior-mutability pattern with an arena (`id_arena`, `indextree`, `slotmap`, `generational-arena`). Nodes become indices into a single `Vec<T>`, which is cheaper, cache-friendly, and makes cycles trivially representable. |
@@ -1886,6 +1893,7 @@
 | `rust-no-linkedlist` | Prefer `Vec<T>` over `LinkedList<T>` — cache locality wins. | Replace `LinkedList<T>` with `Vec<T>` or `VecDeque<T>`. LinkedList's theoretical O(1) splice is dominated in practice by Vec's cache locality for any realistic size. Enable `clippy::linkedlist`. |
 | `rust-no-lossy-as-cast` | `as` casts that can truncate or lose precision are silent bugs. | Replace the `as` cast with `try_into()` (returns Result) or `u8::try_from(x)` for integer narrowing. For guaranteed-safe widening casts (`u8` → `u32`), use `From::from(x)` / `x.into()` instead — explicit, documents the conversion is total. |
 | `rust-no-panic-macros` | No `panic!` / `todo!` / `unimplemented!` / `unreachable!` in production. | Replace the macro with a typed Result error. `todo!()` and `unimplemented!()` mark placeholders that must not ship. `unreachable!()` should only mark compiler-proven impossible states with a `// Impossible: ...` comment. Tests are exempted — panicking in a `#[test]` is a clean failure. |
+| `rust-no-print-macros` | `println!` writes past the logging pipeline. | Outside a binary's own output path, replace `println!` with a `tracing` macro (`tracing::info!`, `tracing::warn!`, `tracing::error!`) so the consumer's subscriber decides the level, the target and the sink. In a CLI, where stdout is the product, write through `std::io::stdout().lock()` + `writeln!` — it is buffered and the lint does not fire on it — or put `#[expect(clippy::print_stdout, reason = "CLI output")]` on `main`. Enforced by `clippy::print_stdout`. |
 | `rust-no-println-in-async` | `println!` / `eprintln!` inside async code blocks the runtime. | Replace `println!("…")` / `eprintln!("…")` with a `tracing` macro (`tracing::info!`, `tracing::warn!`, `tracing::error!`). `println!` takes a blocking stdout lock — inside an async task that stalls the reactor and interleaves output from concurrent tasks. Tracing macros are non-blocking and respect subscriber filters/spans. |
 | `rust-no-pub-use-glob` | `pub use foo::*` re-exports invisibly. | List the re-exports explicitly: `pub use foo::{Bar, Baz};`. Glob re-exports turn every change in `foo` into a silent change to your public API. |
 | `rust-no-static-mut` | `static mut` is deprecated and unsafe by design. | Replace `static mut FOO: T = ...` with a safe primitive: `OnceLock<T>`/`LazyLock<T>` for initialize-once values, `Mutex<T>`/`RwLock<T>` for shared mutable state, or `AtomicU64`/`AtomicBool`/etc for primitive counters and flags. |
@@ -1912,21 +1920,37 @@
 | `rust-thread-spawn-in-async` | `std::thread::spawn` invoked inside an `async fn`. | Spawning an OS thread from async code defeats the runtime: the thread can't be cooperatively scheduled or driven by the executor, and CPU-bound work should go through `tokio::task::spawn_blocking` (or `rayon`). Use `tokio::spawn` for futures, `spawn_blocking` for sync work. |
 | `rust-to-string-in-format-arg` | `.to_string()` inside `format!` / `println!` / `write!` arguments is redundant. | Drop the `.to_string()` — formatting macros already invoke `Display` (or the requested formatter) on each argument. The extra `.to_string()` allocates a `String` only to hand it back to the same trait. |
 | `rust-tokio-spawn-without-handle` | `tokio::spawn(..)` whose JoinHandle is dropped silently swallows panics. | Capture the JoinHandle and `.await` it, or pass the task through a wrapper like `tokio::spawn(async { if let Err(e) = work().await { tracing::error!(?e); } })`. Fire-and-forget loses every error and every panic. |
+| `rust-tracing-subscriber-in-library` | A library emits traces; only the binary installs the global subscriber — a library-side `init()` hijacks the whole process's logging. | Delete the subscriber/logger installation from the library and emit `tracing::info!` / `tracing::error!` instead; let the consumer's `main` call `tracing_subscriber::fmt().init()` once at startup. If the crate must offer setup, expose it as a `pub fn init_tracing()` the binary calls explicitly. |
 | `rust-unbounded-channel` | Unbounded channels can OOM the process. | Use `mpsc::channel(N)` (tokio) or `crossbeam::channel::bounded(N)`. Pick a capacity that bounds memory under load — even N=1024 is infinitely safer than no bound. The producer will `.await` (or block) when full, providing backpressure. |
 | `rust-undocumented-unsafe` | Every `unsafe` block must have a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment above every `unsafe { ... }` block explaining the invariants that make the unsafe code sound. The comment is what future debuggers will reach for when memory corruption shows up. |
 | `rust-unit-error-result` | `Result<T, ()>` discards every error detail. | Define a real error type — even a tiny enum — and use it as the `E` parameter. If absence is the only failure mode, return `Option<T>` instead. `Result<T, ()>` is the worst of both worlds. |
 | `rust-unsafe-ffi-isolation` | `extern "C"` blocks should be isolated inside a `mod sys`, `mod ffi`, or `mod raw` module. | Move the `extern "C"` block into a dedicated submodule: `mod sys { extern "C" { ... } }`. |
 | `rust-unsafe-impl-without-comment` | `unsafe impl` requires a `// SAFETY:` comment. | Add a `// SAFETY: ...` comment immediately above the `unsafe impl` block. Spell out which invariants of the unsafe trait the type upholds — without it, the contract is unauditable. |
+| `rust-url-as-string` | A URL held as `String`/`&str` and then patched with string surgery (trailing-slash trimming, `format!` joins) should be a parsed `url::Url`. | Parse the string into `url::Url` at the boundary that receives it — clap (`#[arg(value_parser = clap::value_parser!(Url))]`), config deserialization, an env var — so a malformed URL fails there instead of halfway through a request. Build sub-paths with `Url::join` instead of `format!`. Watch the base: `join` resolves against the last path segment, so `"https://h/api".join("users")` yields `/users` while `"https://h/api/".join("users")` yields `/api/users` — keep the trailing slash on a base you mean to extend. |
 | `rust-vec-with-capacity` | `Vec::new()` followed by a for-loop with `.push()` reallocates repeatedly. Use `Vec::with_capacity()` when the size is known. | Replace `Vec::new()` with `Vec::with_capacity(source.len())` when iterating a collection of known length. |
 | `rust-workspace-deps-centralized` | Member crate pins a dependency instead of inheriting from the workspace. | Declare the version once under `[workspace.dependencies]` in the root `Cargo.toml`, then reference it from member crates with `foo = { workspace = true }`. Keeps versions in lockstep and makes bumps a one-file change. |
 | `rust-workspace-lints-shared` | Workspace lacks `[workspace.lints]` or member crate doesn't inherit it. | In the workspace root `Cargo.toml`, declare a `[workspace.lints.*]` section (clippy, rust, rustdoc). In every member crate, add `[lints]` followed by `workspace = true` to inherit the policy. Prevents per-crate drift of clippy categories and `deny(warnings)`. |
 | `timeout-on-external-command` | `Command::new()` without a timeout can hang indefinitely. | Wrap the command execution with a timeout (e.g. `tokio::time::timeout` or a custom helper). |
+
+## rust > api
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-bool-param-in-pub-fn` | A `bool` parameter on a public function is a flag callers read as a bare `true`. | Replace the `bool` parameter with a two-variant enum named after the choice it encodes: `pub enum Recursion { Recursive, Flat }`, then `pub fn walk(path: &Path, recursion: Recursion)`. The call site turns from `walk(p, true)` into `walk(p, Recursion::Recursive)`, and a third mode can be added without changing the signature's shape. Unlike `no-boolean-flag-param` (Rust: `clippy::fn_params_excessive_bools`, three or more `bool`s, any visibility), a single `bool` on a public signature is enough here — it is the call site, not the parameter count, that is unreadable. |
+| `rust-must-use-candidate` | Public side-effect-free functions returning a value need `#[must_use]`. | Add `#[must_use]` above the function. A `pub fn` that mutates nothing and returns a value exists only for its result, so ignoring it is always the caller's bug — `#[must_use]` makes the compiler say so instead of compiling a no-op. Builder types are already covered by `rust-builder-without-must-use`; this is the function-level half. Enforced by `clippy::must_use_candidate`. |
+| `rust-newtype-missing-derives` | Public newtype (single-field tuple struct) missing `Clone`, `PartialEq` or `Eq`. | Add the derives on the newtype: `#[derive(Clone, PartialEq, Eq)] pub struct UserId(u64);`, plus `Hash` once `Eq` is there so the newtype can key a `HashMap`. A newtype inherits nothing from the type it wraps, and the orphan rule stops a downstream crate from adding the impls itself. `Clone` is expected of every newtype; `PartialEq`/`Eq` only when the wrapped type is provably comparable (a primitive, a known-`Eq` stdlib type, or a container of those). When the wrapped value needs custom semantics, hand-write `impl Clone` / `impl PartialEq` instead — a manual impl in the same file is accepted. |
 
 ## rust > architecture
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
 | `rust-no-provider-in-domain` | A declaration inside the domain names a provider — a port must stay vendor-agnostic. | Name the declaration after the role it plays in the domain (`twilio_phone_sid` → `provisioned_number_reference`) and keep the provider's name in the adapter that talks to it. Then swapping providers rewrites one adapter instead of every layer that quotes the vendor. |
+
+## rust > async
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-select-in-loop-unpinned` | A `select!` branch that builds its own future inside a loop loses that future's partial progress every time another branch wins. | Build the future once before the loop and pin it — `let fut = read_frame(&mut conn); tokio::pin!(fut);` — then poll it from the branch as `r = &mut fut => …`, so a losing round keeps what it had already read. |
 
 ## rust > concurrency
 
@@ -1945,7 +1969,9 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `rust-arithmetic-side-effects` | Integer arithmetic that can overflow, wrap, or divide by zero. | On integers that came from outside the process — a parsed argument, a request body, a wire format — say what should happen: `checked_add` when the caller has to handle it, `saturating_sub` when clamping is correct, `wrapping_mul` when wrap-around is the intent. `clippy::arithmetic_side_effects` fires on every arithmetic operation, values you control included; it is deliberately broad. If the noise outweighs the catch, turn it off wholesale with `[rules.rust-arithmetic-side-effects] disabled = true` in `comply.toml` rather than suppressing it line by line. |
 | `rust-float-eq-partial-cmp` | Don't compare floats with `==` / `!=`. | Compare the absolute difference against an epsilon: `(a - b).abs() < f64::EPSILON` for tight tolerance, or a domain-specific epsilon for measurements. For ordering use `a.partial_cmp(&b)`. Float `==` matches bit patterns, not numerical equality, so `0.1 + 0.2 == 0.3` is false. |
+| `rust-let-underscore-guard` | `let _ = <guard>;` drops the guard immediately — the lock, span or temp directory it protects is gone before the next statement. | Bind the guard to a named variable that lives as long as the critical section: `let _guard = m.lock().unwrap();`. Keep `let _ = …` for values you really do want dropped now. |
 
 ## rust > observability
 
@@ -1957,12 +1983,24 @@
 
 | Rule | Description | Remediation |
 |------|-------------|-------------|
+| `cargo-release-profile-lto` | Root `Cargo.toml` ships a release profile without link-time optimization or a single codegen unit. | Add to the root `Cargo.toml`:  [profile.release] lto = "fat" codegen-units = 1  `lto = "thin"` is the cheaper compromise when release build time matters. `panic = "abort"` is a separate decision — it skips `Drop` on panic, so RAII guards and tracing flushes never run; enable it deliberately, this rule does not require it. |
 | `rust-format-args-in-log-macro` | Don't pass `format!(...)` to log/tracing macros — pass the args directly. | Replace `info!("{}", format!("x = {}", x))` with `info!("x = {}", x)`. The log/tracing macros already accept the same format-args grammar as `format!`, so the inner `format!` allocates a `String` only to be copied into the log buffer. |
+| `rust-hashmap-integer-key` | `std::collections::HashMap`/`HashSet` with an integer key pays for SipHash's DoS resistance on a key that needs none. | Swap the hasher: `rustc_hash::FxHashMap<K, V>` (or `ahash::AHashMap`) in place of `HashMap<K, V>`. Change the constructor too — `FxHashMap::default()` replaces `HashMap::new()`, and `FxHashMap::with_capacity_and_hasher(n, Default::default())` replaces `HashMap::with_capacity(n)`. Keep `std`'s `HashMap` when the key comes from untrusted input, where SipHash is the point. |
 | `rust-loop-collect-into-existing-vec` | `for x in src { v.push(x); }` should be `v.extend(src)`. | Use `v.extend(src)` (or `v.extend(src.into_iter().map(...))` if you need a transform). `extend` consults the iterator's `size_hint` and reserves capacity in one allocation; the loop form re-grows the `Vec` once per element. |
+| `rust-mutex-over-atomic` | `Mutex<bool>` / `Mutex<u32>` locks a thread to touch one scalar an atomic handles lock-free. | Replace the lock with the matching atomic — `Mutex<bool>` → `AtomicBool`, `Mutex<usize>` → `AtomicUsize`, `Mutex<u32>` → `AtomicU32` — and swap `*guard` reads and writes for `load` / `store` / `fetch_add` / `compare_exchange` with an explicit `Ordering`. |
 | `rust-no-mutex-in-single-threaded` | `Mutex<T>` outside of `Arc<Mutex<T>>` is usually a `RefCell<T>` — no thread sharing means no reason to pay for a lock. | Replace `Mutex<T>` with `RefCell<T>` when the value is not shared across threads, or wrap it in `Arc<Mutex<T>>` when it is. |
 | `rust-prefer-cow` | Public functions taking an owned `String` force callers to allocate — prefer `Cow<'_, str>` or `&str`. | Change `pub fn foo(s: String)` to `pub fn foo(s: impl Into<Cow<'_, str>>)` when the function only sometimes needs ownership, or to `&str` when it never does. |
 | `rust-repeated-string-concat-in-loop` | `String` concatenation inside a loop reallocates per iteration. | Pre-size with `String::with_capacity(estimate)` and `push_str` into it, or collect into `Vec<String>` and use `.join("")`. The bare `s = s + …` form drops and re-allocates on every iteration. |
 | `rust-string-push-str-format` | `s.push_str(&format!(...))` allocates a throwaway String — use `write!`. | Replace `s.push_str(&format!("..."))` with `write!(s, "...").unwrap()` (or `?` in a fallible context). `format!` allocates a `String` whose only purpose is to be copied into `s`; `write!` writes directly into `s` and avoids the round-trip allocation. |
+| `rust-trivially-copy-pass-by-ref` | Pass a small `Copy` type by value, not by reference. | Drop the `&`: `fn at(span: Span)` instead of `fn at(span: &Span)`. A `Copy` type that fits in a register travels for free, while `&Span` costs a load plus a dereference on every field read — pointer chasing for a value that was already cheap to copy. Enforced by `clippy::trivially_copy_pass_by_ref`, whose cut-off is clippy's `trivial-copy-size-limit` (8 bytes by default). |
+| `rust-unbuffered-file-io-in-loop` | Unbuffered `File` read or written inside a loop — one syscall per iteration. | Buffer the handle at the binding: `let mut f = BufReader::new(File::open(path)?);` for reads, `let mut f = BufWriter::new(File::create(path)?);` for writes. A `BufWriter` must be flushed explicitly — call `f.flush()?` before it drops, otherwise a failing final write is silently swallowed in `Drop`. |
+
+## rust > security
+
+| Rule | Description | Remediation |
+|------|-------------|-------------|
+| `rust-extern-c-without-catch-unwind` | A panic unwinding out of an `extern "C"` function aborts the whole process — the C caller never gets a chance to handle it. | Wrap the body in `std::panic::catch_unwind(\|\| { … })` and turn an `Err` into the error code the C API already defines; or declare the function `extern "C-unwind"` when the caller is Rust and is prepared to unwind through it. |
+| `rust-secret-type-derives-debug` | A secret-carrying struct that derives `Debug`/`Display`/`Serialize` leaks the secret into logs, spans and panic messages. | Write the impl by hand and mask the value — `impl fmt::Debug for ApiKey { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("ApiKey(****)") } }` — or hold the value in `secrecy::SecretString` / `SecretBox<T>`, whose own `Debug` prints `[REDACTED]`. For a derived `Serialize`, mark the secret field `#[serde(skip)]` or give it a redacting `serialize_with`. |
 
 ## rust > serde
 
@@ -1975,6 +2013,7 @@
 | Rule | Description | Remediation |
 |------|-------------|-------------|
 | `rust-no-sleep-in-test` | No `thread::sleep` or `tokio::time::sleep` inside tests. | Sleep-based waits make tests slow and flaky. Wait on a condition (channel, signal, polling with a deadline) or inject a clock so the test can advance time deterministically. Tokio offers `tokio::time::pause()` + `advance(d)` for the latter. |
+| `rust-should-panic-without-expect` | `#[should_panic]` without `expected = "…"` passes on any panic. | Name the failure the test is about: `#[should_panic(expected = "divide by zero")]`. Without the `expected` fragment the test also goes green when the fixture's own `unwrap()` blows up or a `todo!()` fires first, so it stops proving anything about the code under test. Enforced by `clippy::should_panic_without_expect`. |
 
 ## security
 
