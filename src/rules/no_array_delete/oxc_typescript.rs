@@ -174,4 +174,73 @@ mod oxc_tests {
         // Test teardown deletes fixture entries; bounded to test scope.
         assert!(run_in_test_file("delete fixtures[id];").is_empty());
     }
+
+    // The receiver decides, not the index — issue #8440
+
+    #[test]
+    fn skips_numeric_key_deletion_on_a_fresh_object_issue_8440() {
+        // Regression for rbaumier/comply#8440: a numeric literal is evidence
+        // about the KEY, not about the receiver. `copy` is an object, and
+        // `copy.splice(0, 1)` names a method it does not have — this line
+        // belongs to `no-delete`, which is free to decide it is an immutable
+        // `omit` and stay silent.
+        let src = "const copy = { ...o }; delete copy[0];";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn skips_numeric_key_deletion_on_a_number_keyed_record_param_issue_8440() {
+        // Same defect through a parameter: `Record<number, string>` takes a
+        // numeric index and is not an array.
+        let src = "function f(cache: Record<number, string>) { delete cache[0]; }";
+        assert!(run(src).is_empty(), "got {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_dynamic_deletion_on_an_array_typed_parameter_issue_8440() {
+        // The other direction: a parameter's declaration node is a
+        // `FormalParameter`, which the resolution used to reject outright, so a
+        // `string[]` parameter carried no array evidence and the sparse-hole
+        // advice was replaced by `no-delete`'s rest-destructuring advice.
+        let src = "function f(arr: string[], i: number) { delete arr[i]; }";
+        assert_eq!(run(src).len(), 1, "got {:?}", run(src));
+    }
+
+    #[test]
+    fn each_delete_draws_exactly_one_diagnostic_issue_8440() {
+        // The hand-off is only observable through the engine: `no-delete`
+        // returns early on what this predicate calls an array, so a wrong
+        // verdict replaces the right message instead of adding a second one.
+        // Every line must still be reported — by one rule, the one the receiver
+        // names.
+        let source = r#"
+export function numericKeyOnParam(cache: Record<number, string>): void {
+  delete cache[0];
+}
+
+export function arrayParam(arr: string[], i: number): void {
+  delete arr[i];
+}
+"#;
+        let diagnostics = crate::engine::lint_in_memory(
+            std::path::Path::new("a.ts"),
+            crate::files::Language::TypeScript,
+            source,
+            crate::config::default_static_config(),
+            None,
+        );
+        // Only the two delete rules are under test: `cache[0]` also draws
+        // `boundary-condition`, which reads the index for a different reason.
+        let on_line = |line: usize| {
+            let mut ids: Vec<&str> = diagnostics
+                .iter()
+                .filter(|d| d.line == line && d.rule_id.contains("delete"))
+                .map(|d| d.rule_id.as_ref())
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(on_line(3), ["no-delete"], "record key: {diagnostics:?}");
+        assert_eq!(on_line(7), ["no-array-delete"], "array param: {diagnostics:?}");
+    }
 }
