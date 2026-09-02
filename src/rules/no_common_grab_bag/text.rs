@@ -1,6 +1,10 @@
 //! no-common-grab-bag backend — flag a `common` / `utils` / `helpers` /
 //! `shared` / `misc` / `util` module once its public surface has accreted.
 //!
+//! The finding is the file itself — its name against its whole exported
+//! surface — so the diagnostic is file-scoped and reports `1:1` by
+//! declaration, not because a position was left uncomputed.
+//!
 //! Such a name describes nothing the module holds. A reader must open the file
 //! to learn its contents. That cost is real when many unrelated symbols sit
 //! behind the name. It is absent when the module holds a few helpers for its

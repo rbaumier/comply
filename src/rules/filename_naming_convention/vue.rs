@@ -1,5 +1,9 @@
 //! filename-naming-convention — Vue backend (PascalCase or kebab-case).
 //!
+//! The finding is the file's name, which lives outside its contents, so the
+//! diagnostic is file-scoped and reports `1:1` by declaration, not because a
+//! position was left uncomputed.
+//!
 //! A leading `_`/`__` private-prefix is stripped before the case check, so a
 //! private/internal SFC (`_NavigationMenu.vue`) is validated by its remainder —
 //! mirroring the TS text backend's `strip_private_prefix`.

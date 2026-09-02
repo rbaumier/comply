@@ -1,3 +1,9 @@
+//! no-empty-file backend — flag a source file with no meaningful content.
+//!
+//! The finding is the file itself: there is no construct to point at, so the
+//! diagnostic is file-scoped and reports `1:1` by declaration, not because a
+//! position was left uncomputed.
+
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
 use crate::rules::backend::{CheckCtx, TextCheck};

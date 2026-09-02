@@ -455,7 +455,6 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             j += 1;
         }
         let body = &src[start..j.saturating_sub(1)];
-        let base_line = src[..abs].matches('\n').count();
         let set_range = set_block_range(body);
         let mask = non_code_mask(body);
         let deferred = deferred_mask(body, &mask);
@@ -464,7 +463,7 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
         // segment and `seg.len() + 1` advances the byte cursor exactly — the
         // cursor must stay aligned with `mask`'s byte offsets. `\r` only ever
         // trails a line, so it never shifts a marker/assignment match offset.
-        for (line_off, line) in body.split('\n').enumerate() {
+        for line in body.split('\n') {
             let cur_start = line_start;
             let cur_end = cur_start + line.len();
             line_start += line.len() + 1; // +1 for the consumed '\n'
@@ -482,37 +481,40 @@ crate::ast_check! { on ["component"] => |node, source, ctx, diagnostics|
             let is_code =
                 |off_in_line: usize| !mask[cur_start + off_in_line] && !deferred[cur_start + off_in_line];
             for marker in SIDE_EFFECT_MARKERS {
-                if line.match_indices(marker).any(|(off, _)| is_code(off)) {
-                    diagnostics.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: base_line + line_off + 1,
-                        column: 1,
-                        rule_id: super::META.id.into(),
-                        message: format!(
+                // `find` rather than `any`: the offset of the marker inside the
+                // line is what anchors the diagnostic on the side effect itself
+                // instead of on the line's indentation. `start` is where `body`
+                // begins in `ctx.source`, so the three offsets add up to the
+                // marker's position in the file.
+                if let Some((off, _)) = line.match_indices(marker).find(|&(off, _)| is_code(off)) {
+                    diagnostics.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        src,
+                        (start + cur_start + off, marker.len()),
+                        super::META.id,
+                        format!(
                             "Side effect `{marker}` inside `computed()` — computeds must be pure."
                         ),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                        Severity::Error,
+                    ));
                     break;
                 }
             }
             const VALUE_ASSIGN: &str = ".value =";
             let line_bytes = line.as_bytes();
-            let assigns = line.match_indices(VALUE_ASSIGN).any(|(off, _)| {
+            let assign = line.match_indices(VALUE_ASSIGN).find(|&(off, _)| {
                 // Reject `.value ==` / `.value ===` (comparison, not assignment).
                 is_code(off) && line_bytes.get(off + VALUE_ASSIGN.len()) != Some(&b'=')
             });
-            if assigns {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: base_line + line_off + 1,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: "Assignment to `.value` inside `computed()` — computeds must be pure.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+            if let Some((off, _)) = assign {
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    src,
+                    (start + cur_start + off, VALUE_ASSIGN.len()),
+                    super::META.id,
+                    "Assignment to `.value` inside `computed()` — computeds must be pure.".into(),
+                    Severity::Error,
+                ));
             }
         }
         i = j;
@@ -532,6 +534,28 @@ mod tests {
             .expect("vue grammar");
         let tree = parser.parse(source, None).expect("parser");
         Check.check(&CheckCtx::for_test(Path::new("t.vue"), source), &tree)
+    }
+
+    #[test]
+    fn anchors_on_the_side_effect_not_the_left_margin() {
+        // Regression for rbaumier/comply#8428 — `match_indices` already held
+        // the marker's offset inside the line; the diagnostic reported column 1.
+        let sfc = "<script setup>\nconst c = computed(() => {\n  console.log('x')\n  return 1\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (3, 3));
+        let (offset, len) = diags[0].span.expect("the anchor carries the marker's span");
+        assert_eq!(&sfc[offset..offset + len], "console.");
+    }
+
+    #[test]
+    fn anchors_on_the_value_assignment_not_the_left_margin() {
+        let sfc = "<script setup>\nconst c = computed(() => {\n  other.value = 2\n  return 1\n})\n</script>";
+        let diags = run(sfc);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (3, 8));
+        let (offset, len) = diags[0].span.expect("the anchor carries the assignment's span");
+        assert_eq!(&sfc[offset..offset + len], ".value =");
     }
 
     #[test]

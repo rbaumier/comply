@@ -189,7 +189,7 @@ impl TextCheck for Check {
         }
         let mut diags = Vec::new();
         let mut line_start = 0;
-        for (i, line) in src.lines().enumerate() {
+        for line in src.lines() {
             if let Some(rel) = line.find("addEventListener(") {
                 let ae_start = line_start + rel;
                 let open_paren = ae_start + "addEventListener".len();
@@ -201,15 +201,16 @@ impl TextCheck for Check {
                     && !line.trim().starts_with("//")
                     && !is_self_removing
                 {
-                    diags.push(Diagnostic {
-                        path: std::sync::Arc::clone(&ctx.path_arc),
-                        line: i + 1,
-                        column: 1,
-                        rule_id: super::META.id.into(),
-                        message: "`addEventListener` in `onMounted` without `removeEventListener` in `onUnmounted` leaks listeners.".into(),
-                        severity: Severity::Error,
-                        span: None,
-                    });
+                    // `ae_start` already locates the call in `src`; anchoring
+                    // there separates two `addEventListener` calls on one line.
+                    diags.push(Diagnostic::at_offset(
+                        std::sync::Arc::clone(&ctx.path_arc),
+                        src,
+                        (ae_start, "addEventListener".len()),
+                        super::META.id,
+                        "`addEventListener` in `onMounted` without `removeEventListener` in `onUnmounted` leaks listeners.".into(),
+                        Severity::Error,
+                    ));
                 }
             }
             // Advance past this line plus its newline, accounting for `\r\n`.
@@ -231,6 +232,18 @@ mod tests {
     fn run(src: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new("Comp.vue"), src))
     }
+    #[test]
+    fn anchors_on_the_add_event_listener_call() {
+        // Regression for rbaumier/comply#8428 — `ae_start` already located the
+        // call; the diagnostic threw it away and reported column 1.
+        let src = "onMounted(() => {\n  window.addEventListener('resize', handler)\n})";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (2, 10));
+        let (offset, len) = diags[0].span.expect("the anchor carries the call's span");
+        assert_eq!(&src[offset..offset + len], "addEventListener");
+    }
+
     #[test]
     fn flags_no_remove() {
         assert_eq!(

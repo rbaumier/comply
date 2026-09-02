@@ -6,20 +6,6 @@ use crate::rules::rust_helpers::is_in_test_context;
 #[derive(Debug)]
 pub struct Check;
 
-/// Byte offsets, one per line, of the start of each line in `source`.
-/// `line_starts[i]` is the offset of line `i` (0-based), matching
-/// `str::lines()` enumeration order.
-fn line_start_offsets(source: &str) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(source.len() / 32 + 1);
-    offsets.push(0);
-    for (idx, b) in source.bytes().enumerate() {
-        if b == b'\n' {
-            offsets.push(idx + 1);
-        }
-    }
-    offsets
-}
-
 /// True when the IPv4 literal at byte offset `ip_offset` in a Rust `source`
 /// sits inside a `#[cfg(test)]` context (an inline `#[cfg(test)] mod tests`,
 /// a `#[test]` function, a `#![cfg(test)]` file, etc.). Such IPs are test
@@ -252,8 +238,16 @@ impl TextCheck for Check {
             let mut parser = tree_sitter::Parser::new();
             crate::parsing::parse_with_grammar(&mut parser, Language::Rust, ctx.source.as_bytes())
         });
-        let line_starts = rust_tree.is_some().then(|| line_start_offsets(ctx.source));
-        for (idx, line) in ctx.source.lines().enumerate() {
+        // The diagnostic anchors on the IP literal, whose file offset is its
+        // line's offset plus its offset inside that line. `split_inclusive`
+        // keeps the terminator, so summing segment lengths tracks the line
+        // offset exactly under both LF and CRLF. The cursor advances before the
+        // body's early exits, so no `continue` can skip it.
+        let mut next_line_start = 0usize;
+        for segment in ctx.source.split_inclusive('\n') {
+            let line = segment.trim_end_matches(['\n', '\r']);
+            let line_start = next_line_start;
+            next_line_start += segment.len();
             if !(line.contains('"') || line.contains('\'') || line.contains('`')) {
                 continue;
             }
@@ -287,22 +281,22 @@ impl TextCheck for Check {
                 if is_in_comment(line) {
                     continue;
                 }
-                if let (Some(Some(tree)), Some(starts)) = (rust_tree.as_ref(), line_starts.as_ref())
+                // `find_ipv4` returns the offset just past the literal, so the
+                // literal itself starts `ip.len()` bytes earlier.
+                let ip_offset = line_start + (next - ip.len());
+                if let Some(Some(tree)) = rust_tree.as_ref()
+                    && rust_offset_in_test_context(tree, ctx.source, ip_offset)
                 {
-                    let ip_offset = starts[idx] + (next - ip.len());
-                    if rust_offset_in_test_context(tree, ctx.source, ip_offset) {
-                        continue;
-                    }
+                    continue;
                 }
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-hardcoded-ip".into(),
-                    message: format!("Hardcoded IP address `{ip}` — move to configuration."),
-                    severity: Severity::Error,
-                    span: None,
-                });
+                diagnostics.push(Diagnostic::at_offset(
+                    std::sync::Arc::clone(&ctx.path_arc),
+                    ctx.source,
+                    (ip_offset, ip.len()),
+                    "no-hardcoded-ip",
+                    format!("Hardcoded IP address `{ip}` — move to configuration."),
+                    Severity::Error,
+                ));
             }
         }
         diagnostics
@@ -331,6 +325,24 @@ mod tests {
     use std::path::Path;
     fn run(source: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+    }
+
+    #[test]
+    fn anchors_each_ip_on_its_own_literal() {
+        // Regression for rbaumier/comply#8428 — two IPs on one line used to
+        // produce two records identical in every serialized field.
+        let source = "const hosts = [\"192.168.1.1\", \"192.168.1.2\"];\n";
+        let diags = run(source);
+        let positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        assert_eq!(positions, vec![(1, 17), (1, 32)]);
+        let anchored: Vec<&str> = diags
+            .iter()
+            .map(|d| {
+                let (offset, len) = d.span.expect("the anchor carries the literal's span");
+                &source[offset..offset + len]
+            })
+            .collect();
+        assert_eq!(anchored, vec!["192.168.1.1", "192.168.1.2"]);
     }
 
     fn run_rust(source: &str) -> Vec<Diagnostic> {
