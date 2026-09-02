@@ -274,6 +274,25 @@ pub fn is_fuzz_targets_path(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == "fuzz_targets")
 }
 
+/// Directory segments a fuzzing toolchain roots its harness sources at.
+/// `fuzz_targets` is cargo-fuzz's; `fuzz`/`fuzzing`/`fuzz-afl` are the crate
+/// directories the rest of the ecosystem uses — cargo-fuzz's own `fuzz/`
+/// crate, AFL's `fuzz-afl/`, and the `fuzz/` convention shared by jsfuzz,
+/// `@jazzer.js/core` and the Atheris/OSS-Fuzz JS integrations.
+const FUZZ_HARNESS_SEGMENTS: &[&str] = &["fuzz", "fuzzing", "fuzz-afl", "fuzz_targets"];
+
+/// True when `path` lives under a fuzzing harness directory. Each file there is
+/// a build root: the fuzzer compiles it on its own and calls its entry point
+/// with generated input, so nothing imports it and nothing is meant to — which
+/// is what reachability rules need to know before concluding "never imported".
+///
+/// Broader than [`is_fuzz_targets_path`], which answers the narrower cargo-fuzz
+/// question the panic/abort rules ask. Segment match, so `fuzzy/` does not
+/// qualify.
+pub fn is_fuzz_harness_path(path: &Path) -> bool {
+    has_path_segment(path, FUZZ_HARNESS_SEGMENTS)
+}
+
 /// Directory names that hold one-off data/schema migration scripts (TypeORM,
 /// Knex, Prisma, Umzug, Rails-style). Matched as exact path segments, so
 /// `src/migrations/` matches but `src/migrationsHelper.ts` (a `migrationsHelper`
@@ -2135,6 +2154,20 @@ mod aux_path_tests {
     fn fuzz_targets_path_match() {
         assert!(is_fuzz_targets_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
         assert!(!is_fuzz_targets_path(&PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn fuzz_harness_path_match_issue_8120() {
+        // Issue #8120: the harness convention is the `fuzz/` crate directory, not
+        // cargo-fuzz's `fuzz_targets/` segment alone — chessops' JS targets live
+        // at `fuzz/src/*.fuzz.ts`, AFL's at `fuzz-afl/fuzzers/`.
+        assert!(is_fuzz_harness_path(&PathBuf::from("fuzz/src/uci.fuzz.ts")));
+        assert!(is_fuzz_harness_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
+        assert!(is_fuzz_harness_path(&PathBuf::from("fuzz-afl/fuzzers/a.rs")));
+        assert!(is_fuzz_harness_path(&PathBuf::from("fuzzing/target.js")));
+        assert!(!is_fuzz_harness_path(&PathBuf::from("src/lib.rs")));
+        // Segment equality, not prefix: a `fuzzy/` directory is unrelated.
+        assert!(!is_fuzz_harness_path(&PathBuf::from("fuzzy/match.ts")));
     }
 
     #[test]

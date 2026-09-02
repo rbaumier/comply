@@ -128,16 +128,29 @@
 //!     import. Recognized conventions: Next.js Pages Router (`pages/**`, incl.
 //!     `pages/api/**`), Next.js App Router special files (`page`/`layout`/`route`/
 //!     `loading`/`error`/`not-found`/`template`/`default`/`global-error` under an
-//!     `app/` directory), and the `@next/mdx` provider module (a
+//!     `app/` directory), the `@next/mdx` provider module (a
 //!     `mdx-components.{tsx,jsx,js,mjs}` file's `useMDXComponents` export, which
-//!     `@next/mdx` discovers by filename at build time). This check is
+//!     `@next/mdx` discovers by filename at build time), and the VitePress custom
+//!     theme entry (`.vitepress/theme/index.*`'s `default` export, the `Theme`
+//!     object VitePress resolves by path). This check is
 //!     path-convention-based and does NOT require the framework dependency to be
 //!     detected, so it covers monorepo route files whose framework dep is
 //!     invisible to nearest-manifest detection. Only the convention's reserved
 //!     export names are exempt, so a genuinely-dead helper in a route file still
 //!     fires.
+//!   - Fuzz harness sources (`is_fuzz_harness_path`: a `fuzz/`, `fuzzing/`,
+//!     `fuzz-afl/`, or `fuzz_targets/` segment) — the whole file is exempt. The
+//!     fuzzer compiles each file there as its own build root and calls its
+//!     exported entry with generated input (jsfuzz/Jazzer.js on
+//!     `dist/<name>.fuzz.js`, libFuzzer on a cargo-fuzz target), so having no
+//!     importer is what makes it an entry point.
 //!
 //! False-positive guards:
+//!   - A symbol a *barrel* forwards to a consumer the index records no per-name
+//!     usage for is live: a published entry barrel's `export { X } from './m'`
+//!     (the package's public surface) and a namespace-imported barrel's, since
+//!     `import * as ns from './barrel'` reaches `m`'s `X` as `ns.X`. See
+//!     `collect_barrel_forwarded_names`.
 //!   - If any file imports the current module via a namespace import
 //!     (`import * as ns from './m'`), `symbol_usages` is intentionally not
 //!     populated for individual names. In that case every export on the
@@ -304,9 +317,10 @@ const NEXT_PAGES_ROUTER_EXPORTS: &[&str] = &[
     "config",
 ];
 
-/// True when `export_name` is consumed by a framework file-system router for a
-/// file matching a well-known routing convention, so it has no static importer
-/// yet is live. Detection is purely path-convention-based — independent of
+/// True when `export_name` is consumed by a framework for a file matching a
+/// well-known file-system convention — a router's route module, or an entry the
+/// framework resolves by path — so it has no static importer yet is live.
+/// Detection is purely path-convention-based — independent of
 /// whether the framework dependency is visible in the nearest `package.json`,
 /// which is the gap that surfaced the false positive (a monorepo route file
 /// whose `next` dep is declared out of reach of nearest-manifest detection).
@@ -336,6 +350,19 @@ fn is_framework_route_export(path: &Path, export_name: &str) -> bool {
     // must export a named `useMDXComponents`, which @next/mdx discovers by filename
     // at build time — there is never a static import of it.
     if stem == "mdx-components" && export_name == "useMDXComponents" {
+        return true;
+    }
+
+    // VitePress custom theme entry (`.vitepress/theme/index.{ts,js,…}`): its
+    // `default` export is the `Theme` object VitePress resolves by path at build
+    // time, the sibling convention to the `.vitepress/config.ts` the config-file
+    // exemption already covers. `.vitepress` is a scanned config dot-dir, so the
+    // file is indexed and would otherwise look importer-less.
+    if stem == "index"
+        && export_name == "default"
+        && has_path_segment(path, ".vitepress")
+        && has_path_segment(path, "theme")
+    {
         return true;
     }
 
@@ -508,22 +535,29 @@ fn is_co_occurrence_exempt(export_name: &str, export_names: &FxHashSet<&str>) ->
     })
 }
 
-/// Names exported by `exporting_file` that a published entry barrel re-exports —
-/// i.e. the file's contribution to the package's public surface. A library
-/// publishes through its entry point, so the barrel's `export { X } from './m'`
-/// is the only consumer of `m`'s `X` and no source file imports it; such a
-/// symbol is live.
+/// Names exported by `exporting_file` that a barrel re-exports to a consumer the
+/// import graph cannot name symbol by symbol. Two such barrels exist, and a
+/// symbol reaching either is live:
 ///
-/// Scans each indexed file for re-exports of `exporting_file`, keeps the files
-/// that are published entry files ([`is_public_entry_file`]), and records each
-/// origin name (the `local` side of `export { local as exported } from …`, else
-/// the exported name). The entry-file probe — the only step that touches the
-/// filesystem — runs solely for a file that re-exports from `exporting_file`,
-/// so it costs a walk-up per barrel rather than per indexed file.
+/// - a **published entry barrel** ([`is_public_entry_file`]): the library
+///   publishes through it, so its `export { X } from './m'` is the only consumer
+///   of `m`'s `X` and no source file imports it;
+/// - a **namespace-imported barrel** ([`ImportIndex::is_namespace_imported`]):
+///   `import * as ns from './barrel'` reads the whole namespace, so `ns.X`
+///   reaches the origin's `X` at runtime with no per-name usage recorded
+///   anywhere — the `Object.keys(ns).forEach(register)` registration pattern.
+///
+/// Scans each indexed file for re-exports of `exporting_file`, keeps the barrels
+/// that qualify, and records each origin name (the `local` side of
+/// `export { local as exported } from …`, else the exported name). The entry-file
+/// probe — the only step that touches the filesystem — runs solely for a file
+/// that re-exports from `exporting_file`, so it costs a walk-up per barrel rather
+/// than per indexed file.
 ///
 /// Named re-exports only. A barrel's `export * from './m'` names no symbol, so
-/// the symbols it forwards are not collected here.
-fn collect_entry_reexported_names(
+/// the symbols it forwards are not collected here (for the namespace-import case
+/// the index already marks the whole origin module namespace-imported).
+fn collect_barrel_forwarded_names(
     index: &crate::project::import_index::ImportIndex,
     project: &crate::project::ProjectCtx,
     exporting_file: &Path,
@@ -537,7 +571,9 @@ fn collect_entry_reexported_names(
             .filter(|exp| index.reexport_target(barrel, &exp.name) == Some(exporting_file))
             .map(|exp| exp.local_name.clone().unwrap_or_else(|| exp.name.clone()))
             .collect();
-        if origins.is_empty() || !is_public_entry_file(project, barrel) {
+        if origins.is_empty()
+            || !(index.is_namespace_imported(barrel) || is_public_entry_file(project, barrel))
+        {
             continue;
         }
         out.extend(origins);
@@ -587,6 +623,17 @@ impl TextCheck for Check {
         // check misses these nested mains, so reuse the same sample-dir
         // classifier `unused-file` uses to keep the two rules in agreement.
         if is_sample_dir_path(ctx.path) {
+            return Vec::new();
+        }
+        // Fuzz harness source (`fuzz/`, `fuzz-afl/`, a cargo-fuzz `fuzz_targets/`):
+        // each file there is a build root the fuzzer compiles on its own and whose
+        // exported entry it then calls with generated input — jsfuzz and
+        // `@jazzer.js/core` load `dist/<name>.fuzz.js` and invoke its `fuzz`
+        // export exactly as libFuzzer calls a cargo-fuzz target. Having no
+        // importer is what makes a file an entry point, so "never imported
+        // elsewhere in the project" carries no information here, and both
+        // remediations the message offers would delete the target.
+        if crate::rules::path_utils::is_fuzz_harness_path(ctx.path) {
             return Vec::new();
         }
         if is_nextra_meta_file(ctx.path) {
@@ -776,12 +823,13 @@ impl TextCheck for Check {
         // having no importer. Computed lazily, like the scans above.
         let mut custom_element_classes: Option<FxHashSet<String>> = None;
 
-        // Names of this file's symbols re-exported by a published entry barrel.
-        // Such a symbol is part of the package's published surface, consumed
-        // externally — the entry barrel re-exports it but no source file imports
-        // it. Computed lazily: only an export that survived every cheap check
-        // pays for the per-barrel scan.
-        let mut entry_reexported: Option<FxHashSet<String>> = None;
+        // Names of this file's symbols a published entry barrel or a
+        // namespace-imported barrel re-exports. Either route reaches a consumer
+        // for which the import graph records no per-name usage — the package's
+        // public surface, or `ns.X` on a wholesale-imported namespace. Computed
+        // lazily: only an export that survived every cheap check pays for the
+        // per-barrel scan.
+        let mut barrel_forwarded: Option<FxHashSet<String>> = None;
 
         // Whether this module is a Cloudflare Worker module-format entry point —
         // an `export default` object carrying a `fetch`/`scheduled`/… lifecycle
@@ -958,9 +1006,9 @@ impl TextCheck for Check {
             if custom_element_classes.contains(export.name.as_str()) {
                 continue;
             }
-            let entry_reexported = entry_reexported
-                .get_or_insert_with(|| collect_entry_reexported_names(index, ctx.project, &canon));
-            if entry_reexported.contains(export.name.as_str()) {
+            let barrel_forwarded = barrel_forwarded
+                .get_or_insert_with(|| collect_barrel_forwarded_names(index, ctx.project, &canon));
+            if barrel_forwarded.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -4403,6 +4451,150 @@ mod tests {
         assert!(
             copy_diags.is_empty(),
             "`copy` re-exported via `export *` from a namespace-imported barrel must not be flagged, got: {copy_diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_named_reexport_via_namespace_imported_barrel_issue_7737() {
+        // Regression for #7737 — the sibling of #7674 with a NAMED re-export.
+        // `export { auth } from './auth'` records no `export *` edge, so
+        // namespace-import liveness does not propagate down it, and the namespace
+        // import creates no per-name usage for `auth` either. The symbol is still
+        // reachable as `ns.auth` at runtime, so it is live.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/directives/auth.ts", "export const auth = 1;\n"),
+            ("src/directives/copy.ts", "export const copy = 2;\n"),
+            (
+                "src/directives/index.ts",
+                "export { auth } from './auth';\nexport { copy } from './copy';\n",
+            ),
+            (
+                "src/main.ts",
+                "import * as ns from './directives';\n\
+                 Object.keys(ns).forEach(key => key);\n",
+            ),
+        ];
+        for target in ["src/directives/auth.ts", "src/directives/copy.ts"] {
+            let (_dir, diags) = run_on_project(&files, target);
+            assert!(
+                diags.is_empty(),
+                "{target} is named-re-exported through a namespace-imported barrel and must not be flagged, got: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_dead_export_beside_a_namespace_imported_barrel_issue_7737() {
+        // Negative-space guard for #7737: the exemption follows the barrel's real
+        // named re-export edges. A module the barrel does not re-export gets no
+        // liveness from the namespace import, and a symbol the barrel forwards
+        // under a different name does not cover its unforwarded siblings.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "src/directives/auth.ts",
+                "export const auth = 1;\nexport const helper = 2;\n",
+            ),
+            ("src/directives/orphan.ts", "export const orphan = 3;\n"),
+            ("src/directives/index.ts", "export { auth } from './auth';\n"),
+            (
+                "src/main.ts",
+                "import * as ns from './directives';\n\
+                 Object.keys(ns).forEach(key => key);\n",
+            ),
+        ];
+        let (_dir, auth_diags) = run_on_project(&files, "src/directives/auth.ts");
+        assert_eq!(
+            auth_diags.len(),
+            1,
+            "only `auth` is forwarded; `helper` stays dead, got: {auth_diags:?}"
+        );
+        assert!(auth_diags[0].message.contains("helper"));
+        let (_dir, orphan_diags) = run_on_project(&files, "src/directives/orphan.ts");
+        assert_eq!(
+            orphan_diags.len(),
+            1,
+            "a module the barrel does not re-export stays dead, got: {orphan_diags:?}"
+        );
+    }
+
+    #[test]
+    fn no_fp_for_js_fuzz_target_export_issue_8120() {
+        // Regression for #8120 (chessops) — `fuzz/src/uci.fuzz.ts` is a bundle
+        // entry point: esbuild compiles it as its own root and jsfuzz calls the
+        // resulting bundle's `fuzz` export with each generated input. Nothing
+        // imports it because nothing is supposed to.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "fuzz/src/uci.fuzz.ts",
+                "export const fuzz = (data: Buffer): void => { parse(data.toString()); };\n",
+            ),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "fuzz/src/uci.fuzz.ts");
+        assert!(
+            diags.is_empty(),
+            "a fuzz target's harness entry export must not be flagged dead, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_export_outside_the_fuzz_dir_issue_8120() {
+        // Negative-space guard for #8120: the exemption is a path-segment match on
+        // the harness directory. The same unimported export in ordinary source
+        // stays dead, and a `fuzzy/` directory is not a fuzz harness.
+        let files: Vec<(&str, &str)> = vec![
+            ("src/util.ts", "export const helper = 1;\n"),
+            ("fuzzy/match.ts", "export const fuzz = 2;\n"),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        for target in ["src/util.ts", "fuzzy/match.ts"] {
+            let (_dir, diags) = run_on_project(&files, target);
+            assert_eq!(diags.len(), 1, "{target} must still be flagged, got: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn no_fp_for_vitepress_custom_theme_entry_issue_7135() {
+        // Regression for #7135 — `.vitepress` is a scanned config dot-dir, so the
+        // custom-theme entry is indexed; VitePress resolves
+        // `.vitepress/theme/index.ts` by path and loads its `default` export
+        // (a `Theme` object), never through a static import.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "docs/.vitepress/theme/index.ts",
+                "import Layout from './Layout.vue';\nexport default { Layout };\n",
+            ),
+            ("docs/.vitepress/theme/Layout.vue", "<template><div /></template>\n"),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "docs/.vitepress/theme/index.ts");
+        assert!(
+            diags.is_empty(),
+            "the VitePress custom-theme entry's default export must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_dead_named_export_in_vitepress_theme_entry_issue_7135() {
+        // Negative-space guard for #7135: only the `default` export is the theme
+        // VitePress loads. A named helper beside it, imported by nobody, is dead —
+        // and a `theme/index.ts` outside `.vitepress` is an ordinary barrel.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "docs/.vitepress/theme/index.ts",
+                "export default { Layout: null };\nexport const unusedHelper = 1;\n",
+            ),
+            ("src/theme/index.ts", "export default { palette: 1 };\n"),
+            ("src/other.ts", "export const z = 1;\nz;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "docs/.vitepress/theme/index.ts");
+        assert_eq!(diags.len(), 1, "the named helper is dead, got: {diags:?}");
+        assert!(diags[0].message.contains("unusedHelper"));
+        let (_dir, plain_diags) = run_on_project(&files, "src/theme/index.ts");
+        assert_eq!(
+            plain_diags.len(),
+            1,
+            "a `theme/index.ts` outside `.vitepress` is an ordinary module, got: {plain_diags:?}"
         );
     }
 
