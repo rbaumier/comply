@@ -70,9 +70,9 @@ impl AstCheck for Check {
         }
         // Spawn inside a loop body (the per-connection accept-loop idiom):
         // a handle created each iteration cannot meaningfully be retained, so
-        // dropping it is intentional. Stops at the fn/closure boundary so only
-        // a loop in this scope counts.
-        if is_in_loop_body(node) {
+        // dropping it is intentional. Stops at the fn boundary so only a loop
+        // in this scope counts.
+        if is_in_loop_body(node, source_bytes) {
             return;
         }
         // A spawned task that calls a process-termination primitive

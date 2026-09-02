@@ -50,24 +50,42 @@ pub fn fn_is_async(function_item: Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if a `function_item`'s `function_modifiers` child contains the `extern`
-/// keyword — i.e. the function declares an ABI (`extern "C" fn`, `extern fn`,
-/// including `unsafe extern "C" fn`). Scans the modifiers node only, so raw
-/// identifiers (`fn r#extern()`), parameter names, and types named "extern"
-/// can't trip the check. tree-sitter-rust groups the `extern` keyword (and its
-/// optional abi string) with `unsafe`/`async`/`const` under one
-/// `function_modifiers` node, so the abi string sits beside `extern` and the
-/// word match ignores it.
+/// True if a function declares an ABI (`extern "C" fn`, `extern fn`, including
+/// `unsafe extern "C" fn`) — the ABI-agnostic form of [`fn_extern_abi`], for
+/// callers that only need "does this function cross an FFI boundary".
 pub fn fn_is_extern(function_item: Node, source: &[u8]) -> bool {
+    fn_extern_abi(function_item, source).is_some()
+}
+
+/// The ABI an `extern` function declares, quotes stripped: `Some("C")` for
+/// `extern "C" fn`, `Some("C-unwind")` for `extern "C-unwind" fn`, `None` for an
+/// ordinary `fn`. The two spellings differ in whether a panic may cross the
+/// boundary, so a rule about unwinding has to tell them apart.
+///
+/// A bare `extern fn` with no ABI string answers `Some("C")`: `"C"` is the ABI
+/// Rust defaults the `extern` keyword to, so both spellings classify alike.
+///
+/// tree-sitter-rust groups `extern` and its optional ABI string with
+/// `unsafe`/`async`/`const` under one `function_modifiers` node, which holds
+/// them in an `extern_modifier` child. Reading that child rather than the
+/// modifiers' raw text means a raw identifier (`fn r#extern()`), a parameter
+/// name, or a type named "extern" can't trip the match.
+pub fn fn_extern_abi<'a>(function_item: Node<'_>, source: &'a [u8]) -> Option<&'a str> {
     let mut cursor = function_item.walk();
-    for child in function_item.children(&mut cursor) {
-        if child.kind() == "function_modifiers" {
-            return child
-                .utf8_text(source)
-                .is_ok_and(|text| text.split_whitespace().any(|word| word == "extern"));
-        }
+    let modifiers = function_item
+        .children(&mut cursor)
+        .find(|child| child.kind() == "function_modifiers")?;
+    let mut modifier_cursor = modifiers.walk();
+    let extern_modifier = modifiers
+        .children(&mut modifier_cursor)
+        .find(|child| child.kind() == "extern_modifier")?;
+    match extern_modifier.named_child(0) {
+        Some(abi) => abi
+            .utf8_text(source)
+            .ok()
+            .map(|text| text.trim_matches('"')),
+        None => Some("C"),
     }
-    false
 }
 
 /// True if `node` sits in a const-evaluated context, where `for` loops and
@@ -1534,30 +1552,66 @@ pub fn enclosing_fn(node: Node) -> Option<Node> {
 }
 
 /// True if `node` sits inside the body of an enclosing loop — a
-/// `for_expression`, `while_expression`, or `loop_expression` — within the
-/// current function or closure scope.
+/// `for_expression`, `while_expression`, `loop_expression`, or the closure of
+/// an iterator adapter that runs it once per element — within the current
+/// function scope.
 ///
 /// The walk goes up via `node.parent()` and returns `true` on the first loop
-/// node encountered. It stops (returning `false`) at the first
-/// `function_item`, `closure_expression`, or `async_block` boundary, so a loop
-/// that lives *outside* an intervening closure / spawned future does not count:
-/// only a loop in the same lexical scope as `node` qualifies. A loop nested
-/// *below* `node` is never seen, since the walk only moves upward.
+/// node encountered. It stops (returning `false`) at the first `function_item`
+/// or `async_block` boundary, so a loop that lives *outside* an intervening
+/// spawned future does not count: only a loop in the same lexical scope as
+/// `node` qualifies. A loop nested *below* `node` is never seen, since the walk
+/// only moves upward.
+///
+/// A `closure_expression` is likewise a scope boundary — unless the closure is
+/// the argument of a per-element adapter ([`PER_ELEMENT_CLOSURE_METHODS`]), in
+/// which case the closure body *is* the loop body and the walk reports `true`.
 ///
 /// Rules use this to recognize work that repeats per iteration — where a value
-/// (a `JoinHandle`, a lock guard, an allocation) is intentionally created and
-/// discarded each pass rather than retained.
-pub fn is_in_loop_body(node: Node) -> bool {
+/// (a `JoinHandle`, a lock guard, an allocation, a file syscall) is created
+/// once per pass.
+pub fn is_in_loop_body(node: Node, source: &[u8]) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         match parent.kind() {
             "for_expression" | "while_expression" | "loop_expression" => return true,
-            "function_item" | "closure_expression" | "async_block" => return false,
+            "closure_expression" => return closure_runs_per_element(parent, source),
+            "function_item" | "async_block" => return false,
             _ => {}
         }
         cur = parent;
     }
     false
+}
+
+/// Methods that invoke their closure argument once per element of the receiver.
+///
+/// `map` is deliberately absent: it also names `Option::map` / `Result::map`,
+/// which run the closure at most once, and a tree-sitter walk cannot tell the
+/// two apart. Missing a write inside `iter().map(..)` costs less than flagging
+/// a `tokio::spawn` or a file write inside `opt.map(..)`.
+const PER_ELEMENT_CLOSURE_METHODS: &[&str] = &["for_each", "try_for_each"];
+
+/// True when `closure` is the argument of a `.for_each(..)` /
+/// `.try_for_each(..)` method call — the closure body then repeats per element
+/// exactly like a loop body.
+fn closure_runs_per_element(closure: Node, source: &[u8]) -> bool {
+    let Some(arguments) = closure.parent().filter(|p| p.kind() == "arguments") else {
+        return false;
+    };
+    let Some(call) = arguments.parent().filter(|p| p.kind() == "call_expression") else {
+        return false;
+    };
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    function
+        .child_by_field_name("field")
+        .and_then(|field| field.utf8_text(source).ok())
+        .is_some_and(|method| PER_ELEMENT_CLOSURE_METHODS.contains(&method))
 }
 
 /// True if `item` carries the outer attribute named `attr_path` (e.g.
@@ -2751,6 +2805,68 @@ pub fn is_pub(item: Node, source: &[u8]) -> bool {
     false
 }
 
+/// True if `item` carries a visibility modifier that exposes it beyond its own
+/// module — bare `pub` or a restricted `pub(crate)` / `pub(super)` /
+/// `pub(in path)`. A missing modifier, or the explicit `pub(self)` spelling of
+/// "private", answers `false`.
+///
+/// The wider counterpart of [`is_pub`], which recognizes bare `pub` alone. Rules
+/// whose subject is an API contract *between* modules — a signature other code
+/// has to spell at a call site — want this notion: a `pub(crate) fn` is read and
+/// called by the rest of the crate exactly like a `pub` one, and the ergonomic
+/// defect is the same.
+pub fn is_pub_including_restricted(item: Node, source: &[u8]) -> bool {
+    let mut cursor = item.walk();
+    for child in item.children(&mut cursor) {
+        if child.kind() == "visibility_modifier"
+            && let Ok(text) = child.utf8_text(source)
+        {
+            // `pub ( crate )` is legal spacing, so compare on the whitespace-free
+            // form rather than the raw text.
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            return compact != "pub(self)";
+        }
+    }
+    false
+}
+
+/// True if the file containing `node` writes an `impl <trait> for <type_name>`
+/// block for one of `trait_names`. The trait is matched on its last `::` segment
+/// (`Error`, `error::Error`, `std::error::Error` all count) and the target on its
+/// base type name, so a generic or lifetime-parameterized target (`Id<T>`,
+/// `Id<'a>`) matches its bare name.
+///
+/// Rules use it to tell a trait the author implemented by hand from one left to
+/// `#[derive(…)]`: a hand-written `impl Clone for Id` is an explicit opt-out
+/// from the derive, and an `impl std::error::Error for Failure` is what makes a
+/// type an error type even when its name says nothing.
+pub fn file_impls_trait_for_type(
+    node: Node,
+    source: &[u8],
+    trait_names: &[&str],
+    type_name: &str,
+) -> bool {
+    let root = root_node(node);
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "impl_item"
+            && let Some(trait_node) = current.child_by_field_name("trait")
+            && let Some(target) = current.child_by_field_name("type")
+            && trait_base_name(trait_node, source).is_some_and(|name| trait_names.contains(&name))
+            && target
+                .utf8_text(source)
+                .is_ok_and(|text| base_type_name(text) == type_name)
+        {
+            return true;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
 /// True if `node` is nested inside a module that is not publicly visible — an
 /// enclosing `mod_item` declared `pub(crate)`, `pub(super)`, `pub(in path)`, or
 /// with no visibility modifier at all.
@@ -2878,6 +2994,65 @@ pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
     project
         .nearest_cargo_manifest(path)
         .is_none_or(|manifest| !manifest.is_binary_only() && !manifest.is_proc_macro())
+}
+
+/// True when `node` sits in code compiled into a Rust library target that some
+/// other Rust crate links against — as opposed to an application entry point,
+/// build-time tooling, or a test.
+///
+/// This is the classification every rule needs whose rationale is "the crate
+/// that owns the process decides this, a library must not": installing a
+/// process-global tracing subscriber, writing unconditionally to stderr,
+/// declaring crate-level lint policy. A file answers `false` when it is:
+///
+/// - test code — a `#[test]` / `#[cfg(test)]` scope, a `tests/` integration
+///   directory, or an inline-test-module file (`tests.rs`, `test.rs`, …);
+/// - an mdBook example (an ancestor `book.toml`): tutorial code rendered into a
+///   documentation site, never linked into the crate;
+/// - build-time tooling — a Cargo build script (`build.rs`), a build-time
+///   codegen library (`*-build` / `*-codegen` / `*-bindgen`), or a
+///   `proc-macro = true` crate. All three run inside Cargo's own process at
+///   build time, not inside the program the crate ships;
+/// - a binary entry point (`main.rs`, `src/bin/*.rs`), or a file the nearest
+///   `Cargo.toml` names as an explicit-path executable target
+///   (`[[bin]]`/`[[example]]`/`[[bench]]`/`[[test]]` with `path = "…"`);
+/// - any file of a crate that declares a binary — such a crate is an
+///   application even when it also carries a `[lib]`, which is usually there
+///   only to share code with its own binaries and integration tests;
+/// - an FFI bridge crate (`[lib] crate-type` of `cdylib`/`staticlib` with no
+///   `rlib`/`lib`): a foreign runtime dlopens or links it directly, so no Rust
+///   caller sits above it and it owns process-wide setup exactly as a binary
+///   does.
+///
+/// A missing or unparseable manifest answers `true`: the caller keeps flagging
+/// rather than suppress on a guess.
+pub fn is_library_code(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
+    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+        return false;
+    }
+    if ctx.project.in_mdbook_project(ctx.path) {
+        return false;
+    }
+    if crate::rules::path_utils::is_rust_build_script(ctx.path) || is_binary_entry_point(ctx.path) {
+        return false;
+    }
+    let Some(manifest) = ctx.project.nearest_cargo_manifest(ctx.path) else {
+        return true;
+    };
+    !manifest.declares_binary()
+        && !manifest.declares_executable_at(ctx.path)
+        && !manifest.is_build_codegen_crate()
+        && !manifest.is_proc_macro()
+        && !manifest.is_ffi_bridge_crate()
+}
+
+/// True when `path` is a binary entry point: a `main.rs` at any directory
+/// level, or any file under a `bin/` directory (`src/bin/tool.rs`).
+fn is_binary_entry_point(path: &Path) -> bool {
+    if path.file_name().and_then(|n| n.to_str()) == Some("main.rs") {
+        return true;
+    }
+    path.components().any(|c| c.as_os_str() == "bin")
 }
 
 /// True when the `mod` chain from `path` up to the crate root keeps the file's
@@ -9196,9 +9371,86 @@ pub fn trailing_path_segment<'a>(node: Node, source: &'a [u8]) -> Option<&'a str
     }
 }
 
+/// Strip every leading borrow, lifetime and `mut` from a type's source text, so
+/// `&'a str`, `&mut String` and `& & str` reduce to `str`, `String` and `str`.
+///
+/// Narrower than reading the AST, and deliberately so: rules that classify a
+/// declared type (`is this a stringy URL?`, `does this field's Debug print the
+/// value?`) already hold the type's text and only need its head.
+///
+/// Distinct from the cast rules' private `strip_leading_borrow`, which peels a
+/// single `&`/`&mut` and leaves a lifetime in place — the numeric-cast rules
+/// depend on that narrower behaviour.
+pub fn strip_type_borrows(type_text: &str) -> &str {
+    let mut rest = type_text.trim();
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix('&') {
+            rest = after;
+            continue;
+        }
+        if rest.starts_with('\'') {
+            let end = rest
+                .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '\''))
+                .unwrap_or(rest.len());
+            rest = &rest[end..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("mut ") {
+            rest = after;
+            continue;
+        }
+        return rest;
+    }
+}
+
+/// The last type argument of a generic written as `Name<…>`, split at the top
+/// nesting level: `Cow<'a, str>` yields `str` and `HashMap<K, Vec<V>>` yields
+/// `Vec<V>`. `None` when the text names no generic or its argument list is
+/// empty.
+///
+/// The *last* argument is what callers want: it is the payload of every
+/// single-argument container (`Option<T>`, `Box<T>`) and of `Cow<'a, T>`, whose
+/// lifetime comes first.
+pub fn last_type_argument(type_text: &str) -> Option<&str> {
+    let open = type_text.find('<')?;
+    let close = type_text.rfind('>')?;
+    if close <= open + 1 {
+        return None;
+    }
+    let inner = &type_text[open + 1..close];
+    let mut depth = 0usize;
+    let mut last_split = 0usize;
+    for (index, c) in inner.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => last_split = index + 1,
+            _ => {}
+        }
+    }
+    Some(inner[last_split..].trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_type_borrows_peels_borrows_lifetimes_and_mut() {
+        assert_eq!(strip_type_borrows("&'a str"), "str");
+        assert_eq!(strip_type_borrows("&mut String"), "String");
+        assert_eq!(strip_type_borrows("& & str"), "str");
+        assert_eq!(strip_type_borrows("String"), "String");
+    }
+
+    #[test]
+    fn last_type_argument_splits_at_the_top_nesting_level() {
+        assert_eq!(last_type_argument("Cow<'a, str>"), Some("str"));
+        assert_eq!(last_type_argument("Option<String>"), Some("String"));
+        assert_eq!(last_type_argument("HashMap<K, Vec<V>>"), Some("Vec<V>"));
+        assert_eq!(last_type_argument("String"), None);
+    }
 
     fn parse(source: &str) -> tree_sitter::Tree {
         let mut parser = tree_sitter::Parser::new();
@@ -11630,6 +11882,13 @@ mod tests {
             ("fn f() { for x in xs { register(|| { g(); }); } }", false),
             // An async-block boundary (spawned future) between loop and call.
             ("fn f() { for x in xs { spawn(async { g(); }); } }", false),
+            // A per-element adapter's closure IS the loop body.
+            ("fn f() { xs.iter().for_each(|x| { g(); }); }", true),
+            ("fn f() { xs.iter().map(|x| g()); }", false),
+            ("fn f() { xs.iter().try_for_each(|x| g()); }", true),
+            // A closure argument of a method that is not a per-element adapter
+            // stays a scope boundary.
+            ("fn f() { xs.retain(|x| { g(); true }); }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -11646,7 +11905,7 @@ mod tests {
                 })
                 .expect("snippet should contain a `g()` or `h()` call");
             assert_eq!(
-                is_in_loop_body(target),
+                is_in_loop_body(target, src.as_bytes()),
                 expected,
                 "is_in_loop_body mismatch for `{src}`"
             );

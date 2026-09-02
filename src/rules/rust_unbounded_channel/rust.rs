@@ -286,7 +286,7 @@ fn is_one_shot_rendezvous(node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
     let send = sender_uses[0];
-    if crate::rules::rust_helpers::is_in_loop_body(send)
+    if crate::rules::rust_helpers::is_in_loop_body(send, source)
         || is_captured_by_closure(send, scope)
         || is_rebound_to_alias(send)
     {
