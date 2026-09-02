@@ -22,9 +22,13 @@
 //! fuzzing — success vs. failure is deliberately ignored, only "does not panic"
 //! matters, and fuzz harnesses never ship to production. Keying on the manifest
 //! covers non-`fuzz_targets/` layouts (cargo-fuzz `fuzz/fuzzers/`, AFL
-//! `fuzz-afl/{fuzzers,reproducers}/`).
+//! `fuzz-afl/{fuzzers,reproducers}/`). The fourth Cargo auxiliary target
+//! directory, `examples/`, is exempt through `PathSegments::is_relaxed_dir`
+//! (which also spells it `example/`, `demo/`, `demos/`): an example is compiled
+//! by `cargo build --examples`, never linked into the library, and its
+//! `fn main() -> ()` offers no error channel to propagate into.
 //!
-//! Four non-error idioms are also exempted:
+//! A number of non-error idioms are also exempted:
 //! - `let _ = expr?`: the `?` operator already propagates any `Err`/`None` to
 //!   the caller, so the error is handled — only the unwrapped success value is
 //!   discarded (e.g. `let _ = parser.expect(kw)?` checks a token exists then
@@ -77,6 +81,22 @@
 //!   Exempt by the terminal method name (like `write_str`/`write_char`) without
 //!   type inference — a bare `let _ = fallible()` or a chain whose terminal call
 //!   returns a `Result` (`let _ = expr.lookup()`) still fires.
+//! - `let _ = expr?.expect(..)` / `expr.unwrap()` (also `unwrap_or`,
+//!   `unwrap_or_else`, `unwrap_or_default`): the terminal method returns the
+//!   unwrapped success value `T`, never a `Result`/`Option`, so `let _ =` binds a
+//!   plain value and the statement is kept for the side effect of the chain that
+//!   produced it. `.expect`/`.unwrap` also handle the failing arm loudly, by
+//!   panicking — the opposite of ignoring it. Exempt by the terminal method name,
+//!   like `.ok()`/`.err()`.
+//! - `let _ = <call>` whose callee is declared in the same file with a return
+//!   type that carries no error — `-> usize`, `-> Option<()>`, or no return type
+//!   at all. A bare `f(..)` resolves to a `fn` outside any `impl`/`trait`;
+//!   `self.m(..)`/`Self::m(..)` resolve against the `impl` blocks for the
+//!   enclosing `impl`'s type. Where the curated method list can only enumerate
+//!   std's names, the declaration answers for the project's own functions. An
+//!   unresolvable callee, an ambiguous name, or a `Result`-shaped return type
+//!   (including `io::Result<_>`, and a bare type alias that may hide one) still
+//!   fires.
 //! - `let _ = expr.map_err(|e| ...)` / `expr.inspect_err(|e| ...)`: the error is
 //!   explicitly observed/handled (e.g. logged) inside the closure before the
 //!   resulting `Result` is intentionally discarded. The closure argument is
@@ -151,9 +171,11 @@
 //!
 //! The four write/send idioms above are matched where the `Err` is born, not
 //! only on the outermost call, so a producer wrapped in a combinator
-//! (`let _ = iter.try_for_each(|x| tx.send(x))`) is exempt too. See
-//! [`has_unhandleable_error_origin`] for the links followed and the false
-//! negatives that search accepts.
+//! (`let _ = iter.try_for_each(|x| tx.send(x))`) or awaited
+//! (`let _ = tx.send(x).await`) is exempt too — and a chain that also reaches a
+//! free function whose `Err` is a real one (`let _ = tx.send(x).and_then(|_|
+//! fs::write(p, d))`) is not. See [`has_unhandleable_error_origin`] for the
+//! links followed and the false negatives that search accepts.
 //!
 //! NOTE: This rule uses a heuristic (call-like pattern matching) rather than
 //! type awareness. It may flag `let _ = infallible_fn()` where the function
@@ -204,10 +226,17 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // directory segment or a fuzz crate identified by its `Cargo.toml`, via
     // `ProjectCtx::in_fuzz_crate`) where `let _ = f(fuzzer_input)` exercises a
     // call only to assert it does not panic.
+    //
+    // `is_relaxed_dir` covers the remaining Cargo auxiliary target directory,
+    // `examples/` (and its `example/`/`demo/`/`demos/` spellings): an example is
+    // compiled by `cargo build --examples`, never linked into the library, and
+    // its `fn main() -> ()` has no error channel to propagate into — the same
+    // argument that already exempts `benches/` and the fuzz harnesses.
     if is_in_test_context(node, source)
         || is_in_kani_proof(node, source)
         || is_under_tests_dir(ctx.path)
         || ctx.file.in_benchmark_dir()
+        || ctx.file.path_segments.is_relaxed_dir
         || ctx.project.in_fuzz_crate(ctx.path)
     {
         return;
@@ -255,6 +284,13 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         return;
     }
 
+    // Skip a terminal unwrap (`let _ = expr?.expect(..)` / `expr.unwrap()`):
+    // `.expect`/`.unwrap` return the unwrapped success value, so what `let _ =`
+    // binds is a plain `T` — and the failing arm is handled loudly, by panicking.
+    if is_unwrapping_call(value, source) {
+        return;
+    }
+
     // Skip the handled-then-discarded idiom `let _ = expr.map_err(|e| ...)`:
     // the error is observed inside the `map_err`/`inspect_err` closure before
     // the now-trivial `Result` is intentionally dropped.
@@ -265,6 +301,14 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // Skip discards of std-collection methods that return `Option`/`bool`/`()`
     // (`let _ = map.remove(k)`): these carry no error, so nothing is ignored.
     if is_non_result_std_method(value, source) {
+        return;
+    }
+
+    // Skip a call whose callee is declared in this same file with a return type
+    // that provably carries no error (`-> usize`, `-> Option<()>`, no return
+    // type). The declaration answers the question the curated method list can
+    // only guess at, and it answers it for the project's own functions.
+    if callee_declares_error_free_return(value, source) {
         return;
     }
 
@@ -298,7 +342,7 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
         line: pos.row + 1,
         column: pos.column + 1,
         rule_id: "no-ignored-exceptions".into(),
-        message: "`let _ = ...` discards a potentially fallible result \u{2014} handle the error or use `drop()`.".into(),
+        message: "`let _ = ...` discards a potentially fallible result \u{2014} inspect it with `if let Err(e) = ...`, propagate it with `?`, or state the invariant with `.expect(..)`.".into(),
         severity: Severity::Error,
         span: None,
     });
@@ -551,27 +595,35 @@ fn has_infallible_turbofish(value: Node, source: &[u8]) -> bool {
 /// call, or an in-memory `write!` — so `let _ =` discards nothing handleable.
 ///
 /// Each producer predicate describes the call that *builds* the error, and that
-/// call is not always the outermost one. Two links are followed here:
+/// call is not always the outermost one. Three links are followed here:
 /// - the receiver of a method call, whose error the outer call forwards
 ///   (`let _ = tx.send(x).map_err(Box::new)`);
 /// - the result of a closure the call runs, since a combinator that reports its
 ///   closure's failure returns that closure's error
-///   (`let _ = iter.try_for_each(|x| tx.send(x))`).
+///   (`let _ = iter.try_for_each(|x| tx.send(x))`);
+/// - the awaited future of an `.await`, which forwards its `Err` unchanged
+///   (`let _ = tx.send(x).await`, the bounded `tokio::sync::mpsc` send).
 ///
 /// Any closure-taking call qualifies — no combinator name is matched — and a
 /// turbofish call (`collect::<Result<_, _>>()`) is unwrapped to reach its
 /// receiver. Call arguments other than closures are not entered, so
-/// `let _ = wrap(tx.send(x))` still fires: `wrap`'s own `Err` is unknown. An
-/// awaited producer is not reached either, so `let _ = tx.send(x).await` still
-/// fires.
+/// `let _ = wrap(tx.send(x))` still fires: `wrap`'s own `Err` is unknown.
 ///
-/// One reachable ignorable producer is enough, so three shapes are accepted
-/// false negatives — separating the `Err` types needs the type information this
-/// rule does not have:
-/// - a chain that also carries a genuinely fallible step
-///   (`let _ = tx.send(x).and_then(|_| fs::write(p, d))`);
-/// - a combinator whose closure feeds the `Ok` side while the discarded `Err` is
-///   the receiver's (`let _ = fs::read(p).map(|d| tx.send(d))`);
+/// Reaching an ignorable producer is necessary but not sufficient: a *free
+/// function* reached through the same links (`fs::write(p, d)` — a
+/// `call_expression` whose callee is a path rather than a method on a receiver)
+/// builds an `Err` of its own that nothing here says is ignorable, and one such
+/// call vetoes the exemption. That is what separates
+/// `let _ = tx.send(x).and_then(|_| fs::write(p, d))` and
+/// `let _ = fs::read(p).map(|d| tx.send(d))` — both flagged, the real error is
+/// reported — from `let _ = items.iter().map(|x| tx.send(x)).collect::<Result<(), _>>()`,
+/// where every link is a method call and the only `Err` is the send's.
+///
+/// Two shapes stay accepted false negatives — separating their `Err` types needs
+/// the type information this rule does not have:
+/// - a *method* call that is genuinely fallible sharing the chain with a producer
+///   (`let _ = tx.send(x).and_then(|_| file.write_all(d))`): `file.write_all(d)`
+///   is the same node shape as the `items.iter()` link above;
 /// - a call that stores or hands off the closure instead of reporting its
 ///   failure, so the discarded `Err` is the call's own
 ///   (`let _ = pool.execute(move || tx.send(x))`).
@@ -579,41 +631,79 @@ fn has_infallible_turbofish(value: Node, source: &[u8]) -> bool {
 /// A producer predicate's own imprecision travels along these links too: since
 /// `is_channel_send` matches any `.send(..)`, an HTTP client send inside a
 /// closure (`let _ = urls.iter().try_for_each(|u| client.send(u))`) is exempt
-/// like the outermost `let _ = client.send(u)` already is.
+/// like the outermost `let _ = client.send(u)` already is — and, the await link
+/// being blind to what it unwraps, so is `let _ = client.post(u).send().await`.
+/// Await-transparency is the point: the blocking spelling of that same call is
+/// already exempt, so following await extends one existing false negative rather
+/// than creating a class, and it stops the rule from answering differently for
+/// `let _ = tx.send(x)` and `let _ = tx.send(x).await`.
 fn has_unhandleable_error_origin(value: Node, source: &[u8]) -> bool {
-    if is_channel_send(value, source)
-        || is_std_stream_write(value, source)
-        || is_fmt_write_method(value, source)
-        || is_fmt_write_macro_to_buffer(value, source)
-    {
-        return true;
+    let mut origins = ErrorOrigins::default();
+    collect_error_origins(value, source, &mut origins);
+    origins.ignorable && !origins.handleable
+}
+
+/// What the origin search found under one discarded expression.
+#[derive(Default)]
+struct ErrorOrigins {
+    /// A reachable call is one of the four producers whose `Err` the caller
+    /// cannot act on.
+    ignorable: bool,
+    /// A reachable call is a free function, whose own `Err` is a real one the
+    /// caller could have handled.
+    handleable: bool,
+}
+
+/// Walk the three `Err`-carrying links under `node` and record what each origin
+/// is. See [`has_unhandleable_error_origin`] for the links and the quantifier.
+fn collect_error_origins(node: Node, source: &[u8], origins: &mut ErrorOrigins) {
+    // `.await` forwards the awaited future's `Err` unchanged, so the producer
+    // sits one node in.
+    if node.kind() == "await_expression" {
+        if let Some(inner) = node.named_child(0) {
+            collect_error_origins(inner, source, origins);
+        }
+        return;
     }
-    if value.kind() != "call_expression" {
-        return false;
+    if is_channel_send(node, source)
+        || is_std_stream_write(node, source)
+        || is_fmt_write_method(node, source)
+        || is_fmt_write_macro_to_buffer(node, source)
+    {
+        origins.ignorable = true;
+        return;
+    }
+    if node.kind() != "call_expression" {
+        return;
     }
     // `expr.collect::<Result<_, _>>()` — the turbofish wraps the method access.
-    let callee = value
+    let callee = node
         .child_by_field_name("function")
         .and_then(|function| match function.kind() {
             "generic_function" => function.child_by_field_name("function"),
             _ => Some(function),
         });
-    if let Some(callee) = callee
-        && callee.kind() == "field_expression"
-        && let Some(receiver) = callee.child_by_field_name("value")
-        && has_unhandleable_error_origin(receiver, source)
-    {
-        return true;
-    }
-    let Some(arguments) = value.child_by_field_name("arguments") else {
-        return false;
+    let receiver = callee
+        .filter(|callee| callee.kind() == "field_expression")
+        .and_then(|callee| callee.child_by_field_name("value"));
+    let Some(receiver) = receiver else {
+        // A free function (`fs::write(p, d)`, `inner(x)`) is where an `Err` is
+        // born rather than forwarded, and none of the producers has that shape.
+        origins.handleable = true;
+        return;
+    };
+    collect_error_origins(receiver, source, origins);
+    let Some(arguments) = node.child_by_field_name("arguments") else {
+        return;
     };
     let mut cursor = arguments.walk();
-    arguments.named_children(&mut cursor).any(|argument| {
-        argument.kind() == "closure_expression"
-            && closure_tail_expression(argument)
-                .is_some_and(|tail| has_unhandleable_error_origin(tail, source))
-    })
+    for argument in arguments.named_children(&mut cursor) {
+        if argument.kind() == "closure_expression"
+            && let Some(tail) = closure_tail_expression(argument)
+        {
+            collect_error_origins(tail, source, origins);
+        }
+    }
 }
 
 /// The node a closure evaluates to: its body when the body is a single
@@ -638,19 +728,26 @@ fn closure_tail_expression(closure: Node<'_>) -> Option<Node<'_>> {
 /// signals the receiver dropped, which `let _ =` intentionally ignores on a
 /// shutdown/cleanup path.
 fn is_channel_send(value: Node, source: &[u8]) -> bool {
+    terminal_method_name(value, source) == Some("send")
+}
+
+/// The name of `value`'s terminal (outermost) method, when `value` is a method
+/// call on a receiver — a `call_expression` whose function is a
+/// `field_expression`. `None` for anything else, so a free function
+/// (`let _ = fs::remove_file(p)`, whose function is a `scoped_identifier`) and a
+/// bare `let _ = fallible()` never match a method-name predicate.
+///
+/// The shared shape behind every method-name exemption in this file: the
+/// predicates differ only in the names they accept.
+fn terminal_method_name<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
     if value.kind() != "call_expression" {
-        return false;
+        return None;
     }
-    let Some(function) = value.child_by_field_name("function") else {
-        return false;
-    };
+    let function = value.child_by_field_name("function")?;
     if function.kind() != "field_expression" {
-        return false;
+        return None;
     }
-    let Some(field) = function.child_by_field_name("field") else {
-        return false;
-    };
-    matches!(field.utf8_text(source), Ok("send"))
+    function.child_by_field_name("field")?.utf8_text(source).ok()
 }
 
 /// Std-collection method names whose return type is `Option`/`bool`/`()` and
@@ -692,22 +789,155 @@ const NON_RESULT_METHODS: &[&str] = &[
 /// despite sharing the `remove*` stem — is a `call_expression` whose function
 /// is a `scoped_identifier`, not a `field_expression`, so it still fires.
 fn is_non_result_std_method(value: Node, source: &[u8]) -> bool {
+    terminal_method_name(value, source).is_some_and(|name| NON_RESULT_METHODS.contains(&name))
+}
+
+/// Where a callee's `fn` declaration has to live for the lookup to accept it.
+enum CalleeScope<'a> {
+    /// A bare `f(..)`: a `fn` declared outside any `impl`/`trait` block.
+    FreeFunction,
+    /// A `self.m(..)` / `Self::m(..)`: a method of an `impl` block for the named
+    /// type.
+    MethodOf(&'a str),
+}
+
+/// True if the discarded expression's outermost call resolves to a `fn`
+/// declared in the same file whose return type provably carries no error.
+///
+/// [`NON_RESULT_METHODS`] can only enumerate std's names, and a project's own
+/// functions are outside any curated list by construction — but their signature
+/// is often a few lines up. Three callee shapes resolve: a bare `f(..)`, and
+/// `self.m(..)` / `Self::m(..)` against every `impl` block in the file for the
+/// enclosing `impl`'s type (axum's `impl fmt::Write for EventDataWriter` calls
+/// `self.write_buf(..)`, declared in the sibling `impl EventDataWriter`). A
+/// method on any other receiver does not resolve: its type is unknown, so no
+/// declaration can be attributed to it.
+///
+/// Every declaration found under the name must be error-free, so a file
+/// declaring two same-named functions with different return types stays flagged.
+/// Finding none leaves behavior unchanged — the lookup only ever removes
+/// diagnostics.
+fn callee_declares_error_free_return(value: Node, source: &[u8]) -> bool {
+    let Some((name, scope)) = callee_lookup_key(value, source) else {
+        return false;
+    };
+    let mut root = value;
+    while let Some(parent) = root.parent() {
+        root = parent;
+    }
+    let mut declarations = Vec::new();
+    collect_fns_named(root, source, name, &mut declarations);
+    declarations.retain(|func| declaration_matches_scope(*func, source, &scope));
+    !declarations.is_empty()
+        && declarations
+            .iter()
+            .all(|func| return_type_is_error_free(*func, source))
+}
+
+/// The callee's name and the scope its declaration must live in, for the three
+/// call shapes [`callee_declares_error_free_return`] resolves. `None` for a call
+/// whose callee names no in-file declaration (a method on another receiver, a
+/// path call into another module, a call on a call).
+fn callee_lookup_key<'a>(value: Node, source: &'a [u8]) -> Option<(&'a str, CalleeScope<'a>)> {
     if value.kind() != "call_expression" {
-        return false;
+        return None;
     }
-    let Some(function) = value.child_by_field_name("function") else {
-        return false;
+    let callee = value.child_by_field_name("function")?;
+    let callee = if callee.kind() == "generic_function" {
+        callee.child_by_field_name("function")?
+    } else {
+        callee
     };
-    if function.kind() != "field_expression" {
-        return false;
+    match callee.kind() {
+        "identifier" => Some((callee.utf8_text(source).ok()?, CalleeScope::FreeFunction)),
+        "field_expression" => {
+            let receiver = callee.child_by_field_name("value")?;
+            if receiver.utf8_text(source).ok()? != "self" {
+                return None;
+            }
+            let name = callee.child_by_field_name("field")?.utf8_text(source).ok()?;
+            Some((name, CalleeScope::MethodOf(enclosing_impl_type(value, source)?)))
+        }
+        "scoped_identifier" => {
+            let path = callee.child_by_field_name("path")?;
+            if path.utf8_text(source).ok()? != "Self" {
+                return None;
+            }
+            let name = callee.child_by_field_name("name")?.utf8_text(source).ok()?;
+            Some((name, CalleeScope::MethodOf(enclosing_impl_type(value, source)?)))
+        }
+        _ => None,
     }
-    let Some(field) = function.child_by_field_name("field") else {
-        return false;
+}
+
+/// The base name of the type implemented by the nearest `impl_item` enclosing
+/// `node` — what `self` refers to at that point.
+fn enclosing_impl_type<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return trait_base_name(ancestor.child_by_field_name("type")?, source);
+        }
+        current = ancestor.parent();
+    }
+    None
+}
+
+/// Push every `function_item` named `name` anywhere under `node` into `out`.
+fn collect_fns_named<'t>(node: Node<'t>, source: &[u8], name: &str, out: &mut Vec<Node<'t>>) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "function_item"
+            && child
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                == Some(name)
+        {
+            out.push(child);
+        }
+        collect_fns_named(child, source, name, out);
+    }
+}
+
+/// True if `func`'s enclosing block is the one `scope` demands: no `impl`/`trait`
+/// at all for a free function, or an `impl` of the named type for a method.
+fn declaration_matches_scope(func: Node, source: &[u8], scope: &CalleeScope<'_>) -> bool {
+    let mut owner = func.parent();
+    while let Some(ancestor) = owner {
+        if matches!(ancestor.kind(), "impl_item" | "trait_item") {
+            break;
+        }
+        owner = ancestor.parent();
+    }
+    match scope {
+        CalleeScope::FreeFunction => owner.is_none(),
+        CalleeScope::MethodOf(type_name) => owner.is_some_and(|block| {
+            block.kind() == "impl_item"
+                && block
+                    .child_by_field_name("type")
+                    .and_then(|ty| trait_base_name(ty, source))
+                    == Some(*type_name)
+        }),
+    }
+}
+
+/// True if `func`'s declared return type provably carries no error: absent or
+/// `()` (nothing to discard), a primitive (`usize`, `bool`, `char`), or an
+/// `Option<_>` (no error arm — the shape this rule's `let _ = map.remove(k)`
+/// exemption is about, spelled by the project's own function).
+///
+/// Everything else is treated as unknown: a bare `type_identifier` may alias a
+/// `Result`, and `io::Result<()>` / `anyhow::Result<()>` are `Result`s under
+/// another path, so those keep firing.
+fn return_type_is_error_free(func: Node, source: &[u8]) -> bool {
+    let Some(return_type) = func.child_by_field_name("return_type") else {
+        return true;
     };
-    let Ok(name) = field.utf8_text(source) else {
-        return false;
-    };
-    NON_RESULT_METHODS.contains(&name)
+    match return_type.kind() {
+        "unit_type" | "primitive_type" => true,
+        "generic_type" => trait_base_name(return_type, source) == Some("Option"),
+        _ => false,
+    }
 }
 
 /// True if `value` is a `core::fmt::Write` method call (`write_str`/
@@ -718,19 +948,10 @@ fn is_non_result_std_method(value: Node, source: &[u8]) -> bool {
 /// exemption type-safe without type inference, since `io::Write`'s fallible
 /// methods (`write`/`write_all`) use different names.
 fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
-    if value.kind() != "call_expression" {
-        return false;
-    }
-    let Some(function) = value.child_by_field_name("function") else {
-        return false;
-    };
-    if function.kind() != "field_expression" {
-        return false;
-    }
-    let Some(field) = function.child_by_field_name("field") else {
-        return false;
-    };
-    matches!(field.utf8_text(source), Ok("write_str" | "write_char"))
+    matches!(
+        terminal_method_name(value, source),
+        Some("write_str" | "write_char")
+    )
 }
 
 /// True if `value`'s terminal (outermost) method is `Result::ok`/`Result::err`
@@ -745,19 +966,31 @@ fn is_fmt_write_method(value: Node, source: &[u8]) -> bool {
 /// or a chain whose terminal call returns a `Result` (`let _ = expr.lookup()`)
 /// still fires.
 fn is_result_to_option_combinator(value: Node, source: &[u8]) -> bool {
-    if value.kind() != "call_expression" {
-        return false;
-    }
-    let Some(function) = value.child_by_field_name("function") else {
-        return false;
-    };
-    if function.kind() != "field_expression" {
-        return false;
-    }
-    let Some(field) = function.child_by_field_name("field") else {
-        return false;
-    };
-    matches!(field.utf8_text(source), Ok("ok" | "err"))
+    matches!(terminal_method_name(value, source), Some("ok" | "err"))
+}
+
+/// True if `value`'s terminal (outermost) method unwraps a `Result`/`Option`
+/// into its success value: `.expect(..)`, `.unwrap()`, `.unwrap_or(..)`,
+/// `.unwrap_or_else(..)`, `.unwrap_or_default()`.
+///
+/// Each returns the unwrapped `T`, never a `Result`/`Option`, so the value
+/// `let _ =` binds carries no error — the statement is kept for the side effect
+/// of the call chain that produced it (`let _ = cursor.next_char()?.expect(..)`
+/// advances an already-peeked cursor). `.expect`/`.unwrap` are also the opposite
+/// of ignoring an error: they handle the failing arm loudly, by panicking. A
+/// mid-chain `?` (as in that example) leaves the outermost node on `.expect`, so
+/// neither the `try_expression` early return nor the `.ok()`/`.err()` exemption
+/// reaches it.
+///
+/// Keyed on the terminal method name, like `is_result_to_option_combinator`, so
+/// a bare `let _ = fallible()` or a chain terminating in a `Result`-returning
+/// call still fires. Whether `.unwrap()` itself is acceptable is `rust-no-unwrap`'s
+/// question, not this rule's, so nothing is lost by exempting it here.
+fn is_unwrapping_call(value: Node, source: &[u8]) -> bool {
+    matches!(
+        terminal_method_name(value, source),
+        Some("expect" | "unwrap" | "unwrap_or" | "unwrap_or_else" | "unwrap_or_default")
+    )
 }
 
 /// True if `value` is a `write!`/`writeln!` macro whose writer (first) argument
@@ -2460,7 +2693,10 @@ name = "normal_lib"
         // final segment. A turbofish with a real error type still genuinely
         // swallows the error, and a fallible call with no turbofish at all is
         // unaffected by this exemption.
-        let real_error = "fn f() { let _ = f::<MyError, _>(x); }";
+        // The callee is deliberately not declared in the snippet: a callee the
+        // file declares is answered by its return type, which is a different
+        // exemption from the one under test here.
+        let real_error = "fn f() { let _ = decode::<MyError, _>(x); }";
         let no_turbofish = "fn f() { let _ = fallible(); }";
         assert_eq!(run_on(real_error).len(), 1);
         assert_eq!(run_on(no_turbofish).len(), 1);
@@ -2494,5 +2730,179 @@ name = "normal_lib"
         let single_arg = "fn f() { let _ = try_parse!(input); }";
         assert_eq!(run_on(comma_args).len(), 1);
         assert_eq!(run_on(single_arg).len(), 1);
+    }
+
+    /// The eight lines of #8251's `r142` fixture, written once and placed in
+    /// each of the four Cargo target directories.
+    const AUX_DIR_FIXTURE: &str = r#"
+        use std::fs::File;
+        use std::io::Write;
+
+        pub fn dump(bitmap: &[u8]) {
+            let mut o = File::create("out.pgm").unwrap();
+            let _ = o.write(b"P5\n8 8\n255\n");
+            let _ = o.write(bitmap);
+        }
+    "#;
+
+    #[test]
+    fn allows_let_underscore_in_cargo_examples_dir_issue_8251() {
+        // Regression for #8251: `examples/` is a Cargo auxiliary target
+        // directory like `tests/`, `benches/` and the fuzz harnesses — compiled
+        // by `cargo build --examples`, never linked into the library, with a
+        // `fn main() -> ()` that has no error channel to propagate into. The
+        // issue's exact fontdue `dev/examples/simple.rs` shape.
+        for aux in ["examples/demo.rs", "example/demo.rs", "demo/main.rs", "demos/main.rs"] {
+            assert!(
+                run_on_path(AUX_DIR_FIXTURE, aux).is_empty(),
+                "{aux} is a Cargo aux target directory and must be exempt"
+            );
+        }
+        // The other three aux directories keep their existing verdict, and the
+        // library source keeps firing — the four byte-identical copies now
+        // disagree only between `src/` and the rest.
+        assert!(run_on_path(AUX_DIR_FIXTURE, "benches/bench.rs").is_empty());
+        assert!(run_on_path(AUX_DIR_FIXTURE, "tests/it.rs").is_empty());
+        assert_eq!(run_on_path(AUX_DIR_FIXTURE, "src/lib.rs").len(), 2);
+    }
+
+    #[test]
+    fn message_does_not_offer_drop_as_a_remedy_issue_8251() {
+        // Regression for #8251's second half: `drop(x)` discards the `Result` as
+        // completely as `let _ = x` does and satisfies `#[must_use]` just as
+        // well, so offering it renamed the finding instead of resolving it. The
+        // message now names remedies that actually inspect the error.
+        let diagnostics = run_on_path(AUX_DIR_FIXTURE, "src/lib.rs");
+        let message = &diagnostics[0].message;
+        assert!(!message.contains("drop()"), "{message}");
+        assert!(message.contains("if let Err"), "{message}");
+    }
+
+    #[test]
+    fn allows_let_underscore_terminal_unwrap_issue_8065() {
+        // Regression for #8065: `.expect(..)`/`.unwrap()` return the unwrapped
+        // success value, so `let _ =` binds a plain `char` — and the failing arm
+        // is handled loudly, by panicking. The mid-chain `?` leaves the outermost
+        // node on `.expect`, out of reach of the `try_expression` exemption. The
+        // issue's exact boa `core/parser/src/lexer/template.rs:243` example.
+        let boa = r#"fn f() { let _ = cursor.next_char()?.expect("already checked next character"); }"#;
+        let unwrap = "fn f() { let _ = read_config().unwrap(); }";
+        let unwrap_or = "fn f() { let _ = parse(s).unwrap_or(0); }";
+        let unwrap_or_else = "fn f() { let _ = parse(s).unwrap_or_else(|_| 0); }";
+        let unwrap_or_default = "fn f() { let _ = parse(s).unwrap_or_default(); }";
+        assert!(run_on(boa).is_empty());
+        assert!(run_on(unwrap).is_empty());
+        assert!(run_on(unwrap_or).is_empty());
+        assert!(run_on(unwrap_or_else).is_empty());
+        assert!(run_on(unwrap_or_default).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_mixed_origin_chain_issue_8351() {
+        // Regression for #8351: reaching a producer is necessary but no longer
+        // sufficient. A free function in the same chain builds an `Err` of its
+        // own that the discard really does swallow, on either link — the closure
+        // the combinator runs, or the receiver whose error it forwards.
+        let closure_leaf = "fn f() { let _ = tx.send(1).and_then(|_| fs::write(p, d)); }";
+        let receiver_leaf = "fn f() { let _ = fs::read(p).map(|d| tx.send(d)); }";
+        assert_eq!(run_on(closure_leaf).len(), 1);
+        assert_eq!(run_on(receiver_leaf).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_awaited_channel_send_issue_8350() {
+        // Ruling on #8350: the producer search follows `.await`, so the rule
+        // answers the same for a channel send whichever spelling it is written
+        // in. `tokio::sync::mpsc`'s bounded send is the awaited one.
+        let awaited = "async fn f(tx: Sender<u8>) { let _ = tx.send(1).await; }";
+        let await_mid_chain = "async fn f(tx: Sender<u8>) { let _ = tx.send(1).await.map_err(Box::new); }";
+        assert!(run_on(awaited).is_empty());
+        assert!(run_on(await_mid_chain).is_empty());
+    }
+
+    #[test]
+    fn allows_let_underscore_awaited_http_send_issue_8350() {
+        // The cost of that ruling, pinned: `is_channel_send` matches the bare
+        // method name, so an HTTP client's `.send()` is exempt too. The blocking
+        // spelling already was — following await extends one existing false
+        // negative rather than creating a class, which is why await-transparency
+        // was worth more than the accidental half-detection.
+        let blocking = "fn f() { let _ = client.post(url).body(b).send(); }";
+        let awaited = "async fn f() { let _ = client.post(url).body(b).send().await; }";
+        assert!(run_on(blocking).is_empty());
+        assert!(run_on(awaited).is_empty());
+    }
+
+    #[test]
+    fn flags_let_underscore_awaited_non_producer_issue_8350() {
+        // Negative space for #8350: the await link forwards to whatever it
+        // unwraps, it does not exempt on its own. Both awaited discards in the
+        // #6867 corpus keep firing — `changed` is not a producer, and
+        // `time::timeout`'s writer is an ordinary call argument the search does
+        // not enter.
+        let changed = "async fn f() { let _ = wait.changed().await; }";
+        let timeout = "async fn f() { let _ = time::timeout(d, socket.write_all(b)).await; }";
+        assert_eq!(run_on(changed).len(), 1);
+        assert_eq!(run_on(timeout).len(), 1);
+    }
+
+    #[test]
+    fn allows_let_underscore_local_fn_without_error_issue_1458() {
+        // Regression for #1458: the discarded value's type is often declared a
+        // few lines up. axum's `fn write_buf(&mut self, ..) -> usize` is called
+        // from a sibling `impl` block for the same type; ttf-parser's
+        // `codepoints_inner` returns `Option<()>` as a control-flow carrier.
+        let axum = r#"
+            impl EventDataWriter {
+                fn write_buf(&mut self, buf: &[u8]) -> usize { buf.len() }
+            }
+            impl fmt::Write for EventDataWriter {
+                fn write_str(&mut self, s: &str) -> fmt::Result {
+                    let _ = self.write_buf(s.as_bytes());
+                    Ok(())
+                }
+            }
+        "#;
+        let ttf_parser = r#"
+            impl Subtable2 {
+                pub fn codepoints(&self, f: impl FnMut(u32)) {
+                    let _ = self.codepoints_inner(f);
+                }
+                fn codepoints_inner(&self, mut f: impl FnMut(u32)) -> Option<()> { None }
+            }
+        "#;
+        let free_fn = "fn note(m: &str) {}\nfn f() { let _ = note(\"x\"); }";
+        assert!(run_on(axum).is_empty(), "{:?}", run_on(axum));
+        assert!(run_on(ttf_parser).is_empty(), "{:?}", run_on(ttf_parser));
+        assert!(run_on(free_fn).is_empty(), "{:?}", run_on(free_fn));
+    }
+
+    #[test]
+    fn flags_let_underscore_local_fn_returning_result_issue_1458() {
+        // Negative space for #1458: the lookup reads the declaration, it does
+        // not assume. A `Result` return keeps firing, so does a `Result` hidden
+        // behind a path (`io::Result`) or a type alias the file does not resolve,
+        // and so does a callee with no in-file declaration at all.
+        let result = r#"
+            impl Store {
+                fn flush(&self) -> Result<(), Error> { Ok(()) }
+                fn close(&self) { let _ = self.flush(); }
+            }
+        "#;
+        let io_result = "fn write_all(p: &Path) -> io::Result<()> { Ok(()) }\nfn f(p: &Path) { let _ = write_all(p); }";
+        let alias = "fn parse(s: &str) -> Parsed { todo!() }\nfn f(s: &str) { let _ = parse(s); }";
+        let ambiguous = r#"
+            impl A { fn m(&self) -> usize { 0 } }
+            impl B {
+                fn m(&self) -> Result<(), E> { Ok(()) }
+                fn go(&self) { let _ = self.m(); }
+            }
+        "#;
+        let undeclared = "fn f(store: Store) { let _ = store.flush(); }";
+        assert_eq!(run_on(result).len(), 1);
+        assert_eq!(run_on(io_result).len(), 1);
+        assert_eq!(run_on(alias).len(), 1);
+        assert_eq!(run_on(ambiguous).len(), 1);
+        assert_eq!(run_on(undeclared).len(), 1);
     }
 }
