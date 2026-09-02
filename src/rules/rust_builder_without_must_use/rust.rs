@@ -28,6 +28,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_outer_attribute_path;
 
 #[derive(Debug)]
 pub struct Check;
@@ -88,19 +89,9 @@ impl AstCheck for Check {
 }
 
 fn has_must_use_attribute(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && text.contains("must_use")
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    // The path query never reads the `arguments`, so the `#[must_use = "reason"]`
+    // form counts too.
+    has_outer_attribute_path(item, source, &["must_use"])
 }
 
 /// True when any `impl` block targeting the builder `name` in the file —
@@ -218,6 +209,29 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Issue #8435: a doc comment mentioning `must_use` is not the attribute.
+    #[test]
+    fn flags_builder_whose_doc_string_spells_must_use() {
+        let source = "\
+#[doc = \"call must_use on the result one day\"]
+pub struct PoisonedBuilder { pub name: String }
+impl PoisonedBuilder { pub fn name(mut self, name: String) -> Self { self.name = name; self } }
+";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// `#[must_use = "reason"]` still exempts: the path query never reads the
+    /// attribute's arguments.
+    #[test]
+    fn allows_builder_with_must_use_reason() {
+        let source = "\
+#[must_use = \"call .build() to get the value\"]
+pub struct ReasonBuilder { pub name: String }
+impl ReasonBuilder { pub fn name(mut self, name: String) -> Self { self.name = name; self } }
+";
+        assert!(run_on(source).is_empty());
     }
 
     #[test]

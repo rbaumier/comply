@@ -262,33 +262,9 @@ impl AstCheck for Check {
 }
 
 fn has_debug_derive(item: tree_sitter::Node, source: &[u8]) -> bool {
-    // Walk every preceding sibling; keep going through attribute_item
-    // and comment nodes (both `line_comment` and `block_comment`, which
-    // tree-sitter-rust inserts between attributes when a trailing `//`
-    // or block comment sits beside an attribute like
-    // `#[allow(...)] // trailing note`). Stop at the first sibling that
-    // isn't an attribute or a comment — that's where our declaration's
-    // attribute block actually ends.
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && text.contains("derive(")
-                    && text.contains("Debug")
-                {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {
-                // Comments interleaved with attributes don't end the
-                // attribute block. Keep walking.
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    // The final-segment match keeps a path-qualified `#[derive(std::fmt::Debug)]`
+    // counting as a `Debug` derive.
+    crate::rules::rust_helpers::derives_any(item, source, &["Debug"])
 }
 
 /// True when the type carries a proc-macro invocation whose post-expansion
@@ -1072,6 +1048,30 @@ mod tests {
         assert!(
             run_on("#[derive(Clone, Debug, Default)]\npub struct User { name: String }").is_empty()
         );
+    }
+
+    /// Issue #8435: a doc string mentioning `derive(Debug)` on another type is
+    /// not a `Debug` derive on this one.
+    #[test]
+    fn flags_pub_struct_whose_doc_string_spells_a_debug_derive() {
+        let source = "#[doc = \"prints via derive(Debug) on the inner type\"]\npub struct PoisonedPublic { pub name: String }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// A path-qualified derive still names `Debug` in its last segment, and a
+    /// `cfg_attr`-applied one is a real declaration.
+    #[test]
+    fn allows_pub_struct_with_path_qualified_or_cfg_attr_debug_derive() {
+        for attribute in [
+            "#[derive(std::fmt::Debug)]",
+            "#[cfg_attr(feature = \"debug\", derive(Debug))]",
+        ] {
+            let source = format!("{attribute}\npub struct User {{ name: String }}");
+            assert!(
+                run_on(&source).is_empty(),
+                "expected no diagnostic for {attribute}"
+            );
+        }
     }
 
     #[test]

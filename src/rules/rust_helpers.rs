@@ -881,21 +881,12 @@ pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) 
     }
 }
 
-/// True if any `attribute_item` immediately preceding `item` is an
-/// `#[allow(clippy::X)]` / `#[expect(clippy::X)]` naming one of `lints`.
-/// Mirrors `has_test_attribute`'s preceding-sibling scan.
+/// True if any of `item`'s [preceding attributes](preceding_attribute_items) is
+/// an `#[allow(clippy::X)]` / `#[expect(clippy::X)]` naming one of `lints`.
 fn item_has_clippy_allow(item: Node, lints: &[&str], source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if attr_node_allows_clippy_lint(s, lints, source) {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(item, |attribute_item| {
+        attr_node_allows_clippy_lint(attribute_item, lints, source)
+    })
 }
 
 /// True if the `attribute_item` / `inner_attribute_item` `attr` is an
@@ -1686,25 +1677,13 @@ fn attr_path_is_symbol_export(attr_text: &str) -> bool {
     SYMBOL_EXPORT_ATTRS.contains(&segment)
 }
 
-/// Walk `item`'s preceding outer-attribute siblings — skipping interleaved
-/// `line_comment`/`block_comment` nodes and stopping at the first non-attribute
-/// sibling — and return true if any `attribute_item`'s source text satisfies
-/// `matches`. Shared by the attribute-presence predicates above.
+/// True if any of `item`'s [preceding attributes](preceding_attribute_items) has
+/// source text satisfying `matches`. Shared by the attribute-presence predicates
+/// above.
 fn any_preceding_attribute_text(item: Node, source: &[u8], matches: impl Fn(&str) -> bool) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if s.utf8_text(source).is_ok_and(&matches) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(item, |attribute_item| {
+        attribute_item.utf8_text(source).is_ok_and(&matches)
+    })
 }
 
 /// True if `item` carries a rustdoc `# Panics` section as a preceding doc-comment
@@ -1955,20 +1934,9 @@ pub fn is_safety_marker(trimmed: &str) -> bool {
 /// rather than scanning raw text — means `#[doc = "hidden"]` (a doc string
 /// reading "hidden") and a comment mentioning `doc(hidden)` do not match.
 pub fn has_doc_hidden(item: Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attribute_is_doc_hidden(s, source) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(item, |attribute_item| {
+        attribute_is_doc_hidden(attribute_item, source)
+    })
 }
 
 /// True if `attribute_item` is `#[doc(hidden)]`: its `attribute` child has path
@@ -2049,18 +2017,148 @@ fn attribute_path_is(attribute_item: Node, source: &[u8], attr_path: &str) -> bo
 /// `attr_paths` as its attribute path (the identifier before any `(...)`
 /// arguments). Unlike [`has_outer_attribute`], which matches the bracketed
 /// token text and so only recognizes argument-less attributes, this keys on the
-/// AST path child via [`attribute_path_is`], so argument-bearing attributes such
-/// as `#[deprecated(since = "…")]` and `#[proc_macro_derive(Name, …)]` match.
+/// AST path, so argument-bearing attributes such as `#[deprecated(since = "…")]`
+/// and `#[proc_macro_derive(Name, …)]` match.
 ///
 /// Interleaved `line_comment`/`block_comment` siblings are skipped and unrelated
 /// attributes are traversed, so the marker need not be the attribute nearest the
-/// item.
+/// item. A `#[cfg_attr(<predicate>, <attr_path>)]` counts, under the
+/// [`cfg_attr` policy](any_declared_attribute).
 pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) -> bool {
     any_preceding_attribute_item(item, |attribute_item| {
-        attr_paths
-            .iter()
-            .any(|p| attribute_path_is(attribute_item, source, p))
+        any_declared_attribute(attribute_item, source, &|path, _arguments| {
+            attr_paths.contains(&path)
+        })
     })
+}
+
+/// True if `item` carries a `#[derive(…)]` whose trait list names one of
+/// `traits`, comparing each entry's final `::` segment so a path-qualified
+/// `std::fmt::Debug` counts as `Debug`.
+///
+/// A `#[cfg_attr(<predicate>, derive(…))]` counts, under the
+/// [`cfg_attr` policy](any_declared_attribute). That is the difference with
+/// [`collect_top_level_derives`], which answers "which traits are derived
+/// unconditionally" and therefore must not see through a `cfg_attr`.
+pub fn derives_any(item: Node, source: &[u8], traits: &[&str]) -> bool {
+    any_preceding_attribute_item(item, |attribute_item| {
+        any_declared_attribute(attribute_item, source, &|path, arguments| {
+            path == "derive"
+                && arguments.is_some_and(|list| derive_list_names(list, source, traits))
+        })
+    })
+}
+
+/// True if a `#[derive(…)]` argument list names one of `traits`. Each entry is
+/// compared on its final `::` segment, so `std::fmt::Debug` answers `Debug`.
+fn derive_list_names(token_tree: Node, source: &[u8], traits: &[&str]) -> bool {
+    let Ok(text) = token_tree.utf8_text(source) else {
+        return false;
+    };
+    let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+    inner.split(',').any(|entry| {
+        let entry = entry.trim();
+        traits.contains(&entry.rsplit("::").next().unwrap_or(entry))
+    })
+}
+
+/// Answer `applies` for each attribute an `attribute_item` declares: the
+/// attribute written on the item, plus every attribute a
+/// `#[cfg_attr(<predicate>, …)]` conditionally applies. `applies` receives the
+/// attribute's path text and its argument `token_tree` when it has one.
+///
+/// **The `cfg_attr` policy, shared by every presence check in this module.** A
+/// `cfg_attr`-applied attribute counts as declared: the author did write it, and
+/// which build configurations enable a feature is not decidable from the crate's
+/// own source — any consumer can pass `--no-default-features`. The
+/// conditionally-applied attribute must still name the queried path, so a
+/// `cfg_attr` applying *another* crate's attribute does not match. Only
+/// `cfg_attr` arguments are traversed this way, and a `cfg_attr` nested in a
+/// `cfg_attr` is followed.
+fn any_declared_attribute<'tree>(
+    attribute_item: Node<'tree>,
+    source: &[u8],
+    applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
+) -> bool {
+    let mut item_cursor = attribute_item.walk();
+    let Some(attribute) = attribute_item
+        .children(&mut item_cursor)
+        .find(|child| child.kind() == "attribute")
+    else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    let Ok(path_text) = path.utf8_text(source) else {
+        return false;
+    };
+    let arguments = attribute.child_by_field_name("arguments");
+    applies(path_text, arguments)
+        || (path_text == "cfg_attr"
+            && arguments.is_some_and(|list| any_cfg_attr_applied(list, source, applies)))
+}
+
+/// Answer `applies` for each attribute a `cfg_attr` argument list applies.
+///
+/// Inside a `cfg_attr` the applied attributes are plain tokens rather than
+/// `attribute` nodes, so they are read positionally: the argument list is a
+/// comma-separated sequence whose first group is the `cfg` predicate and whose
+/// remaining groups are the attributes to apply. Within a group the path is the
+/// run of tokens before an optional argument `token_tree` — commas nested inside
+/// a group's own `token_tree` are not direct children here, so `all(a, b)` stays
+/// one group.
+fn any_cfg_attr_applied<'tree>(
+    token_tree: Node<'tree>,
+    source: &[u8],
+    applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
+) -> bool {
+    let mut cursor = token_tree.walk();
+    // The predicate is group 0 and names no attribute: `#[cfg_attr(nightly,
+    // must_use)]` declares `must_use`, not `nightly`.
+    let mut group = 0usize;
+    let mut path = String::new();
+    let mut arguments: Option<Node<'tree>> = None;
+    for child in token_tree.children(&mut cursor) {
+        if child.kind() == "token_tree" {
+            arguments = Some(child);
+            continue;
+        }
+        let Ok(text) = child.utf8_text(source) else {
+            return false;
+        };
+        match text {
+            "(" | ")" => {}
+            "," => {
+                if group > 0 && cfg_attr_group_applies(&path, arguments, source, applies) {
+                    return true;
+                }
+                group += 1;
+                path.clear();
+                arguments = None;
+            }
+            segment => path.push_str(segment),
+        }
+    }
+    group > 0 && cfg_attr_group_applies(&path, arguments, source, applies)
+}
+
+/// Answer `applies` for one comma-separated group of a `cfg_attr` argument list,
+/// read as an attribute: its accumulated path and its optional arguments. A
+/// nested `cfg_attr` group is traversed the same way, which is what resolves
+/// `#[cfg_attr(a, cfg_attr(b, must_use))]`.
+fn cfg_attr_group_applies<'tree>(
+    path: &str,
+    arguments: Option<Node<'tree>>,
+    source: &[u8],
+    applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
+) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    applies(path, arguments)
+        || (path == "cfg_attr"
+            && arguments.is_some_and(|list| any_cfg_attr_applied(list, source, applies)))
 }
 
 /// True if `item` carries an outer attribute `#[<attr_path>(… <option> …)]`,
@@ -2081,47 +2179,17 @@ pub fn has_outer_attribute_path(item: Node, source: &[u8], attr_paths: &[&str]) 
 ///   in a `#[doc = "…"]` string does not match. Node kind is not constrained:
 ///   Rust keywords are anonymous tokens, so `#[serde(default)]` matches.
 ///
-/// `#[cfg_attr(<predicate>, <attr_path>(… <option> …))]` counts too, including a
-/// `cfg_attr` nested in a `cfg_attr`, because the author did declare the option.
-/// Which build configurations enable it is not decidable from the crate's own
-/// source. Any consumer can pass `--no-default-features` and switch a `default`
-/// feature off. The conditionally-applied attribute must still name `attr_path`,
-/// so a `cfg_attr` applying *another* crate's attribute does not match. Only
-/// `cfg_attr` arguments are traversed this way.
+/// `#[cfg_attr(<predicate>, <attr_path>(… <option> …))]` counts too, under the
+/// [`cfg_attr` policy](any_declared_attribute).
 pub fn has_attribute_option(item: Node, source: &[u8], attr_path: &str, option: &str) -> bool {
     any_preceding_attribute_item(item, |attribute_item| {
-        attribute_declares_option(attribute_item, source, attr_path, option)
+        any_declared_attribute(attribute_item, source, &|path, arguments| {
+            // An argument-less `#[marker]` or a `#[key = "value"]` attribute has
+            // no argument list, so it can declare no option.
+            path == attr_path
+                && arguments.is_some_and(|list| token_tree_names_option(list, source, option))
+        })
     })
-}
-
-/// True if the `attribute_item` declares `<attr_path>(… <option> …)`, either as
-/// the attribute itself or applied through a `cfg_attr` argument list.
-fn attribute_declares_option(
-    attribute_item: Node,
-    source: &[u8],
-    attr_path: &str,
-    option: &str,
-) -> bool {
-    let mut item_cursor = attribute_item.walk();
-    let Some(attribute) = attribute_item
-        .children(&mut item_cursor)
-        .find(|child| child.kind() == "attribute")
-    else {
-        return false;
-    };
-    // An argument-less `#[marker]` or a `#[key = "value"]` attribute has no
-    // `arguments` field, so it can declare no option.
-    let (Some(path), Some(arguments)) = (
-        attribute.named_child(0),
-        attribute.child_by_field_name("arguments"),
-    ) else {
-        return false;
-    };
-    match path.utf8_text(source) {
-        Ok(p) if p == attr_path => token_tree_names_option(arguments, source, option),
-        Ok("cfg_attr") => token_tree_applies_attribute_option(arguments, source, attr_path, option),
-        _ => false,
-    }
 }
 
 /// True if `token_tree` holds a direct-child token whose text is `option` — the
@@ -2136,41 +2204,6 @@ fn token_tree_names_option(token_tree: Node, source: &[u8], option: &str) -> boo
     token_tree
         .children(&mut cursor)
         .any(|tok| tok.kind() != "token_tree" && tok.utf8_text(source) == Ok(option))
-}
-
-/// True if `token_tree` — a `cfg_attr` argument list — applies
-/// `<attr_path>(… <option> …)`: a token equal to `attr_path` immediately
-/// followed by a `token_tree` naming `option`.
-///
-/// Inside a `cfg_attr` the conditionally-applied attributes are plain tokens,
-/// not `attribute` nodes, so the path is read as the token preceding its
-/// argument group. Only a group introduced by `cfg_attr` is searched
-/// recursively, which reaches a `cfg_attr` nested in a `cfg_attr` and nothing
-/// else. The predicate expression and any other applied attribute's arguments
-/// are left alone.
-fn token_tree_applies_attribute_option(
-    token_tree: Node,
-    source: &[u8],
-    attr_path: &str,
-    option: &str,
-) -> bool {
-    let mut cursor = token_tree.walk();
-    token_tree.children(&mut cursor).any(|token| {
-        if token.kind() != "token_tree" {
-            return false;
-        }
-        let introduced_by = token
-            .prev_sibling()
-            .filter(|previous| previous.kind() != "token_tree")
-            .and_then(|previous| previous.utf8_text(source).ok());
-        match introduced_by {
-            Some(path) if path == attr_path => token_tree_names_option(token, source, option),
-            Some("cfg_attr") => {
-                token_tree_applies_attribute_option(token, source, attr_path, option)
-            }
-            _ => false,
-        }
-    })
 }
 
 /// True if `node` is covered by an `#[allow(<scope>::<lint>)]` or
@@ -2265,34 +2298,47 @@ const ATTRIBUTE_OWNER_KINDS: &[&str] = &[
     "shorthand_field_initializer",
 ];
 
-/// True if any `attribute_item` preceding `item` as a named sibling satisfies
-/// `matches`.
+/// Node kinds that may sit between an outer attribute and the item it
+/// decorates without ending the attribute block.
 ///
-/// In tree-sitter-rust an item's outer attributes are the `attribute_item` nodes
-/// immediately before it. Doc comments (`///`, `/** … */`) may interleave them in
-/// any order, and are skipped rather than read as the end of the attribute
-/// block. Unrelated attributes are traversed, so the wanted one need not be the
-/// nearest to `item`.
+/// Doc comments (`///`, `/** … */`) are `#[doc]` attributes in disguise and may
+/// interleave the real attributes in any order. A `visibility_modifier` is a
+/// sibling of `attribute_item` in exactly one production,
+/// `ordered_field_declaration_list` (`struct S(#[allow(…)] pub Mutex<bool>)`),
+/// where the fields are flattened: skipping it lands the scan either on the same
+/// field's attribute or on the previous field's type, which ends the scan — so no
+/// attribute can leak onto a neighbouring field. Everywhere else a
+/// `visibility_modifier` is a child of the item it qualifies, never a sibling of
+/// an attribute.
+const ATTRIBUTE_BLOCK_FILLER_KINDS: &[&str] =
+    &["line_comment", "block_comment", "visibility_modifier"];
+
+/// The `attribute_item` nodes preceding `item` as named siblings — its outer
+/// attributes, nearest first.
 ///
-/// The preceding-sibling counterpart of [`any_owned_attribute`].
+/// The walk skips [`ATTRIBUTE_BLOCK_FILLER_KINDS`] and stops at the first
+/// sibling of any other kind, so an attribute decorating a *different* item
+/// never leaks in. Unrelated attributes are traversed, so the wanted one need
+/// not be the nearest to `item`.
+///
+/// The preceding-sibling counterpart of [`any_owned_attribute`]. Every
+/// attribute-presence predicate in this module reads its attributes through
+/// this one walk, so they cannot drift apart on which siblings they see.
+fn preceding_attribute_items(item: Node<'_>) -> impl Iterator<Item = Node<'_>> {
+    std::iter::successors(item.prev_named_sibling(), |s| s.prev_named_sibling())
+        .take_while(|s| {
+            s.kind() == "attribute_item" || ATTRIBUTE_BLOCK_FILLER_KINDS.contains(&s.kind())
+        })
+        .filter(|s| s.kind() == "attribute_item")
+}
+
+/// True if any of `item`'s [preceding attributes](preceding_attribute_items)
+/// satisfies `matches`.
 fn any_preceding_attribute_item<'tree>(
     item: Node<'tree>,
     matches: impl Fn(Node<'tree>) -> bool,
 ) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if matches(s) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    preceding_attribute_items(item).any(matches)
 }
 
 /// True if any `attribute_item` child of `node` satisfies `matches`.
@@ -2363,14 +2409,18 @@ fn attribute_allows_lint(attribute_item: Node, source: &[u8], lint: &str) -> boo
 ///
 /// Walks up from `node` via `parent()`; at each ancestor it scans the preceding
 /// `attribute_item` siblings (skipping interleaved comment siblings, traversing
-/// past unrelated attributes) for a `#[cfg(debug_assertions)]` attribute. The
-/// walk stops at the enclosing `function_item` / `closure_expression` /
-/// `source_file` boundary so a `cfg` gate on a *sibling* item far above does
-/// not leak in.
+/// past unrelated attributes) for a `#[cfg(debug_assertions)]` attribute. It also
+/// reads the attributes an ancestor owns as children rather than as siblings —
+/// see `ATTRIBUTE_OWNER_KINDS` — so the gate on a `match_arm` or a
+/// struct-expression field covers the nodes inside it. The walk stops at the
+/// enclosing `function_item` / `closure_expression` / `source_file` boundary so a
+/// `cfg` gate on a *sibling* item far above does not leak in.
 pub fn is_under_cfg_debug_assertions(node: Node, source: &[u8]) -> bool {
     let mut cur = node;
     loop {
-        if cfg_debug_assertions_in_siblings(cur, source) {
+        if cfg_debug_assertions_in_siblings(cur, source)
+            || any_owned_attribute(cur, |attr| attribute_is_cfg_debug_assertions(attr, source))
+        {
             return true;
         }
         if matches!(
@@ -2390,20 +2440,9 @@ pub fn is_under_cfg_debug_assertions(node: Node, source: &[u8]) -> bool {
 /// `#[cfg(debug_assertions)]` attribute, skipping interleaved comments and
 /// traversing past unrelated attributes.
 fn cfg_debug_assertions_in_siblings(node: Node, source: &[u8]) -> bool {
-    let mut sibling = node.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attribute_is_cfg_debug_assertions(s, source) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(node, |attribute_item| {
+        attribute_is_cfg_debug_assertions(attribute_item, source)
+    })
 }
 
 /// True if `attribute_item` is `#[cfg(debug_assertions)]`: a `cfg` attribute
@@ -2453,20 +2492,7 @@ fn attribute_is_cfg_debug_assertions(attribute_item: Node, source: &[u8]) -> boo
 /// scanning raw text — means an attribute whose name merely ends in `cfg`, or a
 /// comment mentioning `cfg`, does not match.
 pub fn has_cfg_attribute(item: Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => {
-                if attribute_is_cfg(s, source) {
-                    return true;
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    any_preceding_attribute_item(item, |attribute_item| attribute_is_cfg(attribute_item, source))
 }
 
 /// Collect the trait names from the top-level `#[derive(...)]` attributes
@@ -2489,14 +2515,8 @@ pub fn has_cfg_attribute(item: Node, source: &[u8]) -> bool {
 /// trait impls and must not be fooled by a nested `derive(`.
 pub fn collect_top_level_derives(item: Node, source: &[u8]) -> Vec<String> {
     let mut out = Vec::new();
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" => {}
-            "attribute_item" => collect_derive_traits(s, source, &mut out),
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
+    for attribute_item in preceding_attribute_items(item) {
+        collect_derive_traits(attribute_item, source, &mut out);
     }
     out
 }
@@ -2996,6 +3016,22 @@ pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
         .is_none_or(|manifest| !manifest.is_binary_only() && !manifest.is_proc_macro())
 }
 
+/// True when `node` is test code, by either of the two ways Rust marks it:
+///
+/// - the ATTRIBUTES on `node` or an enclosing scope — `#[test]`, `#[cfg(test)]`,
+///   `#[cfg_attr(test, …)]` — per [`is_in_test_context`];
+/// - the PATH of the file it lives in — a Cargo `tests/` integration directory,
+///   an inline-test-module file — per [`is_under_tests_dir`].
+///
+/// Neither half sees the other, and a rule that consults only one exempts half
+/// of its authors' test code: a helper in `tests/common/mod.rs` carries no test
+/// attribute, and a `#[cfg(test)] mod tests` inside `src/` sits under no test
+/// directory. Twenty rules already spell this disjunction out by hand; this is
+/// the one place to spell it (issue #8146).
+pub fn is_test_code(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
+    is_in_test_context(node, source) || is_under_tests_dir(ctx.path)
+}
+
 /// True when `node` sits in code compiled into a Rust library target that some
 /// other Rust crate links against — as opposed to an application entry point,
 /// build-time tooling, or a test.
@@ -3027,7 +3063,7 @@ pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
 /// A missing or unparseable manifest answers `true`: the caller keeps flagging
 /// rather than suppress on a guess.
 pub fn is_library_code(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    if is_test_code(node, source, ctx) {
         return false;
     }
     if ctx.project.in_mdbook_project(ctx.path) {
@@ -3294,30 +3330,26 @@ fn reexported_names(
 /// module carries no path-bearing attribute.
 fn mod_path_attr_targets(mod_item: Node, source: &[u8], decl_dir: &Path) -> Vec<PathBuf> {
     let mut targets = Vec::new();
-    let mut sibling = mod_item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                // A path attribute carries the `path` identifier and a string
-                // literal naming the file; the resolved-path equality check the
-                // caller performs is what actually decides the match.
-                if s.utf8_text(source).is_ok_and(|text| text.contains("path")) {
-                    let mut values = Vec::new();
-                    collect_string_literals(s, source, &mut values);
-                    for value in values {
-                        // A module `#[path]` target always names a `.rs` file, so
-                        // ignore the other string literals a `cfg_attr` carries
-                        // (e.g. `"wasi"` from a `target_os = "wasi"` predicate).
-                        if value.ends_with(".rs") {
-                            targets.push(decl_dir.join(value));
-                        }
-                    }
-                }
-            }
-            "line_comment" | "block_comment" => {}
-            _ => break,
+    for attribute_item in preceding_attribute_items(mod_item) {
+        // A path attribute carries the `path` identifier and a string literal
+        // naming the file; the resolved-path equality check the caller performs
+        // is what actually decides the match.
+        if !attribute_item
+            .utf8_text(source)
+            .is_ok_and(|text| text.contains("path"))
+        {
+            continue;
         }
-        sibling = s.prev_named_sibling();
+        let mut values = Vec::new();
+        collect_string_literals(attribute_item, source, &mut values);
+        for value in values {
+            // A module `#[path]` target always names a `.rs` file, so ignore the
+            // other string literals a `cfg_attr` carries (e.g. `"wasi"` from a
+            // `target_os = "wasi"` predicate).
+            if value.ends_with(".rs") {
+                targets.push(decl_dir.join(value));
+            }
+        }
     }
     targets
 }
@@ -3626,12 +3658,14 @@ pub fn cast_operand_bit_width(cast: Node, source: &[u8]) -> Option<u16> {
 ///   explicit `type` annotation, returning that type's source text (trimmed);
 /// - a `match_arm` `tuple_struct_pattern` (`Self::Left(x)`) binding `name`, whose
 ///   type is read from the matched enum variant's tuple field at the binding
-///   position when the enum is defined in-file.
+///   position when the enum is defined in-file;
+/// - an UNANNOTATED `let_declaration` binding `name` whose initializer names one
+///   enum through and through (`let scan = if f { Scan::Consume } else
+///   { Scan::Bailout };`), per [`initializer_variant_path_enum`].
 ///
-/// Only annotated `let`/`parameter` bindings and in-file-enum match-arm bindings
-/// are resolved — an inferred `let x = ...;` or an imported-enum match arm yields
-/// `None`. Shared by the numeric-cast rules, which use it to learn a cast
-/// operand's source type from the AST.
+/// Every other inferred binding — `let n = read()?;`, an imported-enum match arm
+/// — yields `None`. Shared by the numeric-cast rules, which use it to learn a
+/// cast operand's source type from the AST.
 pub fn find_identifier_type(node: Node, name: &str, source: &[u8]) -> Option<String> {
     let mut current = Some(node);
     while let Some(n) = current {
@@ -3660,6 +3694,20 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
         return Some(type_text.trim().to_string());
     }
 
+    // An unannotated `let` can still settle its own type: `let scan = if flag
+    // { Scan::Consume } else { Scan::Bailout };` names `Scan` in every branch, so
+    // the binding is a `Scan` as surely as an annotation would say (issue #8328).
+    // Only enum-variant paths are inferred, and only when every branch agrees.
+    if node.kind() == "let_declaration"
+        && node.child_by_field_name("type").is_none()
+        && let Some(pattern) = node.child_by_field_name("pattern")
+        && pattern_contains_identifier(pattern, name, source)
+        && let Some(value) = node.child_by_field_name("value")
+        && let Some(enum_name) = initializer_variant_path_enum(value, source)
+    {
+        return Some(enum_name);
+    }
+
     // A `match self { Self::Left(x) => *x as i32 }` arm binds `x` through a
     // `tuple_struct_pattern` with no type annotation; resolve its type from the
     // matched enum variant's tuple field at the binding position. Gated on the
@@ -3682,6 +3730,94 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
         }
     }
     None
+}
+
+/// The single enum every value of `value` belongs to, or `None`.
+///
+/// An unannotated `let` has no type node, but an initializer built only from
+/// variant paths of one enum states the type just as plainly:
+/// `Scan::Consume`, or an `if`/`match` whose every branch tail is such a path.
+/// Requiring EVERY branch to name the SAME enum is what keeps this sound — a
+/// mixed initializer (`if f { Scan::Consume } else { Other::Variant }`, or one
+/// branch yielding an integer) resolves to nothing and leaves the binding
+/// unresolved, exactly as before.
+///
+/// Parentheses and block wrappers are transparent, since neither changes the
+/// value produced.
+fn initializer_variant_path_enum(value: Node, source: &[u8]) -> Option<String> {
+    match value.kind() {
+        "parenthesized_expression" => {
+            initializer_variant_path_enum(value.named_child(0)?, source)
+        }
+        "block" => initializer_variant_path_enum(block_tail_expression(value)?, source),
+        "scoped_identifier" => variant_path_enum_name(value, source),
+        "if_expression" => {
+            let consequence = value.child_by_field_name("consequence")?;
+            let then_enum = initializer_variant_path_enum(consequence, source)?;
+            // An `if` with no `else` yields `()` on the missing branch, so it
+            // never settles a type.
+            let alternative = value.child_by_field_name("alternative")?;
+            // The grammar wraps the `else` body (a `block`, or the nested
+            // `if_expression` of an `else if` chain) in an `else_clause`.
+            let else_body = if alternative.kind() == "else_clause" {
+                alternative.named_child(0)?
+            } else {
+                alternative
+            };
+            (initializer_variant_path_enum(else_body, source)? == then_enum).then_some(then_enum)
+        }
+        "match_expression" => {
+            let body = value.child_by_field_name("body")?;
+            let mut cursor = body.walk();
+            let mut arms = body
+                .named_children(&mut cursor)
+                .filter(|arm| arm.kind() == "match_arm");
+            let first_arm = arms.next()?.child_by_field_name("value")?;
+            let first_enum = initializer_variant_path_enum(first_arm, source)?;
+            arms.try_fold(first_enum, |agreed, arm| {
+                let arm_value = arm.child_by_field_name("value")?;
+                let arm_enum = initializer_variant_path_enum(arm_value, source)?;
+                (arm_enum == agreed).then_some(agreed)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The enum a variant path names (`Scan::Consume` → `Scan`), or `None`.
+///
+/// The final segment must be PascalCase, the same discriminator
+/// [`scoped_operand_is_enum_discriminant`] uses: it tells a variant apart from an
+/// associated const (`Scan::MAX_LEN`) or a function path (`scan::build`), neither
+/// of which gives the path's prefix as the value's type.
+fn variant_path_enum_name(path: Node, source: &[u8]) -> Option<String> {
+    let variant = path.child_by_field_name("name")?.utf8_text(source).ok()?;
+    if !is_pascal_case(variant) {
+        return None;
+    }
+    let enum_path = path.child_by_field_name("path")?.utf8_text(source).ok()?;
+    Some(enum_path.to_string())
+}
+
+/// The expression a `block` evaluates to, or `None` when it ends in a statement.
+///
+/// A trailing comment is not an element of the block, so it is dropped before
+/// reading the last one — the same cut [`block_diverges`] makes.
+fn block_tail_expression<'tree>(block: Node<'tree>) -> Option<Node<'tree>> {
+    let mut cursor = block.walk();
+    let last = block
+        .named_children(&mut cursor)
+        .filter(|child| !is_comment_node(*child))
+        .last()?;
+    if !block_tail_produces_value(last) {
+        return None;
+    }
+    // The grammar wraps a block-like tail (`match`, `if`) in an
+    // `expression_statement`; a plain one it leaves bare.
+    if last.kind() == "expression_statement" {
+        return last.named_child(0);
+    }
+    Some(last)
 }
 
 /// Whether `pattern` binds the name `name` anywhere inside it.
@@ -6494,68 +6630,128 @@ pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|op| matches!(op, ">>" | "<<" | "&" | "|" | "^"))
 }
 
-/// True when `cast` (a `type_cast_expression`) narrows `(x % N) as uT` where the
-/// modulo's right operand `N` is an integer literal small enough that the
-/// remainder always fits the unsigned target, and the dividend `x` is provably
-/// non-negative from the AST.
+/// True when `cast` (a `type_cast_expression`) narrows a modulo remainder whose
+/// whole interval fits the target integer — `(x % N) as T` or `x.rem_euclid(N) as T`
+/// with `N` statically known.
 ///
-/// For a non-negative `x`, Rust's `%` yields a value in `[0, N - 1]` (the
-/// remainder follows the sign of the dividend, so a non-negative dividend gives a
-/// non-negative remainder). When `N - 1 <= uT::MAX` that whole range is
-/// representable, so the cast is lossless — `(width % 256) as u8`,
-/// `(nanos % 1_000_000) as u32`.
+/// A remainder is bounded by its modulus, so the only question is which interval
+/// the operand can produce and whether the target holds all of it:
 ///
-/// Soundness hinges on the dividend being non-negative: a SIGNED `x % N` can be
-/// negative (`-1i32 % 256 == -1`), and `(-1i32) as u8` wraps to `255` — a
-/// genuinely lossy cast the rules must keep flagging. Unlike the bitwise-AND mask
-/// of [`cast_operand_is_bitwise`] (non-negative regardless of sign), modulo needs
-/// an explicit unsigned proof. The exemption therefore requires:
+/// - **`x.rem_euclid(N)`** is in `[0, N - 1]` for EVERY dividend, signed or not —
+///   that is precisely why an author reaches for it — so it needs no sign proof;
+/// - **`x % N` into a SIGNED target** is in `-(N - 1)..=(N - 1)`, again whatever
+///   the dividend's sign, and a signed `iT` holding `N - 1` holds `-(N - 1)` too
+///   (`iT::MIN == -iT::MAX - 1`). No sign proof is needed there either;
+/// - **`x % N` into an UNSIGNED target** is the one case that needs the dividend
+///   proven non-negative per [`expr_is_provably_nonneg`]: a negative remainder
+///   wraps (`-1i32 % 256` is `-1`, and `(-1i32) as u8` is `255`).
 ///
-/// - the target is an **unsigned** integer (`u8`..`u128`/`usize`); a signed target
-///   is never exempt;
-/// - the right operand is an integer literal `N` with `N - 1 <= uT::MAX` (i.e.
-///   `N <= 2^bits`); `(x % 300) as u8` stays flagged because `299` exceeds `u8`;
-/// - the dividend is **provably non-negative** from the AST per
-///   [`expr_is_provably_nonneg`]. A dividend whose type cannot be resolved (an
-///   unannotated local, or a method return like `.as_nanos()` whose type lives in
-///   std) is left unproven, so it stays flagged — a conservative false-negative,
-///   never an unsound false-positive.
+/// `N` is read as an integer literal or as an in-file `const` item
+/// ([`int_bound_value`]); a bound this file cannot evaluate (a runtime local, a
+/// const from another crate) leaves the interval unknown and the cast flagged —
+/// a conservative false-negative, never an unsound exemption. Likewise a modulus
+/// wider than the target keeps flagging: `(x % 256) as i8` needs `255`, and `i8`
+/// stops at `127`.
 ///
 /// Any `parenthesized_expression` layers around the operand are transparent.
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
 pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
-    let Some(target_bits) = cast
-        .child_by_field_name("type")
-        .and_then(|t| t.utf8_text(source).ok())
-        .and_then(unsigned_int_bits)
+    let Some(target) = cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok())
     else {
         return false;
     };
-    let target_max: u128 = if target_bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << target_bits) - 1
+    let Some(target_max) = int_target_max(target) else {
+        return false;
     };
     let Some(value) = cast.child_by_field_name("value") else {
         return false;
     };
-    binary_is_modulo_bounded(value, target_max, source)
+    modulo_remainder_fits(value, target_max, signed_int_bits(target).is_some(), source)
 }
 
-/// True when `value` (parens transparent) is `x % N` whose remainder always fits
-/// an unsigned target of maximum `target_max`: `N` is an integer literal with
-/// `N - 1 <= target_max`, and the dividend `x` is provably non-negative per
-/// [`expr_is_provably_nonneg`] (so `x % N` lands in `[0, N - 1]`). The shared
-/// bound check behind both the inline `(x % N) as uT` exemption
-/// ([`cast_operand_is_modulo_bounded`]) and its let-bound form
-/// ([`cast_operand_is_modulo_bounded_via_binding`]).
-fn binary_is_modulo_bounded(value: Node, target_max: u128, source: &[u8]) -> bool {
+/// The largest value an integer type can hold — `u8` → 255, `i8` → 127 — or
+/// `None` for a float or non-numeric type. The interval comparisons that decide
+/// whether a bounded value survives a cast differ only by this number, never by
+/// the target's signedness.
+fn int_target_max(type_text: &str) -> Option<u128> {
+    if let Some(bits) = unsigned_int_bits(type_text) {
+        // `1u128 << 128` overflows, so the widest unsigned target is spelled out.
+        return Some(if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 });
+    }
+    signed_int_bits(type_text).map(|bits| (1u128 << (bits - 1)) - 1)
+}
+
+/// A bound's value when this file can evaluate it: an integer literal, or an
+/// identifier naming an in-file `const` initialised with one
+/// ([`resolve_const_int`]). A named constant is the same bound as the number it
+/// stands for, and spelling it out is what the rest of comply asks authors to do.
+///
+/// A `scoped_identifier` (`c::MINS_PER_HOUR`) is deliberately NOT resolved: its
+/// value lives in another module or crate, so matching on the final segment alone
+/// could read an unrelated constant.
+fn int_bound_value(node: Node, source: &[u8]) -> Option<u128> {
+    match node.kind() {
+        "integer_literal" => parse_int_literal(node, source),
+        "identifier" => resolve_const_int(node, source),
+        _ => None,
+    }
+}
+
+/// The modulus of an `x.rem_euclid(N)` call with a statically known `N`, or
+/// `None` for any other call.
+///
+/// `checked_rem_euclid` is absent on purpose: it returns an `Option`, which is
+/// not an `as`-castable operand, so it can never reach a cast directly.
+fn rem_euclid_modulus(value: Node, source: &[u8]) -> Option<u128> {
+    if value.kind() != "call_expression" {
+        return None;
+    }
+    let function = value.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    if method != "rem_euclid" {
+        return None;
+    }
+    let args = value.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let positional: Vec<_> = args.named_children(&mut cursor).collect();
+    let [modulus] = positional.as_slice() else {
+        return None;
+    };
+    int_bound_value(*modulus, source)
+}
+
+/// True when a remainder of `modulus` fits a target whose maximum is
+/// `target_max`. The largest remainder is `modulus - 1`; a zero or unparsed
+/// modulus has no interval and rejects.
+fn remainder_fits_target(modulus: u128, target_max: u128) -> bool {
+    modulus.checked_sub(1).is_some_and(|remainder_max| remainder_max <= target_max)
+}
+
+/// True when `value` (parens transparent) is a modulo whose remainder interval
+/// fits a target of maximum `target_max` and signedness `target_is_signed` — see
+/// [`cast_operand_is_modulo_bounded`] for the interval argument. The shared
+/// bound check behind both the inline `(x % N) as T` exemption and its let-bound
+/// form ([`cast_operand_is_modulo_bounded_via_binding`]).
+fn modulo_remainder_fits(
+    value: Node,
+    target_max: u128,
+    target_is_signed: bool,
+    source: &[u8],
+) -> bool {
     let mut value = value;
     while value.kind() == "parenthesized_expression" {
         let Some(inner) = value.named_child(0) else {
             return false;
         };
         value = inner;
+    }
+    // `rem_euclid` is non-negative by definition, so its interval is `[0, N - 1]`
+    // for any dividend and no sign proof applies.
+    if let Some(modulus) = rem_euclid_modulus(value, source) {
+        return remainder_fits_target(modulus, target_max);
     }
     if value.kind() != "binary_expression" {
         return false;
@@ -6573,19 +6769,16 @@ fn binary_is_modulo_bounded(value: Node, target_max: u128, source: &[u8]) -> boo
     ) else {
         return false;
     };
-    // `x % N` (non-negative `x`) yields a value in `[0, N - 1]`; it fits when
-    // `N - 1 <= target_max`. A zero or absent literal rejects via `checked_sub` /
-    // `parse_int_literal`, keeping `(x % N)` with an unparsed bound flagged.
-    if right.kind() != "integer_literal" {
+    let Some(modulus) = int_bound_value(right, source) else {
+        return false;
+    };
+    if !remainder_fits_target(modulus, target_max) {
         return false;
     }
-    if !parse_int_literal(right, source)
-        .and_then(|n| n.checked_sub(1))
-        .is_some_and(|remainder_max| remainder_max <= target_max)
-    {
-        return false;
-    }
-    expr_is_provably_nonneg(left, source)
+    // A signed target holds the whole `-(N - 1)..=(N - 1)` interval `%` can
+    // produce, so the dividend's sign is irrelevant there. An unsigned one wraps
+    // a negative remainder, so it still needs the dividend proven non-negative.
+    target_is_signed || expr_is_provably_nonneg(left, source)
 }
 
 /// True when `cast` (a `type_cast_expression`) narrows `v as uT` where `v` is an
@@ -6598,8 +6791,8 @@ fn binary_is_modulo_bounded(value: Node, target_max: u128, source: &[u8]) -> boo
 /// operand is then a bare `identifier`, so the inline modulo check cannot see the
 /// bound. This predicate resolves the identifier to its innermost preceding `let`
 /// in the enclosing block and applies the SAME bound check
-/// ([`binary_is_modulo_bounded`]): unsigned target, literal `N` with
-/// `N - 1 <= uT::MAX`, provably non-negative dividend.
+/// ([`modulo_remainder_fits`]): a statically known modulus whose remainder
+/// interval fits the target.
 ///
 /// Soundness adds a binding guard on top of that bound: the modulo value proves
 /// `v`'s value only while `v` is unchanged between the `let` and the cast. A
@@ -6620,18 +6813,14 @@ pub fn cast_operand_is_modulo_bounded_via_binding(cast: Node, source: &[u8]) -> 
     let Ok(name) = value.utf8_text(source) else {
         return false;
     };
-    let Some(target_bits) = cast
-        .child_by_field_name("type")
-        .and_then(|t| t.utf8_text(source).ok())
-        .and_then(unsigned_int_bits)
+    let Some(target) = cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok())
     else {
         return false;
     };
-    let target_max: u128 = if target_bits >= 128 {
-        u128::MAX
-    } else {
-        (1u128 << target_bits) - 1
+    let Some(target_max) = int_target_max(target) else {
+        return false;
     };
+    let target_is_signed = signed_int_bits(target).is_some();
 
     let Some((block, cast_stmt)) = enclosing_block_statement(cast) else {
         return false;
@@ -6654,7 +6843,7 @@ pub fn cast_operand_is_modulo_bounded_via_binding(cast: Node, source: &[u8]) -> 
         let Some(bound_value) = stmt.child_by_field_name("value") else {
             continue;
         };
-        if !binary_is_modulo_bounded(bound_value, target_max, source) {
+        if !modulo_remainder_fits(bound_value, target_max, target_is_signed, source) {
             continue;
         }
         // The modulo bound proves `name`'s value only while it stays unchanged
@@ -6677,6 +6866,9 @@ pub fn cast_operand_is_modulo_bounded_via_binding(cast: Node, source: &[u8]) -> 
 /// - an `identifier` whose same-file binding/parameter is annotated with an
 ///   unsigned integer type (`u8`..`u128`/`usize`);
 /// - `a % b`, non-negative when `a` is (the remainder follows the dividend's sign);
+/// - `a / b`, non-negative when BOTH are: a quotient takes the sign of the pair,
+///   so a non-negative dividend over a negative divisor is negative
+///   (`10 / -3 == -3`) — unlike `%`, the left operand alone proves nothing;
 /// - `a & b`, non-negative when either operand is (a bitwise AND clears the sign
 ///   bit unless both operands have it set).
 ///
@@ -6707,6 +6899,10 @@ fn expr_is_provably_nonneg(node: Node, source: &[u8]) -> bool {
             let right = node.child_by_field_name("right");
             match op {
                 Some("%") => left.is_some_and(|l| expr_is_provably_nonneg(l, source)),
+                Some("/") => {
+                    left.is_some_and(|l| expr_is_provably_nonneg(l, source))
+                        && right.is_some_and(|r| expr_is_provably_nonneg(r, source))
+                }
                 Some("&") => {
                     left.is_some_and(|l| expr_is_provably_nonneg(l, source))
                         || right.is_some_and(|r| expr_is_provably_nonneg(r, source))
@@ -7710,7 +7906,9 @@ fn operand_is_enum_discriminant(cast: Node, value: Node, source: &[u8]) -> bool 
 /// The declared type's leading `&`/`&mut` is stripped first: a bare operand is
 /// never a reference (`&E as u32` does not compile), but a dereferenced binding
 /// (`*code` where `code: &Code`) reaches here through the deref peel and reads
-/// the `Code` referent.
+/// the `Code` referent. A stripped type of exactly `Self` is not a name to look
+/// up but an alias for the enclosing impl's target, so it is answered by the same
+/// [`self_enum_is_fieldless`] the `self` receiver uses.
 fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> bool {
     let Ok(name) = value.utf8_text(source) else {
         return false;
@@ -7719,6 +7917,15 @@ fn identifier_operand_is_enum_value(cast: Node, value: Node, source: &[u8]) -> b
         return false;
     };
     let declared = strip_leading_borrow(declared.trim());
+    // `Self` is a keyword aliasing the enclosing impl's target, not a type name
+    // to look up: `find_enum_item(cast, "Self", …)` would search the file for an
+    // `enum Self` and never find one. It reaches here through the `other: &Self`
+    // parameter that `PartialEq::eq` / `PartialOrd::partial_cmp` / `Ord::cmp`
+    // dictate, so `*other as u8` must answer exactly what `*self as u8` answers
+    // one operand to its left (issue #8328).
+    if declared == "Self" {
+        return self_enum_is_fieldless(cast, source);
+    }
     match declared.rsplit_once("::") {
         // Module-qualified path (`spirv::SourceLanguage`): an imported enum whose
         // repr the AST cannot see. A PascalCase final segment confirms it names a
@@ -8087,21 +8294,8 @@ fn field_declaration_is_reference(struct_item: Node, field: &str, source: &[u8])
 /// `None` if it has no integer `repr` (a `#[repr(C)]` or no `repr` at all has no
 /// guaranteed discriminant width).
 fn enum_repr_int_width(enum_item: Node, source: &[u8]) -> Option<(bool, u16)> {
-    let mut sibling = enum_item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "line_comment" | "block_comment" | "attribute_item" => {
-                if s.kind() == "attribute_item"
-                    && let Some(repr) = repr_attribute_int(s, source)
-                {
-                    return Some(repr);
-                }
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    None
+    preceding_attribute_items(enum_item)
+        .find_map(|attribute_item| repr_attribute_int(attribute_item, source))
 }
 
 /// If `attribute_item` is a `#[repr(...)]` whose arguments name an integer type
@@ -9776,6 +9970,208 @@ mod tests {
         }
     }
 
+    /// Issue #8328: `other: &Self` is the parameter type `PartialEq::eq`,
+    /// `PartialOrd::partial_cmp` and `Ord::cmp` dictate, so it is how a manual
+    /// comparison on a fieldless enum is written. `*other as u8` must answer what
+    /// `*self as u8` answers one operand to its left, not go looking for an
+    /// `enum Self` that cannot exist.
+    #[test]
+    fn cast_operand_is_enum_discriminant_resolves_a_self_annotated_parameter() {
+        let cases = [
+            (
+                "enum E { A, B } impl PartialEq for E \
+                 { fn eq(&self, other: &Self) -> bool { *other as u8 == 0 } }",
+                true,
+            ),
+            // The same body with the parameter spelled by the enum's own name —
+            // the shape that already resolved, and the answer the `Self` spelling
+            // has to match.
+            (
+                "enum E { A, B } impl E \
+                 { fn same(&self, other: &E) -> bool { *other as u8 == 0 } }",
+                true,
+            ),
+            // A data-carrying enum has no discriminant to read: `Self` resolving
+            // must not turn into a blanket exemption.
+            (
+                "enum E { A(u32), B } impl PartialEq for E \
+                 { fn eq(&self, other: &Self) -> bool { *other as u8 == 0 } }",
+                false,
+            ),
+            // `Self` inside a struct impl names a struct; no `enum_item` matches.
+            (
+                "struct S(u8); impl S \
+                 { fn same(&self, other: &Self) -> bool { *other as u8 == 0 } }",
+                false,
+            ),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_is_enum_discriminant(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    /// Issue #8328: an unannotated `let` whose every branch yields a variant of
+    /// one enum states its type as plainly as an annotation would. Branches that
+    /// disagree, or that yield anything but a variant path, still settle nothing.
+    #[test]
+    fn cast_operand_is_enum_discriminant_infers_an_unannotated_enum_binding() {
+        let cases = [
+            // The issue's shape: both branches yield a `Scan` variant.
+            (
+                "enum Scan { Fail, Bailout, Consume } fn f(b: bool) -> u8 \
+                 { let scan = if b { Scan::Consume } else { Scan::Bailout }; scan as u8 }",
+                true,
+            ),
+            // A single-path initializer.
+            (
+                "enum Scan { Fail, Bailout } fn f() -> u8 { let scan = Scan::Bailout; scan as u8 }",
+                true,
+            ),
+            // Every `match` arm on the same enum.
+            (
+                "enum Scan { Fail, Bailout } fn f(k: u8) -> u8 \
+                 { let scan = match k { 0 => Scan::Fail, _ => Scan::Bailout }; scan as u8 }",
+                true,
+            ),
+            // Branches naming different enums prove nothing about the binding.
+            (
+                "enum Scan { Fail } enum Other { Variant } fn f(b: bool) -> u8 \
+                 { let scan = if b { Scan::Fail } else { Other::Variant }; scan as u8 }",
+                false,
+            ),
+            // A numeric initializer is not an enum: the cast stays flagged.
+            (
+                "fn f(b: bool) -> u8 { let n = if b { 1u16 } else { 2u16 }; n as u8 }",
+                false,
+            ),
+            // A SCREAMING_SNAKE final segment is an associated const, not a
+            // variant, so the path's prefix is not the binding's type.
+            (
+                "enum Scan { Fail } impl Scan { const MAX_LEN: u8 = 3; } \
+                 fn f() -> u8 { let n = Scan::MAX_LEN; n as u8 }",
+                false,
+            ),
+            // The inferred enum is still checked for payloads.
+            (
+                "enum Scan { Fail(u8), Bailout } fn f() -> u8 \
+                 { let scan = Scan::Bailout; scan as u8 }",
+                false,
+            ),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_is_enum_discriminant(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    /// Issue #8242: the exemption is an interval comparison, so it must not turn
+    /// on how the bound is spelled (`10` vs a `const`), which operator produced
+    /// the remainder (`%` vs `rem_euclid`), or whether the target is signed.
+    #[test]
+    fn cast_operand_is_modulo_bounded_compares_the_remainder_interval() {
+        let cases = [
+            // #6151's original shape stays exempt.
+            ("fn f(x: u32) -> u8 { (x % 256) as u8 }", true),
+            // A signed target holds the whole `-(N - 1)..=(N - 1)` interval, so
+            // the dividend's sign does not matter there.
+            ("fn f(x: u32) -> i64 { (x % 10) as i64 }", true),
+            ("fn f(x: i32) -> i8 { (x % 60) as i8 }", true),
+            // The modulus still has to fit: `255` overflows `i8`, `127` does not.
+            ("fn f(x: u32) -> i8 { (x % 256) as i8 }", false),
+            ("fn f(x: u32) -> i8 { (x % 128) as i8 }", true),
+            // An UNSIGNED target wraps a negative remainder, so it keeps
+            // requiring a provably non-negative dividend.
+            ("fn f(x: i32) -> u8 { (x % 256) as u8 }", false),
+            // A named in-file `const` is the number it stands for.
+            ("const N: u32 = 10; fn f(x: u32) -> u8 { (x % N) as u8 }", true),
+            // A runtime binding is not a constant bound.
+            ("fn f(x: u32, n: u32) -> u8 { (x % n) as u8 }", false),
+            // A const from another module cannot be read here.
+            ("fn f(x: u32) -> u8 { (x % limits::N) as u8 }", false),
+            // `rem_euclid` is non-negative whatever the dividend.
+            ("fn f(x: i32) -> u8 { x.rem_euclid(10) as u8 }", true),
+            ("fn f(x: i64) -> u8 { x.rem_euclid(300) as u8 }", false),
+            // `div_euclid` bounds nothing.
+            ("fn f(x: i32) -> u8 { x.div_euclid(10) as u8 }", false),
+            // A quotient of two non-negative operands is non-negative, so the
+            // dividend of the outer `%` is proven.
+            ("fn f(total: u32) -> u8 { ((total / 60) % 60) as u8 }", true),
+            // A non-negative numerator alone proves nothing: `5 / -3` is `-1`.
+            ("fn f(d: i32) -> u8 { ((5 / d) % 60) as u8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_is_modulo_bounded(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    /// Issue #8242: the let-bound form shares the interval check, so a signed
+    /// target and a `const` bound reach it there too.
+    #[test]
+    fn cast_operand_is_modulo_bounded_via_binding_shares_the_interval_check() {
+        let cases = [
+            ("fn f(x: u32) -> i8 { let q = x % 100; q as i8 }", true),
+            ("const N: u32 = 100; fn f(x: u32) -> u8 { let q = x % N; q as u8 }", true),
+            ("fn f(x: u32) -> i8 { let q = x % 300; q as i8 }", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let cast = first_type_cast_expression(tree.root_node())
+                .expect("source should contain a cast");
+            assert_eq!(
+                cast_operand_is_modulo_bounded_via_binding(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
+        }
+    }
+
+    /// Issue #8146: the attribute half and the path half each miss what the
+    /// other catches, so the seam must answer to either one alone.
+    #[test]
+    fn is_test_code_answers_the_attribute_half_and_the_path_half() {
+        let cases = [
+            // Attribute half: an inline test module inside `src/`, under no
+            // test directory.
+            ("src/lib.rs", "#[cfg(test)]\nmod tests { fn helper() {} }", true),
+            // Path half: a fixture helper in an integration test carries no
+            // test attribute of its own.
+            ("tests/common/mod.rs", "fn helper() {}", true),
+            // Neither: ordinary production code.
+            ("src/lib.rs", "fn helper() {}", false),
+        ];
+        for (path, src, expected) in cases {
+            let tree = parse(src);
+            let node = first_node_of_kind(tree.root_node(), "function_item")
+                .expect("source should contain a function");
+            let ctx = crate::rules::backend::CheckCtx::for_test(std::path::Path::new(path), src);
+            assert_eq!(
+                is_test_code(node, src.as_bytes(), &ctx),
+                expected,
+                "{path}: {src}"
+            );
+        }
+    }
+
     #[test]
     fn cast_operand_is_repr_enum_field_resolves_struct_field_repr_enums() {
         let cases = [
@@ -10460,6 +10856,72 @@ mod tests {
     }
 
     #[test]
+    fn has_outer_attribute_path_reads_the_bare_path_through_cfg_attr() {
+        let cases = [
+            ("#[must_use]\nstruct S;", true),
+            // `#[must_use = "reason"]` — the path query never reads arguments.
+            ("#[must_use = \"build it\"]\nstruct S;", true),
+            // Traversed past an unrelated attribute and an interleaved comment.
+            ("#[derive(Debug)]\n/// doc\n#[must_use]\nstruct S;", true),
+            // Issue #8435: a `cfg_attr`-applied bare attribute counts — which
+            // build configurations enable it is not decidable from this source.
+            ("#[cfg_attr(nightly, must_use)]\nstruct S;", true),
+            (
+                "#[cfg_attr(not(feature = \"unstable\"), non_exhaustive)]\nstruct S;",
+                false,
+            ),
+            ("#[cfg_attr(unix, cfg_attr(nightly, must_use))]\nstruct S;", true),
+            // The predicate is not an applied attribute.
+            ("#[cfg_attr(must_use, derive(Debug))]\nstruct S;", false),
+            // A word inside a doc string is not an attribute path.
+            ("#[doc = \"must_use\"]\nstruct S;", false),
+            // Another attribute's argument list is its own, not an applied one.
+            ("#[allow(must_use)]\nstruct S;", false),
+            ("struct S;", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                has_outer_attribute_path(item, src.as_bytes(), &["must_use"]),
+                expected,
+                "has_outer_attribute_path mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn derives_any_matches_the_final_path_segment_through_cfg_attr() {
+        let cases = [
+            ("#[derive(Parser)]\nstruct S;", true),
+            ("#[derive(Debug, Clone, Args)]\nstruct S;", true),
+            // A path-qualified derive still names the trait in its last segment.
+            ("#[derive(clap::Parser)]\nstruct S;", true),
+            // Issue #8435: a `cfg_attr`-applied derive counts.
+            ("#[cfg_attr(feature = \"cli\", derive(Parser))]\nstruct S;", true),
+            // Negative space: the word in a doc string, in another attribute's
+            // arguments, or as a field name is not a derive.
+            ("#[doc = \"derive from Parser output\"]\nstruct S;", false),
+            ("#[command(Parser)]\nstruct S;", false),
+            ("#[derive(Debug)]\nstruct S { Parser: u8 }", false),
+            // A trait whose name merely ends in the queried one does not match.
+            ("#[derive(MyParser)]\nstruct S;", false),
+            ("struct S;", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "struct_item")
+                .expect("snippet should contain a struct_item");
+            assert_eq!(
+                derives_any(item, src.as_bytes(), &["Parser", "Args"]),
+                expected,
+                "derives_any mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
     fn has_attribute_option_matches_an_option_spelled_as_a_rust_keyword() {
         // `default` is a Rust keyword, which tree-sitter-rust tokenizes as an
         // anonymous node inside a `token_tree` rather than as an `identifier`.
@@ -10770,6 +11232,23 @@ mod tests {
                 "struct S { #[allow(clippy::mutex_atomic)] a: bool, x: Mutex<bool> }",
                 false,
             ),
+            // Issue #8397: a doc comment written *below* the `#[allow]` sits
+            // between it and the struct. rustc binds an outer attribute to the
+            // next item and a comment is not one, so the allow still applies.
+            (
+                "#[allow(clippy::mutex_atomic)]\n/// The lock.\nstruct S { x: Mutex<bool> }",
+                true,
+            ),
+            // Issue #8397: in a tuple struct the field's `visibility_modifier`
+            // is a sibling standing between the attribute and the type
+            // (`ordered_field_declaration_list`), and must not end the scan.
+            ("struct S(#[allow(clippy::mutex_atomic)] pub Mutex<bool>);", true),
+            // Boundary: an `#[allow]` on the *previous* item, separated from the
+            // flagged struct by that struct's own doc comment, does not leak.
+            (
+                "#[allow(clippy::mutex_atomic)]\nstruct Other;\n/// The lock.\nstruct S { x: Mutex<bool> }",
+                false,
+            ),
             // No attribute at all.
             ("struct S { x: Mutex<bool> }", false),
         ];
@@ -10894,6 +11373,36 @@ mod tests {
             let tree = parse(src);
             let node = first_of_kind(tree.root_node(), "binary_expression")
                 .expect("snippet should contain a binary_expression");
+            assert_eq!(
+                has_clippy_allow(node, src.as_bytes(), "float_cmp"),
+                expected,
+                "has_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_clippy_allow_reaches_past_a_doc_comment_and_a_visibility_modifier() {
+        // Issue #8397. Both shapes put a node between the `#[allow]` and the
+        // node it decorates: a doc comment written below the attribute, and a
+        // tuple-struct field's `pub`, which `ordered_field_declaration_list`
+        // makes a sibling of the attribute rather than a child of the field.
+        let cases = [
+            ("struct S(#[allow(clippy::float_cmp)] pub f64);", true),
+            (
+                "#[allow(clippy::float_cmp)]\n/// doc\nstruct S(f64);",
+                true,
+            ),
+            // Boundary: the allow on the previous item does not reach this one.
+            (
+                "#[allow(clippy::float_cmp)]\nstruct Other;\n/// doc\nstruct S(f64);",
+                false,
+            ),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "primitive_type")
+                .expect("snippet should contain a primitive_type");
             assert_eq!(
                 has_clippy_allow(node, src.as_bytes(), "float_cmp"),
                 expected,
@@ -12144,6 +12653,24 @@ mod tests {
             ),
             // An unrelated attribute (`#[allow(...)]`) is not a debug gate.
             ("fn f() { #[allow(unused)] foo().unwrap(); }", false),
+            // Issue #8395: a `match_arm` holds its attribute as a child, so a
+            // preceding-sibling scan alone cannot see the gate on the arm.
+            (
+                "fn f(x: Option<u8>) { match x { #[cfg(debug_assertions)] Some(_) => { x.unwrap(); } _ => {} } }",
+                true,
+            ),
+            // …and it covers that arm alone — the neighbouring, undecorated arm
+            // is a real release path.
+            (
+                "fn f(x: Option<u8>) { match x { #[cfg(debug_assertions)] Some(_) => {} _ => { x.unwrap(); } } }",
+                false,
+            ),
+            // The arm-level form of the negated gate is release-only, like the
+            // statement-level one above.
+            (
+                "fn f(x: Option<u8>) { match x { #[cfg(not(debug_assertions))] Some(_) => { x.unwrap(); } _ => {} } }",
+                false,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);

@@ -7,8 +7,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    crate_has_external_consumers, has_doc_hidden, has_test_attribute, is_in_test_context,
-    is_under_tests_dir,
+    crate_has_external_consumers, has_doc_hidden, has_outer_attribute_path, has_test_attribute,
+    is_in_test_context, is_under_tests_dir,
 };
 use std::path::{Path, PathBuf};
 
@@ -227,29 +227,7 @@ fn is_uninhabited(item: tree_sitter::Node) -> bool {
 }
 
 fn has_non_exhaustive(item: tree_sitter::Node, source: &[u8]) -> bool {
-    // Walk every preceding sibling; keep going through attribute_item
-    // and interleaved comment nodes (tree-sitter-rust inserts
-    // `line_comment`/`block_comment` siblings for trailing `//` notes).
-    // Without this, a comment between `#[non_exhaustive]` and the enum
-    // silently defeats detection.
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        match s.kind() {
-            "attribute_item" => {
-                if let Ok(text) = s.utf8_text(source)
-                    && text.contains("non_exhaustive")
-                {
-                    return true;
-                }
-            }
-            "line_comment" | "block_comment" => {
-                // Interleaved comment — keep walking.
-            }
-            _ => break,
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    has_outer_attribute_path(item, source, &["non_exhaustive"])
 }
 
 /// Integer-primitive reprs that fix an enum's discriminant set as an FFI/ABI
@@ -359,6 +337,22 @@ mod tests {
         // Use an absolute path with no Cargo.toml ancestor so is_internal_crate
         // does not accidentally pick up the comply project's own Cargo.toml.
         crate::rules::test_helpers::run_rule(&Check, source, "/nonexistent_cargo_project/src/t.rs")
+    }
+
+    /// Issue #8435: a `#[serde(rename = "non_exhaustive")]` value is not the
+    /// `#[non_exhaustive]` attribute, so the enum is still missing it.
+    #[test]
+    fn flags_pub_enum_whose_rename_value_spells_non_exhaustive() {
+        let src = "#[derive(Deserialize)]\n#[serde(rename = \"non_exhaustive\")]\npub enum PoisonedKind { Alpha, Beta }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// A `cfg_attr`-applied `#[non_exhaustive]` is a real declaration: which
+    /// features a consumer enables is not decidable from this crate's source.
+    #[test]
+    fn allows_pub_enum_with_cfg_attr_applied_non_exhaustive() {
+        let src = "#[cfg_attr(not(feature = \"unstable\"), non_exhaustive)]\npub enum Kind { Alpha, Beta }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
