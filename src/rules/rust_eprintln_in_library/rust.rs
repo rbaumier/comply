@@ -142,10 +142,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    is_in_test_context, is_suppressed_by_clippy_allow, is_under_env_var_gate, is_under_if_guard,
-    is_under_tests_dir, trailing_path_segment,
+    is_library_code, is_suppressed_by_clippy_allow, is_under_env_var_gate, is_under_if_guard,
+    trailing_path_segment,
 };
-use std::path::Path;
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -202,49 +201,11 @@ impl AstCheck for Check {
         {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
-            return;
-        }
-        if ctx.project.in_mdbook_project(ctx.path) {
-            return;
-        }
-        if crate::rules::path_utils::is_rust_build_script(ctx.path) {
-            return;
-        }
-        if is_binary_file(ctx.path) {
-            return;
-        }
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.declares_binary() || m.declares_executable_at(ctx.path))
-        {
-            return;
-        }
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_build_codegen_crate())
-        {
-            return;
-        }
-        // A `proc-macro = true` crate runs at compile time during macro
-        // expansion: its `eprintln!` goes to the compiler's build-time stderr,
-        // not the shipped program's runtime stderr, and the macro is not
-        // callable at runtime. The "consumers can't capture it at runtime"
-        // premise is structurally inapplicable, so it is exempt.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_proc_macro())
-        {
-            return;
-        }
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_ffi_bridge_crate())
-        {
+        // Test code, mdBook examples, build scripts, build-time codegen and
+        // proc-macro crates, binary entry points, crates that declare a binary,
+        // and FFI bridge crates all fail this check: none of them is a library
+        // whose stderr a Rust consumer would want to capture.
+        if !is_library_code(node, source_bytes, ctx) {
             return;
         }
         if ctx
@@ -278,17 +239,6 @@ impl AstCheck for Check {
             Severity::Error,
         ));
     }
-}
-
-/// True if `path` is a binary entry point: `main.rs` at any directory
-/// level, or any file under a `bin/` directory.
-fn is_binary_file(path: &Path) -> bool {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str())
-        && name == "main.rs"
-    {
-        return true;
-    }
-    path.components().any(|c| c.as_os_str() == "bin")
 }
 
 /// True when the macro call is gated on a runtime opt-in the consumer
