@@ -1,6 +1,6 @@
 //! rust-serde-untagged-without-explicit-default backend.
 //!
-//! On every `enum_item`, check the preceding `attribute_item` siblings for
+//! On every `enum_item`, check the preceding attributes for
 //! `#[serde(untagged)]`. If found, walk each variant: for any field whose
 //! type is `Option<T>`, ensure the field has its own `#[serde(default)]`
 //! attribute. Flag the field otherwise.
@@ -19,6 +19,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::has_attribute_option;
 
 const KINDS: &[&str] = &["enum_item"];
 
@@ -207,31 +208,11 @@ fn is_option_type(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn has_serde_untagged(item: tree_sitter::Node, source: &[u8]) -> bool {
-    each_attribute(item, source, |text| text.contains("untagged"))
+    has_attribute_option(item, source, "serde", "untagged")
 }
 
 fn has_serde_default(item: tree_sitter::Node, source: &[u8]) -> bool {
-    each_attribute(item, source, |text| text.contains("default"))
-}
-
-/// Iterate the `attribute_item` nodes preceding `item` and call `pred` on
-/// each text. Returns true on first match. Stops at the first non-attribute
-/// sibling, mirroring `has_test_attribute` from rust_helpers.
-fn each_attribute(item: tree_sitter::Node, source: &[u8], pred: impl Fn(&str) -> bool) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && text.contains("serde")
-            && pred(text)
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    has_attribute_option(item, source, "serde", "default")
 }
 
 #[cfg(test)]
@@ -255,6 +236,46 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Issue #8435: `#[serde(rename = "default_value")]` spells `default` as a
+    /// *value*, not as an option, so the field still needs its own default.
+    #[test]
+    fn flags_option_field_whose_rename_value_spells_default() {
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PoisonedFieldMessage {
+    First {
+        #[serde(rename = "default_value")]
+        alpha: Option<String>,
+        #[serde(rename = "default_value")]
+        beta: Option<String>,
+    },
+    Second {
+        #[serde(rename = "default_value")]
+        gamma: Option<String>,
+        #[serde(rename = "default_value")]
+        delta: Option<String>,
+    },
+}
+"#;
+        assert_eq!(run_on(src).len(), 4);
+    }
+
+    /// Issue #8435: an externally-tagged enum whose rename value happens to be
+    /// the word `untagged` is not untagged, so nothing is flagged.
+    #[test]
+    fn allows_enum_whose_rename_value_spells_untagged() {
+        let src = r#"
+#[derive(Deserialize)]
+#[serde(rename = "untagged")]
+pub enum PoisonedContainerMessage {
+    First { alpha: Option<String>, beta: Option<String> },
+    Second { gamma: Option<String>, delta: Option<String> },
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]

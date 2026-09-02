@@ -15,22 +15,9 @@ const MAX_FIELDS: usize = 15;
 /// True when the struct derives a clap CLI parser/args (`#[derive(... Parser ...)]`
 /// or `#[derive(... Args ...)]`). Such a struct is a flat CLI interface: each
 /// field is a command-line flag, so a large field count is idiomatic, not a
-/// decomposable god object. Attributes are preceding `attribute_item` siblings.
+/// decomposable god object.
 fn derives_clap_cli(item: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = item.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if let Ok(text) = s.utf8_text(source)
-            && text.contains("derive")
-            && (text.contains("Parser") || text.contains("Args"))
-        {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
+    crate::rules::rust_helpers::derives_any(item, source, &["Parser", "Args"])
 }
 
 /// True when the file declares an inherent `impl <type_name> { ... }` block (no
@@ -158,6 +145,30 @@ mod tests {
     #[test]
     fn allows_15_fields() {
         assert!(run(&make_struct(15)).is_empty());
+    }
+
+    /// Issue #8435: the clap exemption reads the parsed derive list, so a doc
+    /// string naming `Parser` no longer exempts a genuine god object.
+    #[test]
+    fn flags_wide_struct_whose_doc_string_spells_parser() {
+        let src = format!(
+            "#[doc = \"derive from Parser output\"]\n{}",
+            make_struct(24)
+        );
+        assert_eq!(run(&src).len(), 1);
+    }
+
+    /// A real clap derive still exempts, including through a `cfg_attr`.
+    #[test]
+    fn allows_wide_struct_with_a_real_clap_derive() {
+        for attribute in [
+            "#[derive(Parser)]",
+            "#[derive(Debug, Args)]",
+            "#[cfg_attr(feature = \"cli\", derive(Parser))]",
+        ] {
+            let src = format!("{attribute}\n{}", make_struct(24));
+            assert!(run(&src).is_empty(), "expected no diagnostic for {attribute}");
+        }
     }
 
     #[test]
