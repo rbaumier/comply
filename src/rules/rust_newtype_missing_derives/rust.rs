@@ -19,10 +19,12 @@
 //! `Eq` — `Hash` without `Eq` breaks the `a == b => hash(a) == hash(b)` contract
 //! — and never triggers the diagnostic on its own.
 //!
-//! The struct must be visible outside its own module (`pub` or `pub(crate)`,
-//! via [`is_pub_including_restricted`]): a module-private newtype is fixed in
-//! place by whoever needs the trait, whereas a `pub` one can only be fixed here
-//! (the orphan rule bars a downstream `impl Clone for upstream::Id`).
+//! The struct must be bare `pub` (via [`is_pub`]): a `pub` newtype can only be
+//! fixed here (the orphan rule bars a downstream `impl Clone for upstream::Id`),
+//! whereas a private or `pub(crate)` one is fixed in place by whoever needs the
+//! trait. Crate-internal marker newtypes over a primitive (`pub(crate)
+//! Hasher(u64)`) are the noisiest shape the rule can produce, so restricted
+//! visibility is out of scope.
 //!
 //! Exempt shapes, each one a place where "add the derives" is wrong or would not
 //! compile:
@@ -39,8 +41,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    any_outer_attribute, collect_top_level_derives, file_impls_trait_for_type, has_attribute_option,
-    has_test_attribute, is_in_test_context, is_pub_including_restricted,
+    any_outer_attribute, collect_top_level_derives, file_impls_trait_for_type,
+    has_attribute_option, has_test_attribute, is_in_test_context, is_pub,
 };
 
 /// Types whose `Eq`-ness is known here: stdlib leaves that implement `Eq`, and
@@ -49,13 +51,52 @@ use crate::rules::rust_helpers::{
 /// `Vec<String>` and `Cow<'a, str>` qualify while `Gitignore` does not.
 const PROVABLY_EQ_TYPES: &[&str] = &[
     // Leaves.
-    "bool", "char", "str", "String", "Path", "PathBuf", "OsStr", "OsString", "u8", "u16", "u32",
-    "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "Duration", "IpAddr",
-    "Ipv4Addr", "Ipv6Addr", "SocketAddr", "TypeId", "Uuid", "NonZeroU8", "NonZeroU16",
-    "NonZeroU32", "NonZeroU64", "NonZeroUsize",
+    "bool",
+    "char",
+    "str",
+    "String",
+    "Path",
+    "PathBuf",
+    "OsStr",
+    "OsString",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "Duration",
+    "IpAddr",
+    "Ipv4Addr",
+    "Ipv6Addr",
+    "SocketAddr",
+    "TypeId",
+    "Uuid",
+    "NonZeroU8",
+    "NonZeroU16",
+    "NonZeroU32",
+    "NonZeroU64",
+    "NonZeroUsize",
     // Containers, `Eq` when their arguments are.
-    "Vec", "VecDeque", "Box", "Option", "Result", "Rc", "Arc", "Cow", "BTreeMap", "BTreeSet",
-    "HashMap", "HashSet", "Reverse",
+    "Vec",
+    "VecDeque",
+    "Box",
+    "Option",
+    "Result",
+    "Rc",
+    "Arc",
+    "Cow",
+    "BTreeMap",
+    "BTreeSet",
+    "HashMap",
+    "HashSet",
+    "Reverse",
 ];
 
 /// Traits whose absence makes the newtype unusable to a caller. `Hash` is
@@ -68,7 +109,7 @@ crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, 
     // `is_in_test_context` reads the ANCESTORS' attributes, so a `#[cfg(test)]`
     // written on this very struct needs its own check.
     if is_in_test_context(node, source) || has_test_attribute(node, source) { return; }
-    if !is_pub_including_restricted(node, source) { return; }
+    if !is_pub(node, source) { return; }
     // A generic newtype would need `T: Clone`-style bounds on every derive, a
     // constraint the author may have declined on purpose.
     if node.child_by_field_name("type_parameters").is_some() { return; }
@@ -145,9 +186,7 @@ fn type_is_provably_eq(type_text: &str) -> bool {
         .filter(|segment| !segment.starts_with('\''))
         .filter(|segment| !segment.chars().all(|c| c.is_ascii_digit()))
         .filter(|segment| !matches!(*segment, "const" | "mut"))
-        .all(|segment| {
-            PROVABLY_EQ_TYPES.contains(&segment.rsplit("::").next().unwrap_or(segment))
-        })
+        .all(|segment| PROVABLY_EQ_TYPES.contains(&segment.rsplit("::").next().unwrap_or(segment)))
 }
 
 /// True for the FFI-handle shape: `#[repr(transparent)]` over a raw pointer.
@@ -228,7 +267,11 @@ mod tests {
     fn flags_bare_newtype() {
         let found = run("pub struct UserId(u64);");
         assert_eq!(found.len(), 1);
-        assert!(found[0].message.contains("Clone, PartialEq, Eq"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("Clone, PartialEq, Eq"),
+            "{}",
+            found[0].message
+        );
     }
 
     #[test]
@@ -237,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn flags_pub_crate_newtype() {
-        assert_eq!(run("pub(crate) struct Token(String);").len(), 1);
+    fn allows_pub_crate_newtype() {
+        assert!(run("pub(crate) struct Hasher(u64);").is_empty());
     }
 
     #[test]
@@ -250,7 +293,11 @@ mod tests {
     fn mentions_hash_only_when_eq_is_derived() {
         let found = run("#[derive(PartialEq, Eq)]\npub struct Id(u64);");
         assert_eq!(found.len(), 1);
-        assert!(found[0].message.contains("Clone, Hash"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("Clone, Hash"),
+            "{}",
+            found[0].message
+        );
     }
 
     #[test]
@@ -312,7 +359,8 @@ mod tests {
 
     #[test]
     fn allows_newtype_with_manual_clone_impl() {
-        let src = "pub struct Id(u64);\nimpl Clone for Id { fn clone(&self) -> Self { Self(self.0) } }";
+        let src =
+            "pub struct Id(u64);\nimpl Clone for Id { fn clone(&self) -> Self { Self(self.0) } }";
         assert!(run(src).is_empty());
     }
 
@@ -334,7 +382,8 @@ mod tests {
 
     #[test]
     fn allows_conditional_derive() {
-        let src = "#[cfg_attr(feature = \"extra\", derive(Clone, PartialEq, Eq))]\npub struct Id(u64);";
+        let src =
+            "#[cfg_attr(feature = \"extra\", derive(Clone, PartialEq, Eq))]\npub struct Id(u64);";
         assert!(run(src).is_empty());
     }
 
@@ -362,7 +411,11 @@ mod tests {
     fn flags_newtype_over_a_container_of_known_eq_types() {
         let found = run("pub struct Ids(Vec<u64>);");
         assert_eq!(found.len(), 1);
-        assert!(found[0].message.contains("Clone, PartialEq, Eq"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("Clone, PartialEq, Eq"),
+            "{}",
+            found[0].message
+        );
     }
 
     #[test]
@@ -372,6 +425,9 @@ mod tests {
 
     #[test]
     fn allows_path_qualified_derives() {
-        assert!(run("#[derive(core::clone::Clone, PartialEq, Eq, Hash)]\npub struct Id(u64);").is_empty());
+        assert!(
+            run("#[derive(core::clone::Clone, PartialEq, Eq, Hash)]\npub struct Id(u64);")
+                .is_empty()
+        );
     }
 }

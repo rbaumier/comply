@@ -31,8 +31,10 @@
 //! foreign declaration, whose name comes from a C header and whose `Debug`
 //! prints addresses), a struct with a hand-written `impl Debug`/`impl Display`
 //! for it in the same file (the author already decided how this type renders),
-//! a name ending in `Error`/`Kind`/`Type` (a classifier, not a carrier), a unit
-//! struct, and test code. Enums are out of scope — the rule only visits
+//! a name ending in `Error`/`Kind`/`Type` (a classifier, not a carrier), a name
+//! starting with `Encapsulated`/`Hashed`/`Encrypted`/`Masked`/`Redacted`/`Public`
+//! (a value derived from the secret that is safe to show — HPKE's
+//! `EncapsulatedSecret` travels in the clear), a unit struct, and test code. Enums are out of scope — the rule only visits
 //! `struct_item`, so `enum TokenKind` is never read.
 //!
 //! The diagnostic is anchored on the offending `#[derive(…)]` attribute, one per
@@ -75,6 +77,18 @@ const SECRET_NAME_PHRASES: &[&[&str]] = &[
 /// carrier: `TokenError`, `CredentialKind`, `SecretType` hold no secret, they
 /// name one.
 const CLASSIFIER_SUFFIXES: &[&str] = &["error", "kind", "type"];
+
+/// Leading tokens that mark a value derived from the secret and safe to print:
+/// the ciphertext, the hash, a masked rendering, or a value that is public by
+/// construction (HPKE's `EncapsulatedSecret` is sent in the clear).
+const SAFE_DERIVATION_PREFIXES: &[&str] = &[
+    "encapsulated",
+    "hashed",
+    "encrypted",
+    "masked",
+    "redacted",
+    "public",
+];
 
 /// Trailing field-name words that name something *about* a credential rather
 /// than the credential: a locator (`token_url`, `key_path`, `secret_name`), an
@@ -123,18 +137,8 @@ const SECRET_FIELD_WORDS: &[&str] = &[
 /// domain type of the crate's own) whatever its own `Debug` decides — if that
 /// type is itself a secret carrier, the rule fires at *its* declaration.
 const LEAKING_VALUE_TYPES: &[&str] = &[
-    "String",
-    "str",
-    "OsString",
-    "OsStr",
-    "CString",
-    "CStr",
-    "PathBuf",
-    "Path",
-    "Bytes",
-    "BytesMut",
-    "Vec",
-    "VecDeque",
+    "String", "str", "OsString", "OsStr", "CString", "CStr", "PathBuf", "Path", "Bytes",
+    "BytesMut", "Vec", "VecDeque",
 ];
 
 /// Containers that print exactly what they hold, so the answer for them is
@@ -352,6 +356,12 @@ fn name_carries_secret(name: &str) -> bool {
     {
         return false;
     }
+    if tokens
+        .first()
+        .is_some_and(|first| SAFE_DERIVATION_PREFIXES.contains(&first.as_str()))
+    {
+        return false;
+    }
     SECRET_NAME_PHRASES
         .iter()
         .any(|phrase| tokens_contain_phrase(&tokens, phrase))
@@ -453,7 +463,8 @@ mod tests {
 
     #[test]
     fn flags_named_secret_struct_deriving_debug() {
-        let src = "#[derive(Debug, Clone)]\nstruct Credentials { username: String, password: String }";
+        let src =
+            "#[derive(Debug, Clone)]\nstruct Credentials { username: String, password: String }";
         assert_eq!(run(src).len(), 1);
     }
 
@@ -509,6 +520,16 @@ mod tests {
     fn allows_optional_secret_box_field() {
         let src = "#[derive(Debug)]\nstruct Credentials { password: Option<SecretBox<String>> }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_encapsulated_secret_sent_in_the_clear() {
+        assert!(run("#[derive(Debug)]\npub struct EncapsulatedSecret(pub Vec<u8>);").is_empty());
+    }
+
+    #[test]
+    fn allows_hashed_password() {
+        assert!(run("#[derive(Debug, Clone)]\npub struct HashedPassword(String);").is_empty());
     }
 
     #[test]
@@ -670,12 +691,18 @@ impl std::fmt::Debug for ApiKey {
 
     #[test]
     fn flags_byte_vector_secret() {
-        assert_eq!(run("#[derive(Debug)]\nstruct PrivateKey(Vec<u8>);").len(), 1);
+        assert_eq!(
+            run("#[derive(Debug)]\nstruct PrivateKey(Vec<u8>);").len(),
+            1
+        );
     }
 
     #[test]
     fn flags_byte_array_secret() {
-        assert_eq!(run("#[derive(Debug)]\nstruct SecretKey([u8; 32]);").len(), 1);
+        assert_eq!(
+            run("#[derive(Debug)]\nstruct SecretKey([u8; 32]);").len(),
+            1
+        );
     }
 
     #[test]
