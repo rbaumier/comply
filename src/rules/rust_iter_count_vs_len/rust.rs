@@ -58,9 +58,12 @@ impl AstCheck for Check {
         if !receiver_is_confirmable_collection(collection, source) {
             return;
         }
+        // Anchor on the `count` name, not on `node`: a `call_expression` span
+        // starts at the head of the receiver chain, so a multi-line chain would
+        // report a line that does not hold the `.count` the message names.
         diagnostics.push(Diagnostic::at_node(
             std::sync::Arc::clone(&ctx.path_arc),
-            &node,
+            &field,
             "rust-iter-count-vs-len",
             "`.iter().count()` walks the whole collection. Use `.len()` \
              directly on the collection (O(1) vs O(n))."
@@ -173,6 +176,24 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn anchors_on_the_count_of_a_multi_line_chain() {
+        // Regression for rbaumier/comply#8432 — the enclosing `call_expression`
+        // starts at `items`, so the diagnostic used to land on 2:5, a line that
+        // holds no `.count`.
+        let source = r#"pub fn c(items: &[u32]) -> usize {
+    items
+        .iter()
+        .count()
+}
+"#;
+        let diags = run_on(source);
+        assert_eq!(diags.len(), 1);
+        assert_eq!((diags[0].line, diags[0].column), (4, 10));
+        let (offset, len) = diags[0].span.expect("the anchor carries the method-name span");
+        assert_eq!(&source[offset..offset + len], "count");
     }
 
     #[test]

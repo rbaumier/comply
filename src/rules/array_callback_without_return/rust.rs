@@ -25,21 +25,24 @@ const ITERATOR_METHODS: &[&str] = &[
     "filter_map",
 ];
 
-fn is_iterator_method_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+/// The method-name node of `node` when `node` is a `<recv>.<iterator method>(…)`
+/// call, else `None`. The node — not just a yes/no — because it is where the
+/// diagnostic is anchored: the `call_expression` itself starts at the head of
+/// the receiver chain, which in a multi-line chain is a different line.
+fn iterator_method_field<'t>(
+    node: tree_sitter::Node<'t>,
+    source: &[u8],
+) -> Option<tree_sitter::Node<'t>> {
     if node.kind() != "call_expression" {
-        return false;
+        return None;
     }
-    let Some(func) = node.child_by_field_name("function") else {
-        return false;
-    };
+    let func = node.child_by_field_name("function")?;
     if func.kind() != "field_expression" {
-        return false;
+        return None;
     }
-    let Some(field) = func.child_by_field_name("field") else {
-        return false;
-    };
+    let field = func.child_by_field_name("field")?;
     let name = field.utf8_text(source).unwrap_or("");
-    ITERATOR_METHODS.contains(&name)
+    ITERATOR_METHODS.contains(&name).then_some(field)
 }
 
 /// True when the closure body block produces a value: it ends in a tail
@@ -217,9 +220,9 @@ fn has_return(node: tree_sitter::Node) -> bool {
 }
 
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
-    if !is_iterator_method_call(node, source) {
+    let Some(method_field) = iterator_method_field(node, source) else {
         return;
-    }
+    };
 
     let Some(args) = node.child_by_field_name("arguments") else { return };
     let Some(callback) = args.named_child(0) else { return };
@@ -250,16 +253,16 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     }
 
     if !block_returns_value(body) && !has_return(body) {
-        let pos = node.start_position();
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "array-callback-without-return".into(),
-            message: "Iterator callback with block body but no return value.".into(),
-            severity: Severity::Error,
-            span: None,
-        });
+        // Anchor on the adapter name, not on `node`: two offending adapters in
+        // one chain share the chain head, so anchoring there renders one
+        // finding twice at one position.
+        diagnostics.push(Diagnostic::at_node(
+            std::sync::Arc::clone(&ctx.path_arc),
+            &method_field,
+            "array-callback-without-return",
+            "Iterator callback with block body but no return value.".into(),
+            Severity::Error,
+        ));
     }
 }
 
@@ -284,6 +287,35 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn anchors_each_adapter_of_a_multi_line_chain_on_its_own_method_name() {
+        // Regression for rbaumier/comply#8432 — the enclosing `call_expression`
+        // starts at `items`, so `.map` and `.filter` used to share position
+        // 2:5, a line holding neither call.
+        let source = r#"pub fn a(items: &[u32]) -> Vec<u32> {
+    items
+        .iter()
+        .map(|x| { let _y = x + 1; })
+        .filter(|x| { let _z = x; })
+        .collect()
+}
+"#;
+        let diags = run_on(source);
+        let mut positions: Vec<(usize, usize)> =
+            diags.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        assert_eq!(positions, vec![(4, 10), (5, 10)]);
+        let mut names: Vec<&str> = diags
+            .iter()
+            .map(|d| {
+                let (offset, len) = d.span.expect("the anchor carries the method-name span");
+                &source[offset..offset + len]
+            })
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["filter", "map"]);
     }
 
     #[test]
