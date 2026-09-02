@@ -52,4 +52,19 @@ mod tests {
         let source = "<template>\n  <th scope=\"col\">Name</th>\n</template>";
         assert!(run(source).is_empty());
     }
+
+    #[test]
+    fn allows_slot_scope() {
+        // #8424: `slot-scope` is Vue 2's scoped-slot syntax, not the HTML
+        // `scope` attribute. 69 occurrences on element-plus.
+        let source = "<template>\n  <td slot-scope=\"props\">x</td>\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn flags_bound_scope_on_td() {
+        // `:scope` still puts a `scope` attribute on a non-`<th>` element.
+        let source = "<template>\n  <td :scope=\"s\">x</td>\n</template>";
+        assert_eq!(run(source).len(), 1);
+    }
 }

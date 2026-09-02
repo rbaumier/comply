@@ -112,4 +112,22 @@ mod tests {
         let source = "<template>\n  <input autocomplete=\"email\" />\n</template>";
         assert!(run(source).is_empty());
     }
+
+    #[test]
+    fn skips_aria_autocomplete() {
+        // #8424: `aria-autocomplete` takes ARIA values (`list`, `inline`…), not
+        // HTML autofill tokens, and its bound form carries an expression.
+        let source = "<template>\n  <input :aria-autocomplete=\"mode\" />\n</template>";
+        assert!(run(source).is_empty());
+        let source = "<template>\n  <input aria-autocomplete=\"list\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
+
+    #[test]
+    fn skips_bound_autocomplete() {
+        // `:autocomplete="mode"` carries a JS expression; `mode` is not the
+        // value the browser will see, so it must not be validated as one.
+        let source = "<template>\n  <input :autocomplete=\"mode\" />\n</template>";
+        assert!(run(source).is_empty());
+    }
 }
