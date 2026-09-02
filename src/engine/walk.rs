@@ -65,38 +65,22 @@ pub(super) fn run_multiplexed_walk(
         v.clear();
     }
 
-    // Stateless rules with prefilters can use node-level filtering:
-    // skip visit_node when the node text doesn't contain the prefilter.
-    let node_pf: Vec<bool> = (0..n)
-        .map(|i| {
-            worker.enabled[i]
-                && worker.states[i].is_none()
-                && ld.multiplexed_prefilters[i].is_some()
-        })
-        .collect();
-
     // Split the borrow so the walker closure can mutate states/diags
     // without re-borrowing `worker`.
     let enabled = &worker.enabled;
     let states = &mut worker.states;
     let per_rule_diags = &mut worker.per_rule_diags;
-    let src_bytes = source.as_bytes();
 
     walk_tree_filtered(tree, &ld.interesting, |node| {
         let indices = &ld.dispatch[node.kind_id() as usize];
-        let range = node.byte_range();
-        let node_hay = &src_bytes[range];
         for &i in indices {
+            // The prefilter was already answered once for this file, above.
+            // Re-asking it per node would read it as a claim about the visited
+            // node's own text, which is not what a rule declares: the literal
+            // that makes a rule relevant often sits in a *sibling* of the
+            // anchor node (a `#[derive(…)]` before a `struct_item`, the
+            // `with: key:` pair beside a `uses:` one).
             if !enabled[i] {
-                continue;
-            }
-            if node_pf[i]
-                && !ld.multiplexed_prefilters[i]
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .any(|f| f.find(node_hay).is_some())
-            {
                 continue;
             }
             let (_, check) = &ld.multiplexed[i];
