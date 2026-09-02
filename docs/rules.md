@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2061 rules across 152 categories.
+2060 rules across 152 categories.
 
 ## Categories
 
@@ -102,7 +102,7 @@
 - [react-native](#react-native) (17 rules)
 - [react-native > security](#react-native-security) (1 rules)
 - [regex](#regex) (33 rules)
-- [rust](#rust) (80 rules)
+- [rust](#rust) (79 rules)
 - [rust > api](#rust-api) (3 rules)
 - [rust > architecture](#rust-architecture) (1 rules)
 - [rust > async](#rust-async) (1 rules)
@@ -1142,7 +1142,7 @@
 | `no-delete` | Disallow `delete` except on a local copy the function solely owns — removing a key mutates the object in place. | Build a new object without the property, e.g. `const { [key]: _, ...rest } = obj;` or use `Object.fromEntries(Object.entries(obj).filter(...))`. |
 | `no-let` | Disallow `let` declarations — prefer `const` for immutable bindings. | Replace `let` with `const`. If you truly need to reassign, restructure the code to use a new binding, `reduce`, or a pure function instead. |
 | `no-mutating-methods` | Disallow array mutating methods (push, pop, shift, unshift, splice, sort, reverse, fill, copyWithin). | Use non-mutating alternatives: spread (`[...arr, x]`), `slice`, `toSorted`, `toReversed`, `toSpliced`, `filter`, `map`, or `concat`. |
-| `no-mutation` | Disallow assigning to properties of a `const`-bound value — writing to its fields still mutates shared state. | Build a new object/array with the change (spread or structural copy) and assign it to a new binding, or lift the change up to the producer. |
+| `no-mutation` | Disallow calling an in-place mutating method (`push`, `sort`, `Object.assign`, …) on a `const`-bound value. | Use the non-mutating counterpart (`[...arr, x]`, `toSorted()`, `{ ...a, ...b }`) and bind the result, or lift the change up to the producer. |
 | `no-promise-reject` | `Promise.reject()` makes error handling harder — prefer returning error values or throwing typed errors. | Return a Result type, throw a typed error, or use `Promise.resolve()` with an error discriminant. |
 | `no-try-statements` | `try` blocks obscure error flow — prefer Result types or explicit error handling. | Use a Result/Either type, or a wrapper function that returns `{ data, error }` tuples instead of try/catch. |
 | `no-while-loop` | Bans convertible while/do-while loops. | Use recursion, Array methods, or generators instead. |
@@ -1897,7 +1897,6 @@
 | `rust-no-println-in-async` | `println!` / `eprintln!` inside async code blocks the runtime. | Replace `println!("…")` / `eprintln!("…")` with a `tracing` macro (`tracing::info!`, `tracing::warn!`, `tracing::error!`). `println!` takes a blocking stdout lock — inside an async task that stalls the reactor and interleaves output from concurrent tasks. Tracing macros are non-blocking and respect subscriber filters/spans. |
 | `rust-no-pub-use-glob` | `pub use foo::*` re-exports invisibly. | List the re-exports explicitly: `pub use foo::{Bar, Baz};`. Glob re-exports turn every change in `foo` into a silent change to your public API. |
 | `rust-no-static-mut` | `static mut` is deprecated and unsafe by design. | Replace `static mut FOO: T = ...` with a safe primitive: `OnceLock<T>`/`LazyLock<T>` for initialize-once values, `Mutex<T>`/`RwLock<T>` for shared mutable state, or `AtomicU64`/`AtomicBool`/etc for primitive counters and flags. |
-| `rust-no-todo-macro` | No `todo!()` macro invocations in production code. | Replace `todo!()` with the actual implementation, or with a typed `Result` error if the path is intentionally unsupported. `todo!()` is a placeholder marker — when it ships it turns into a runtime panic. Tests are exempted (panicking inside a `#[test]` is a clean failure mode). |
 | `rust-no-unwrap` | No `.unwrap()` / `.expect()` in production code. | Handle the None / Err case explicitly. Use `?` with proper error propagation, or `unwrap_or_else` with a meaningful fallback. `unwrap()` turns runtime conditions into crashes. Tests are exempted — panicking inside a `#[test]` is a clean failure. |
 | `rust-no-unwrap-in-from-impl` | `From::from` must be infallible — no `.unwrap()` / `.expect()`. | Switch the trait to `TryFrom`. Its associated `Error` type lets the caller pattern-match on the failure mode instead of panicking. `From` is reserved for total conversions; if you can write `unwrap()`, you don't have a total conversion. |
 | `rust-ord-partial-ord-inconsistent` | `Ord` and `PartialOrd` are not implemented consistently (one derived, the other manual). | If both traits are present, the contract requires `partial_cmp(a, b) == Some(cmp(a, b))`. Mixing a derived `Ord` with a manual `PartialOrd` (or vice versa) typically desyncs them. Either derive both or implement both manually with care to keep them aligned. |
