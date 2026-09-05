@@ -36,15 +36,15 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Skip getters keyed by a well-known protocol symbol (e.g.
-            // `get [Symbol.toStringTag]()`, `get [Symbol.iterator]()`). These
-            // must live on the prototype to satisfy the protocol contract
+            // Skip members keyed by a well-known protocol symbol, in any member
+            // form: method (`[Symbol.iterator]()`), generator
+            // (`async *[Symbol.asyncIterator]()`), getter
+            // (`get [Symbol.toStringTag]()`) or setter. These must live on the
+            // prototype to satisfy the protocol contract
             // (`Object.prototype.toString`, the iteration protocol, …); making
             // them `static` puts the behavior on the constructor instead and
             // breaks the semantics, so absence of `this` is not a smell.
-            if method_def.kind == oxc_ast::ast::MethodDefinitionKind::Get
-                && is_symbol_member_key(&method_def.key)
-            {
+            if is_symbol_member_key(&method_def.key) {
                 continue;
             }
 
@@ -367,6 +367,24 @@ mod tests {
     #[test]
     fn allows_symbol_iterator_getter_without_this() {
         let src = "class Foo { get [Symbol.iterator]() { return function* () {}; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_symbol_iterator_method_without_this() {
+        // Issue #8152: the iterable protocol is written as a plain method far more
+        // often than as a getter. `static [Symbol.iterator]()` makes the class
+        // iterable instead of its instances, so the remediation is wrong here for
+        // exactly the reason it is wrong on the getter form.
+        let src = "class Foo { [Symbol.iterator]() { return [][Symbol.iterator](); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_async_generator_symbol_async_iterator_method() {
+        // Issue #8152: an async generator keyed by `Symbol.asyncIterator` is a
+        // `MethodDefinition` like any other and must be exempt too.
+        let src = "class Foo { async *[Symbol.asyncIterator]() { yield 1; } }";
         assert!(run_on(src).is_empty());
     }
 
