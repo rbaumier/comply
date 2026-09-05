@@ -3,8 +3,9 @@
 //! A default import of a module whose source specifier ends in `.json` must
 //! carry `with { type: "json" }` — but only where the runtime actually requires
 //! it. The attribute is enforced by TypeScript solely under Node's ESM module
-//! system (`module`/`moduleResolution` `node16`/`node18`/`nodenext`) with an ESM
-//! package scope (`"type":"module"`), so the rule fires only there
+//! system (`module`/`moduleResolution` `node16`/`node18`/`nodenext`) for a file
+//! that is itself ESM — an `.mts`/`.mjs` extension, or an ESM package scope
+//! (`"type":"module"`) — so the rule fires only there
 //! ([`crate::project::ProjectCtx::requires_node_esm_import_attributes`]). Under
 //! bundler or `esnext` resolution, classic Node resolution, or CommonJS the JSON
 //! import resolves without the attribute, so the rule stays silent.
@@ -82,7 +83,7 @@ impl OxcCheck for Check {
 
         // The `with { type: "json" }` attribute is required only under genuine
         // Node ESM (nearest tsconfig `module`/`moduleResolution`
-        // node16/node18/nodenext with an ESM package scope). Under
+        // node16/node18/nodenext, for a file Node reads as ESM). Under
         // bundler/`esnext` resolution, classic Node resolution, or CommonJS,
         // TypeScript resolves the JSON import without it.
         if !ctx.project.requires_node_esm_import_attributes(ctx.path) {
@@ -94,7 +95,7 @@ impl OxcCheck for Check {
         // needed. This reuses the shared bundler lever directly rather than
         // through `ProjectCtx::cached_bundler`: that per-directory cache is
         // shared with `file_extension_in_import`, whose closure is broader
-        // (bundler OR commonjs OR angular OR bundler-resolution); caching this
+        // (bundler dependency/config OR `moduleResolution:bundler`); caching this
         // narrower predicate under the same directory key would poison the other
         // rule's lookups.
         if crate::rules::file_extension_in_import::project_uses_bundler(ctx) {
@@ -512,6 +513,29 @@ import hoge from 'hoge.json' with {
         assert!(
             diags.is_empty(),
             "node16 with a CommonJS package scope compiles the JSON import to require(): {diags:?}"
+        );
+    }
+
+    // Node reads a file's own extension before its package scope, so an `.mts`
+    // file in that same CommonJS-scoped `node16` package is genuinely ESM — its
+    // JSON import does need the attribute.
+    #[test]
+    fn flags_json_import_in_mts_file_under_commonjs_scope_issue_7587() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"name":"pkg"}"#),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"module":"Node16","moduleResolution":"Node16"}}"#,
+                ),
+            ],
+            "src/app.mts",
+            "import data from './data.json';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an .mts file is ESM whatever the package scope says: {diags:?}"
         );
     }
 }

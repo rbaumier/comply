@@ -4814,12 +4814,23 @@ impl ProjectCtx {
         v
     }
 
-    /// Memoize a directory-invariant "does this project use a bundler?" probe.
-    /// The answer is identical for every file in the same directory (it depends
-    /// only on the manifest + bundler-config chain from that directory up to the
-    /// root), so a deep monorepo pays the stat-walk once per directory instead of
-    /// once per file. `compute` runs at most once per directory.
+    /// Memoize a "does this file's project resolve extensionless imports?" probe.
+    /// It reads the manifest + bundler-config + tsconfig chain from the file's
+    /// directory up to the root, so the answer is shared by every sibling file and
+    /// a deep monorepo pays the stat-walk once per directory instead of once per
+    /// file.
+    ///
+    /// The one thing that breaks that sharing is a file whose extension pins its
+    /// module format (see [`extension_pinned_module_format`]) — under Node's ESM
+    /// module system an `.mts` file and a `.ts` file in one directory genuinely
+    /// disagree. Such a file therefore neither reads nor writes the shared answer
+    /// and runs `compute` itself.
+    ///
+    /// [`extension_pinned_module_format`]: ProjectCtx::extension_pinned_module_format
     pub fn cached_bundler<F: FnOnce() -> bool>(&self, path: &Path, compute: F) -> bool {
+        if Self::extension_pinned_module_format(path).is_some() {
+            return compute();
+        }
         let key = path.parent().map(Path::to_path_buf).unwrap_or_default();
         if let Some(&v) = self.bundler_dir_cache.lock().unwrap().get(&key) {
             return v;
@@ -5016,27 +5027,23 @@ impl ProjectCtx {
     ///   `moduleResolution:node` is governed by that closer tsconfig even when a
     ///   farther-up `package.json` is ESM.
     ///
-    /// - **Node ESM module system** (see [`selects_node_esm_module_system`]):
-    ///   TypeScript/Node derive each file's module format from the nearest
-    ///   `package.json` `type` (marker `{"type":"module"}` manifests included; see
-    ///   [`nearest_package_type`]). Without `"type":"module"` the file is
-    ///   CommonJS; with it, ESM — so this returns true exactly when that manifest
-    ///   does not opt into ESM.
+    /// - **Node ESM module system** (`node16`/`node18`/`nodenext`): Node derives
+    ///   each file's module format from the file itself (see
+    ///   [`node_file_format`]). CommonJS files resolve via require(); ESM files do
+    ///   not — so this returns true exactly when the file's format is CommonJS.
     ///
     /// - **Silent tsconfig**: the nearest tsconfig sets neither `module` nor
     ///   `moduleResolution` — typically because both are inherited from a base
     ///   config that is unresolvable without installed deps (`extends` into
-    ///   `node_modules`). Node then decides the format from the same nearest
-    ///   `package.json` `type`, so this falls back to it identically to the
-    ///   Node-ESM case — CommonJS unless the manifest opts into ESM.
+    ///   `node_modules`). Node then decides the format the same way, so this falls
+    ///   back to [`node_file_format`] identically to the Node-ESM case.
     ///
     /// Any positive ESM tsconfig signal (e.g. `module:esnext`,
     /// `moduleResolution:bundler`) returns false — callers keep their default
     /// (ESM) behavior rather than silently assuming CommonJS. Also false when no
     /// tsconfig governs `path`.
     ///
-    /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
-    /// [`selects_node_esm_module_system`]: ProjectCtx::selects_node_esm_module_system
+    /// [`node_file_format`]: ProjectCtx::node_file_format
     pub fn is_commonjs_project(&self, path: &Path) -> bool {
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
@@ -5053,12 +5060,11 @@ impl ProjectCtx {
             // No classic/commonjs-emit signal. Under Node's ESM module system —
             // or when the tsconfig is entirely silent on module format (neither
             // `module` nor `moduleResolution` set, e.g. both inherited from a base
-            // config that is unresolvable without installed deps) —
-            // TypeScript/Node derive each file's module format from the nearest
-            // `package.json` `type`: without `"type":"module"` the file is
-            // CommonJS (require-based, so extensionless relative imports resolve);
-            // with it the file is ESM. Any other positive module signal
-            // (e.g. `esnext`, `bundler`) keeps the ESM default.
+            // config that is unresolvable without installed deps) — Node derives
+            // each file's module format from the file itself: a CommonJS file is
+            // require-based, so its extensionless relative imports resolve. Any
+            // other positive module signal (e.g. `esnext`, `bundler`) keeps the
+            // ESM default.
             let module_is_node_esm = tsc
                 .module
                 .as_deref()
@@ -5069,7 +5075,7 @@ impl ProjectCtx {
                     .is_some_and(Self::selects_node_esm_module_system);
             let tsconfig_is_silent = tsc.module.is_none() && tsc.module_resolution.is_none();
             if module_is_node_esm || tsconfig_is_silent {
-                return self.nearest_package_type(path) != ModuleType::Module;
+                return self.node_file_format(path) != ModuleType::Module;
             }
             return false;
         }
@@ -5101,18 +5107,17 @@ impl ProjectCtx {
     /// - the nearest tsconfig selects Node's ESM module system (see
     ///   [`selects_node_esm_module_system`]), directly or inherited through its
     ///   `extends` chain; and
-    /// - the file's package scope is ESM — the nearest `package.json` declares
-    ///   `"type":"module"` (see [`nearest_package_type`]). Under those module
-    ///   systems a file without that field is CommonJS, where the JSON import
-    ///   compiles to `require()` and needs no attribute.
+    /// - the file itself is ESM (see [`node_file_format`]). Under those module
+    ///   systems a CommonJS file's JSON import compiles to `require()` and needs
+    ///   no attribute.
     ///
     /// Under any other module system (`esnext`/bundler, classic `node`
     /// resolution, `commonjs`), TypeScript resolves the JSON import without the
     /// attribute, so this returns false. Defaults to false when no tsconfig
     /// governs `path`.
     ///
-    /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
     /// [`selects_node_esm_module_system`]: ProjectCtx::selects_node_esm_module_system
+    /// [`node_file_format`]: ProjectCtx::node_file_format
     pub fn requires_node_esm_import_attributes(&self, path: &Path) -> bool {
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
@@ -5125,34 +5130,62 @@ impl ProjectCtx {
                 .module_resolution
                 .as_deref()
                 .is_some_and(Self::selects_node_esm_module_system);
-        module_is_node_esm && self.nearest_package_type(path) == ModuleType::Module
+        module_is_node_esm && self.node_file_format(path) == ModuleType::Module
     }
 
     /// True when a tsconfig `module` / `moduleResolution` value selects Node's
     /// ESM module system — `node16`, `node18` (TypeScript 5.8's pinned
     /// counterpart to `nodenext`) or `nodenext`, case-insensitively. Under these,
-    /// and only these, each file's module format comes from its package scope
-    /// rather than from the compiler flag.
+    /// and only these, each file's module format comes from the file itself
+    /// rather than from the compiler flag (see [`node_file_format`]).
+    ///
+    /// [`node_file_format`]: ProjectCtx::node_file_format
     fn selects_node_esm_module_system(value: &str) -> bool {
         ["node16", "node18", "nodenext"]
             .iter()
             .any(|m| value.eq_ignore_ascii_case(m))
     }
 
-    /// The package-scope module type governing `path` under Node's ESM module
-    /// system: the `type` of the nearest enclosing `package.json`, counting
-    /// bare `{"type":"module"}` marker manifests (whose sole purpose is to flag
-    /// an ESM subtree, so they are authoritative here — unlike
-    /// [`nearest_package_json`], which walks past them to the nearest package
-    /// boundary). Mirrors Node's `LOOKUP_PACKAGE_SCOPE`: the closest manifest
-    /// decides, and a missing `type` field means CommonJS.
+    /// The module format Node assigns to the file at `path` under its ESM module
+    /// system, mirroring `ESM_FILE_FORMAT`: an extension that pins the format
+    /// wins, and every other extension defers to the package scope
+    /// ([`nearest_package_type`]).
     ///
-    /// This is the package-scope half of the format decision only; Node's
-    /// per-file `ESM_FILE_FORMAT` first honors explicit `.mts`/`.mjs` (ESM) and
-    /// `.cts`/`.cjs` (CommonJS) extensions, which callers do not yet apply.
+    /// Only meaningful when the tsconfig selects that module system — see
+    /// [`selects_node_esm_module_system`].
+    ///
+    /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
+    /// [`selects_node_esm_module_system`]: ProjectCtx::selects_node_esm_module_system
+    fn node_file_format(&self, path: &Path) -> ModuleType {
+        Self::extension_pinned_module_format(path)
+            .unwrap_or_else(|| self.nearest_package_type(path))
+    }
+
+    /// The module format a file's own extension pins under Node's
+    /// `ESM_FILE_FORMAT`, ahead of any package-scope lookup: `.mjs`/`.mts` are
+    /// ESM, `.cjs`/`.cts` are CommonJS. `None` for every other extension, whose
+    /// format comes from the package scope and is therefore shared by every
+    /// sibling file in the directory.
+    fn extension_pinned_module_format(path: &Path) -> Option<ModuleType> {
+        match path.extension().and_then(|e| e.to_str())? {
+            "mjs" | "mts" => Some(ModuleType::Module),
+            "cjs" | "cts" => Some(ModuleType::CommonJs),
+            _ => None,
+        }
+    }
+
+    /// The package-scope module type governing `path`: the `type` of the nearest
+    /// enclosing `package.json`, counting bare `{"type":"module"}` marker
+    /// manifests (whose sole purpose is to flag an ESM subtree, so they are
+    /// authoritative here — unlike [`nearest_package_json`], which walks past them
+    /// to the nearest package boundary). Mirrors Node's `LOOKUP_PACKAGE_SCOPE`:
+    /// the closest manifest decides, and a missing `type` field means CommonJS.
+    ///
+    /// This is the package-scope half of the format decision; go through
+    /// [`node_file_format`] to also honor a file's explicit-format extension.
     ///
     /// [`nearest_package_json`]: ProjectCtx::nearest_package_json
-    // TODO(#7587): honor `.mts`/`.mjs`/`.cts`/`.cjs` explicit-format extensions.
+    /// [`node_file_format`]: ProjectCtx::node_file_format
     fn nearest_package_type(&self, path: &Path) -> ModuleType {
         let Some(start_dir) = path.parent() else {
             return ModuleType::CommonJs;
