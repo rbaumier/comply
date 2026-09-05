@@ -38,7 +38,7 @@ impl OxcCheck for Check {
         }
         // Exempt a C-style for-loop index whose value the loop mutates via its
         // update expression (`for (let i = 0; …; i++)`) — `const` is invalid there.
-        if is_for_index_mutated_by_update(node, ctx, semantic) {
+        if is_for_index_mutated_by_update(node, semantic) {
             return;
         }
         // Exempt an uninitialised binding written from a nested function — a
@@ -120,12 +120,20 @@ fn crosses_function_boundary(
     false
 }
 
-/// True when `node` is the `init` of a `ForStatement` and one of its declared
-/// bindings is referenced in the loop's `update` expression — the variable must
-/// be reassignable, so `const` is not a valid alternative.
+/// True when `node` is the `init` of a `ForStatement` and the loop's `update`
+/// expression holds a write reference to one of its declared bindings — the
+/// binding has to be reassignable, and a C-style for header has no `const`
+/// spelling for it.
+///
+/// The write is located by resolving each declarator to its symbol and testing
+/// whether any of the symbol's write references falls inside the `update` span,
+/// so a member of the same name (`obj.i++`), the name inside a string literal
+/// and a shadowing binding in a nested function all fail to exempt the index.
+///
+/// A declaration is exempt as soon as *one* declarator qualifies: `let i = 0, j = 0`
+/// is a single statement, so `i` being the loop driver carries `j` with it.
 fn is_for_index_mutated_by_update<'a>(
     node: &oxc_semantic::AstNode<'a>,
-    ctx: &CheckCtx,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let AstKind::ForStatement(for_stmt) = semantic.nodes().parent_node(node.id()).kind() else {
@@ -140,37 +148,20 @@ fn is_for_index_mutated_by_update<'a>(
     let Some(update) = &for_stmt.update else {
         return false;
     };
-    let update = &ctx.source[update.span().start as usize..update.span().end as usize];
+    let update_span = update.span();
     init.declarations.iter().any(|declarator| {
-        let span = declarator.id.span();
-        let name = &ctx.source[span.start as usize..span.end as usize];
-        text_references_word(update, name)
+        let BindingPattern::BindingIdentifier(ident) = &declarator.id else {
+            return false;
+        };
+        let Some(symbol_id) = ident.symbol_id.get() else {
+            return false;
+        };
+        semantic.symbol_references(symbol_id).any(|reference| {
+            reference.flags().contains(ReferenceFlags::Write)
+                && update_span
+                    .contains_inclusive(semantic.nodes().get_node(reference.node_id()).kind().span())
+        })
     })
-}
-
-/// Whole-word match: true if `word` appears in `text` not surrounded by other
-/// identifier characters.
-fn text_references_word(text: &str, word: &str) -> bool {
-    if word.is_empty() {
-        return false;
-    }
-    let bytes = text.as_bytes();
-    let mut start = 0;
-    while let Some(pos) = text[start..].find(word) {
-        let abs = start + pos;
-        let before_ok = abs == 0 || !is_ident_byte(bytes[abs - 1]);
-        let after = abs + word.len();
-        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
-        if before_ok && after_ok {
-            return true;
-        }
-        start = abs + word.len();
-    }
-    false
-}
-
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'$'
 }
 
 #[cfg(test)]
@@ -264,6 +255,46 @@ mod tests {
     fn flags_for_loop_init_not_mutated_by_update() {
         // `i` is the loop driver but `j` is never mutated by the loop → `j` can be const.
         assert_eq!(run("for (let j = 0; cond; i++) { use(j); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_for_index_when_update_writes_a_property_of_the_same_name() {
+        // `obj.i` is a member, not the loop index — nothing writes `i`, so
+        // `const i = 0` is valid.
+        assert_eq!(run("for (let i = 0; cond; obj.i++) { use(i); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_for_index_named_only_inside_a_string_in_the_update() {
+        // `'i++'` is a string literal; the loop never writes `i`.
+        assert_eq!(run("for (let i = 0; cond; log('i++')) { use(i); }").len(), 1);
+    }
+
+    #[test]
+    fn flags_for_index_when_the_update_writes_a_shadowing_binding() {
+        // The `i++` inside the arrow writes the arrow's own `i`, so the loop
+        // leaves the index alone. Both declarations are flagged: the inner one
+        // is an ordinary reassigned `let`.
+        let src = "for (let i = 0; cond; shadow(() => {\n\
+                   let i = 0;\n\
+                   i++;\n\
+                   })) { use(i); }";
+        let mut lines: Vec<_> = run(src).iter().map(|d| d.line).collect();
+        lines.sort_unstable();
+        assert_eq!(lines, vec![1, 2]);
+    }
+
+    #[test]
+    fn flags_for_index_read_but_not_written_by_the_update() {
+        // A bare read mutates nothing, so the index can be `const`.
+        assert_eq!(run("for (let i = 0; cond; i) { use(i); }").len(), 1);
+    }
+
+    #[test]
+    fn ignores_for_init_when_one_of_several_declarators_is_mutated() {
+        // `j` alone would be convertible, but the declaration is a single
+        // statement: exempting `i` exempts it whole.
+        assert!(run("for (let i = 0, j = 0; cond; i++) { use(i, j); }").is_empty());
     }
 
     #[test]
