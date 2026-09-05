@@ -563,14 +563,29 @@ fn entry_with_filter(
 //    `console.error` are the deliberate stdout/stderr API, not stray debug
 //    logging. This matches how teams disable `no-console` for CLI packages.
 //
-// Stray `console.*` is still flagged everywhere stdout is not the product
-// (web bundles, libraries, server code without a `bin`).
+// A third drop is about the `console` member itself rather than the file: the
+// diagnostic survives only when the member is *invoked*. Reading the reference
+// (`const orig = console.warn`) or writing over it (`console.warn = jest.fn()`,
+// the test mock install/restore idiom) moves the function around without
+// writing anything, so there is no output to remove.
+//
+// Stray `console.*` calls are still flagged everywhere stdout is not the
+// product (web bundles, libraries, server code without a `bin`).
 
 struct NoConsoleFilter;
 
 impl PostFilter for NoConsoleFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
-        !is_browser_targeted(&diag.path, source)
+        if is_browser_targeted(&diag.path, source) {
+            return false;
+        }
+        let Some(src) = source else {
+            return true;
+        };
+        let Some(offset) = byte_offset(src, diag.line, diag.column) else {
+            return true;
+        };
+        console_member_at_offset_is_invoked(src, &diag.path, offset)
     }
 
     fn keep_with_project(
@@ -583,6 +598,90 @@ impl PostFilter for NoConsoleFilter {
             return false;
         }
         self.keep(diag, source)
+    }
+}
+
+/// Re-parse `src` and report whether the `console.<member>` expression covering
+/// byte `offset` (the position oxlint anchors a `no-console` diagnostic on — the
+/// `console` identifier) is invoked: it is the callee of a call
+/// (`console.log(x)`, `console['log'](x)`), the tag of a tagged template, or the
+/// root of a property chain that is (`console.log.apply(null, args)`).
+///
+/// Only an invocation writes to the console. The same member expression in any
+/// other role — assignment target (`console.warn = jest.fn()`), read into a
+/// binding (`const orig = console.warn`), argument — passes the function around
+/// without producing output, so nothing is there to remove. Returns `true` when
+/// no `console` member expression covers the offset, so an unresolved position
+/// keeps the diagnostic.
+fn console_member_at_offset_is_invoked(src: &str, path: &std::path::Path, offset: usize) -> bool {
+    use oxc_allocator::Allocator;
+    use oxc_parser::Parser;
+    use oxc_semantic::SemanticBuilder;
+    use oxc_span::GetSpan;
+
+    let allocator = Allocator::default();
+    let source_type = crate::oxc_helpers::source_type_for_path(path);
+    let parse_ret = Parser::new(&allocator, src, source_type).parse();
+    let semantic = SemanticBuilder::new().build(&parse_ret.program).semantic;
+
+    // The smallest `console.*` member expression covering the offset is the one
+    // oxlint flagged; in `console.log.apply(…)` the outer `.apply` access is not
+    // rooted on the `console` identifier, so the object filter already pins the
+    // inner one.
+    let offset = offset as u32;
+    let target = semantic
+        .nodes()
+        .iter()
+        .filter(|node| is_console_member_expression(node.kind()))
+        .filter(|node| {
+            let span = node.kind().span();
+            span.start <= offset && offset < span.end
+        })
+        .min_by_key(|node| node.kind().span().size());
+    let Some(target) = target else {
+        return true;
+    };
+    member_chain_is_invoked(target, &semantic)
+}
+
+/// True when `kind` is a member expression whose object is the `console`
+/// identifier — `console.warn` and `console['warn']` alike.
+fn is_console_member_expression(kind: crate::rules::backend::AstKind) -> bool {
+    use crate::rules::backend::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let object = match kind {
+        AstKind::StaticMemberExpression(member) => &member.object,
+        AstKind::ComputedMemberExpression(member) => &member.object,
+        _ => return false,
+    };
+    matches!(object, Expression::Identifier(ident) if ident.name == "console")
+}
+
+/// True when `member` — or the property-access chain rooted on it — is invoked.
+/// Walks up while each parent is a member expression reading the current node as
+/// its object (`console.log` → `console.log.apply`), then reports whether that
+/// top node sits in callee or tag position.
+fn member_chain_is_invoked(
+    member: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use crate::rules::backend::AstKind;
+    use oxc_span::GetSpan;
+
+    let nodes = semantic.nodes();
+    let mut current = member;
+    loop {
+        let span = current.kind().span();
+        let parent = nodes.parent_node(current.id());
+        match parent.kind() {
+            AstKind::CallExpression(call) => return call.callee.span() == span,
+            AstKind::TaggedTemplateExpression(tagged) => return tagged.tag.span() == span,
+            AstKind::StaticMemberExpression(outer) if outer.object.span() == span => {}
+            AstKind::ComputedMemberExpression(outer) if outer.object.span() == span => {}
+            _ => return false,
+        }
+        current = parent;
     }
 }
 
@@ -1407,6 +1506,68 @@ mod tests {
         // to browser-targeted.
         let src = "const msg = `migrated from \"vue\" to bun`;\nconsole.log(msg);\n";
         let d = diag("src/api/migrate.ts");
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    // ── console member not invoked (dropped) — issue #8141 ───────────────────
+
+    fn diag_at(path: &str, line: usize, column: usize) -> Diagnostic {
+        Diagnostic { line, column, ..diag(path) }
+    }
+
+    /// minisearch's `src/MiniSearch.test.js` mock idiom: capture the real
+    /// `console.warn`, install a spy, restore it afterwards.
+    const MOCK_INSTALL_SRC: &str = concat!(
+        "let original: typeof console.warn;\n",
+        "beforeEach(() => {\n",
+        "  original = console.warn;\n",
+        "  console.warn = jest.fn();\n",
+        "});\n",
+        "afterEach(() => {\n",
+        "  console.warn = original;\n",
+        "});\n",
+    );
+
+    #[test]
+    fn drops_console_warn_read_into_a_binding() {
+        let d = diag_at("src/index.test.ts", 3, 14);
+        assert!(!FILTER.keep(&d, Some(MOCK_INSTALL_SRC)));
+    }
+
+    #[test]
+    fn drops_console_warn_overwritten_by_a_mock() {
+        let d = diag_at("src/index.test.ts", 4, 3);
+        assert!(!FILTER.keep(&d, Some(MOCK_INSTALL_SRC)));
+    }
+
+    #[test]
+    fn drops_console_warn_restored_from_a_binding() {
+        let d = diag_at("src/index.test.ts", 7, 3);
+        assert!(!FILTER.keep(&d, Some(MOCK_INSTALL_SRC)));
+    }
+
+    #[test]
+    fn keeps_console_call_in_a_test_file() {
+        // Negative space: a stray call in a test file is still noise worth
+        // reporting — the discriminator is the call, not the path.
+        let src = "it(\"works\", () => {\n  console.log(\"x\");\n});\n";
+        let d = diag_at("src/index.test.ts", 2, 3);
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn keeps_computed_console_call() {
+        let src = "export function report(e) {\n  console['error'](e);\n}\n";
+        let d = diag_at("src/report.ts", 2, 3);
+        assert!(FILTER.keep(&d, Some(src)));
+    }
+
+    #[test]
+    fn keeps_console_method_invoked_through_a_property_chain() {
+        // `console.log.apply(...)` still writes output, so the chain root counts
+        // as invoked.
+        let src = "export function report(args) {\n  console.log.apply(null, args);\n}\n";
+        let d = diag_at("src/report.ts", 2, 3);
         assert!(FILTER.keep(&d, Some(src)));
     }
 
