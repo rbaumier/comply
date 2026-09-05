@@ -104,6 +104,28 @@ fn f() {}";
         assert_eq!(run(src).len(), 1);
     }
 
+    // A column of trailing field labels is one label per line, each scoped to
+    // the value beside it. Their word counts never add up into one block.
+    #[test]
+    fn column_aligned_trailing_field_labels_are_not_one_block() {
+        let src = "\
+pub fn maxp_fixture() -> Vec<u32> {
+    vec![
+        0x00010000, // version
+        0x00000001, // number of glyphs
+        0x00000000, // maximum points in a non-composite glyph
+        0x00000000, // maximum contours in a non-composite glyph
+        0x00000000, // maximum points in a composite glyph
+        0x00000000, // maximum contours in a composite glyph
+        0x00000002, // maximum zones used for twilight and glyph space
+        0x00000000, // maximum twilight points used in zone zero
+        0x00000000, // number of storage area locations available
+        0x00000000, // maximum function definitions in the font program
+    ]
+}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
     #[test]
     fn standalone_block_comment_counts_alone() {
         let src = "\
