@@ -42,16 +42,19 @@
 //! never flagged.
 //!
 //! Every exception below is one statement: *the set of field names this
-//! declaration accepts from input is not fixed at compile time, or the
-//! declaration has no field-name map of its own*. `#[non_exhaustive]`,
-//! `#[serde(flatten)]` and a `#[cfg]`-gated field are three spellings of the
-//! first half; `transparent`, `from`/`try_from` and a tuple body are the
-//! second. A new case belongs under that statement, not beside the list.
+//! declaration accepts from input is not fixed at compile time, the declaration
+//! has no field-name map of its own, or no field name of it is ever written by
+//! hand*. `#[non_exhaustive]`, `#[serde(flatten)]` and a `#[cfg]`-gated field
+//! are three spellings of the first; `transparent`, `from`/`try_from` and a
+//! tuple body are the second; the opaque round-trip type is the third. A new
+//! case belongs under that statement, not beside the list.
 //!
-//! Field *visibility* is deliberately not one of them. A `Deserialize` struct's
-//! wire names are its field identifiers whatever their Rust visibility, and the
+//! Field *visibility* alone is not one of them. A `Deserialize` struct's wire
+//! names are its field identifiers whatever their Rust visibility, and the
 //! document is written outside Rust — a binary crate's config type is usually
-//! private and is exactly what a user hand-writes and mistypes.
+//! private and is exactly what a user hand-writes and mistypes. It is only in
+//! conjunction with reachability and a `Serialize` derive that it identifies a
+//! document no human authors; see the opaque-round-trip exception below.
 //!
 //! **Exception:** a struct with any `#[serde(flatten)]` field is
 //! deliberately NOT flagged. `deny_unknown_fields` and `flatten` are
@@ -84,6 +87,17 @@
 //! it into a hard deserialization failure, with no way to exempt the one
 //! conditional key.
 //!
+//! **Exception:** an opaque round-trip type is NOT flagged — a struct another
+//! crate can name (reachable from outside this one) but whose keys it cannot
+//! (every named field non-`pub`), deriving `Serialize` alongside `Deserialize`.
+//! Its serialized form has exactly one producer, the crate's own `Serialize`
+//! impl on a value the crate built, so there is no hand-written key to mistype;
+//! `deny_unknown_fields` would only freeze the private field names into a
+//! compatibility surface, making a rename break every previously-saved value.
+//! Each conjunct carries weight: a binary crate's config type is private and
+//! hand-written, and a `Deserialize`-only reader gets its document from
+//! somebody else whatever its field visibility.
+//!
 //! **Exception:** a `#[non_exhaustive]` struct is NOT flagged. It is the
 //! explicit forward-compatibility opt-in — the struct may gain fields in
 //! future versions — which directly contradicts `deny_unknown_fields`'s
@@ -110,7 +124,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    enclosing_fn, has_attribute_option, has_outer_attribute_path, is_in_test_context,
+    crate_has_external_consumers, enclosing_fn, has_attribute_option, has_outer_attribute_path,
+    is_effectively_pub, is_in_test_context, is_pub,
 };
 
 const KINDS: &[&str] = &["struct_item"];
@@ -229,6 +244,15 @@ impl AstCheck for Check {
         if !has_named_fields(node) {
             return;
         }
+        // A struct another crate can name but whose keys it cannot — every field
+        // non-`pub` — and which derives `Serialize` alongside `Deserialize` is an
+        // opaque round-trip type: the crate's own impl is the only producer of
+        // the serialized form, so there is no hand-written key to mistype, and
+        // `deny_unknown_fields` would promote names the author kept private into
+        // a compatibility surface.
+        if is_opaque_round_trip_struct(node, ctx, &attrs) {
+            return;
+        }
         let name = node
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source_bytes).ok())
@@ -307,6 +331,50 @@ fn derives_deserialize(attr_text: &str) -> bool {
         return false;
     }
     paths.iter().any(|path| final_segment(path) == "Deserialize")
+}
+
+/// True when `attr_text` is a derive list naming `Serialize` — the marker that
+/// the crate itself produces the serialized form, and not only reads one.
+/// Matched on the derive entry's final path segment, as [`derives_deserialize`]
+/// matches its own.
+fn derives_serialize(attr_text: &str) -> bool {
+    derive_paths(attr_text).any(|path| final_segment(path) == "Serialize")
+}
+
+/// True for a struct another crate can name but whose keys it cannot: reachable
+/// from outside this crate, every named field non-`pub`, and `Serialize`
+/// derived alongside `Deserialize`.
+///
+/// Each conjunct answers one half of "who writes the document". Effective
+/// publicity ([`is_effectively_pub`] plus [`crate_has_external_consumers`]) says
+/// consumers hold values of the type; the absence of bare `pub` on every field
+/// says they cannot learn a single key from the API or from rustdoc, which
+/// renders the body as `/* private fields */`; the `Serialize` derive names the
+/// only producer of the serialized form, the crate's own impl round-tripping
+/// values it built. Together there is no hand-written key to mistype, and
+/// `deny_unknown_fields` would freeze names the author kept private into a
+/// compatibility surface — renaming one would stop old data from loading.
+///
+/// Drop any conjunct and the reasoning fails on a real shape. Without the
+/// reachability half, a binary crate's config type — private by default and
+/// hand-written by its user — is exactly what the rule exists for. Without the
+/// `Serialize` half, a `Deserialize`-only reader gets its document from someone
+/// else whatever its field visibility.
+fn is_opaque_round_trip_struct(
+    struct_node: tree_sitter::Node,
+    ctx: &CheckCtx,
+    attrs: &[String],
+) -> bool {
+    let source = ctx.source.as_bytes();
+    if !is_effectively_pub(struct_node, source, ctx.path)
+        || !crate_has_external_consumers(ctx.project, ctx.path)
+        || !attrs.iter().any(|a| derives_serialize(a))
+    {
+        return false;
+    }
+    named_fields(struct_node).is_some_and(|fields| {
+        !fields.is_empty() && fields.iter().all(|field| !is_pub(*field, source))
+    })
 }
 
 /// Yield each derive entry inside `#[derive(...)]` as a trimmed path
@@ -524,6 +592,17 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Run the rule on a file of an ordinary library crate. The
+    /// opaque-round-trip exception asks whether another crate can name the type,
+    /// which only a real manifest and file layout can answer.
+    fn run_in_lib_crate(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_in_crate(
+            &Check,
+            crate::rules::test_helpers::LIB_CARGO_TOML,
+            source,
+        )
     }
 
     #[test]
@@ -1297,6 +1376,91 @@ mod tests {
                       #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n\
                       pub struct Rect { pub x: u16, pub y: u16, pub width: u16, pub height: u16 }";
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8323_opaque_round_trip_struct_not_flagged() {
+        // ratatui's `ListState`: consumers hold it but cannot name `offset` or
+        // `selected`, and the only writer of its serialized form is the library's
+        // own `Serialize`. There is no author who could mistype a key.
+        let source = "#[derive(Debug, Default, Clone, Copy)]\n\
+                      #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n\
+                      pub struct ListState {\n\
+                          pub(crate) offset: usize,\n\
+                          pub(crate) selected: Option<usize>,\n\
+                      }";
+        assert!(run_in_lib_crate(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8323_opaque_round_trip_struct_with_bare_private_fields_not_flagged() {
+        // ratatui's `ScrollbarState` writes no visibility modifier at all; the
+        // fields are just as unreachable as `pub(crate)` ones.
+        let source = "#[derive(Debug, Default, Clone, Copy)]\n\
+                      #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n\
+                      pub struct ScrollbarState {\n\
+                          content_length: usize,\n\
+                          position: usize,\n\
+                      }";
+        assert!(run_in_lib_crate(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8323_publishing_one_field_keeps_the_struct_flagged() {
+        // One writable key is enough: a consumer can name `offset` and mistype it.
+        let source = "#[derive(Serialize, Deserialize)]\n\
+                      pub struct ListState {\n\
+                          pub offset: usize,\n\
+                          pub(crate) selected: Option<usize>,\n\
+                          pub(crate) scroll: usize,\n\
+                      }";
+        assert_eq!(run_in_lib_crate(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8323_deserialize_only_opaque_shape_still_flagged() {
+        // No `Serialize`: the crate never writes this document, so somebody
+        // outside it does — rust-analyzer's `SnippetDefRepr` is this shape and
+        // must stay flagged.
+        let source = "#[derive(Deserialize, Default)]\n\
+                      #[serde(default)]\n\
+                      pub struct SnippetDefRepr {\n\
+                          prefix: Vec<String>,\n\
+                          body: Vec<String>,\n\
+                      }";
+        assert_eq!(run_in_lib_crate(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8323_opaque_shape_in_a_binary_only_crate_still_flagged() {
+        // Nothing links against a binary-only package, so the hidden fields make
+        // no encapsulation claim — and a CLI's config type, private by default,
+        // is exactly the hand-written document the rule exists for.
+        let source = "#[derive(Serialize, Deserialize)]\n\
+                      pub struct Config { rate: u32 }";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule_in_crate(
+                &Check,
+                crate::rules::test_helpers::BINARY_ONLY_CARGO_TOML,
+                source,
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn repro_8323_pub_struct_confined_to_a_private_module_still_flagged() {
+        // helix's `clipboard::external::Command`: `pub` inside a private `mod`,
+        // never re-exported, and read straight from the user's `config.toml`.
+        let source = "mod external {\n\
+                          #[derive(Debug, Clone, Serialize, Deserialize)]\n\
+                          pub struct Command {\n\
+                              command: String,\n\
+                              args: Vec<String>,\n\
+                          }\n\
+                      }";
+        assert_eq!(run_in_lib_crate(source).len(), 1);
     }
 
 
