@@ -10,6 +10,17 @@
 //! index — there is no local index to convert to a `for` binding — so it is
 //! not flagged; likewise a body that only mutates a different target.
 //!
+//! The body must index the very receiver whose `len()` bounds the loop
+//! (`x[i]`, for the `x` of `i < x.len()`). That element expression is what a
+//! `for item in x` / `x.iter()` rewrite binds to `item`; without it the
+//! suggested rewrite has nothing to produce and need not even typecheck — a
+//! body reading through a domain method (`stack.at(i)`, `s.get(i)`) says
+//! nothing about `stack` being iterable or indexable, and a body indexing a
+//! different receiver (`while i < a.len() { f(b[i]) }`) yields no iterator
+//! over `a`. The access counts inside macro arguments too
+//! (`println!("{}", v[i])`), where the grammar yields tokens instead of an
+//! index expression.
+//!
 //! The index must also be a `0..len` sweep: a `let <index> = 0` binding must
 //! precede the loop in an enclosing block. An index bound from a `while let` /
 //! `if let` pattern or a function parameter starts at an arbitrary offset —
@@ -42,8 +53,8 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     let Some(condition) = node.child_by_field_name("condition") else { return };
     let Ok(cond_text) = condition.utf8_text(source) else { return };
 
-    // Heuristic: `i < something.len()` or `i < N`.
-    if !cond_text.contains(".len()") && !cond_text.contains("< ") {
+    // Cheap prefilter for the shape the rule targets: `i < something.len()`.
+    if !cond_text.contains(".len()") {
         return;
     }
 
@@ -62,10 +73,20 @@ crate::ast_check! { on ["while_expression"] => |node, source, ctx, diagnostics|
     // The loop must have a bare-identifier index variable (`i < x.len()`). A
     // persistent field cursor (`self.index < …`) has a `field_expression` index
     // — there is no local index to convert to a `for` binding — so
-    // `index_variable` returns None and the loop is exempt.
-    let Some(index_var) = index_variable(condition, source) else {
+    // `index_bound` returns None and the loop is exempt.
+    let Some(bound) = index_bound(condition, source) else {
         return;
     };
+    let index_var = bound.index_var;
+
+    // The body must index the bounding collection (`x[i]`): that element
+    // expression is what `for item in x` binds to `item`. Reading through a
+    // method (`stack.at(i)`) or indexing a different receiver leaves the
+    // rewrite with no element to produce — and no evidence the receiver is
+    // iterable or indexable at all.
+    if !body_indexes_collection(body, &bound, source) {
+        return;
+    }
 
     // The body must advance the index by exactly one at every mutation site. A
     // `for`/`.iter().enumerate()` rewrite steps the index by one per element, so
@@ -142,10 +163,18 @@ fn is_compound_logical_condition(condition: tree_sitter::Node, source: &[u8]) ->
             .is_some_and(|op| op == "&&" || op == "||")
 }
 
-/// Extract the loop's index variable from the condition: the bare identifier
-/// on the left of a `<` comparison whose right side is a `.len()` call
-/// (`i < self.items.len()`). Returns its source text.
-fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+/// The traversal a `while` condition describes: the bare local index compared
+/// with `<` and the receiver of the `.len()` call that bounds it. For
+/// `i < self.items.len()` the index is `i` and the collection is `self.items`.
+struct IndexBound<'a> {
+    index_var: &'a str,
+    collection: &'a str,
+}
+
+/// Extract the loop's [`IndexBound`] from the condition: the bare identifier on
+/// the left of a `<` comparison whose right side calls `.len()`
+/// (`i < self.items.len()`), paired with that call's receiver text.
+fn index_bound<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<IndexBound<'a>> {
     let mut stack = vec![condition];
     while let Some(cur) = stack.pop() {
         if cur.kind() == "binary_expression"
@@ -154,10 +183,13 @@ fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<
             && let Some(left) = cur.child_by_field_name("left")
             && left.kind() == "identifier"
             && let Some(right) = cur.child_by_field_name("right")
-            && subtree_calls_len(right, source)
-            && let Ok(name) = left.utf8_text(source)
+            && let Some(collection) = len_call_receiver(right, source)
+            && let Ok(index_var) = left.utf8_text(source)
         {
-            return Some(name);
+            return Some(IndexBound {
+                index_var,
+                collection,
+            });
         }
         let mut cursor = cur.walk();
         for child in cur.children(&mut cursor) {
@@ -165,6 +197,80 @@ fn index_variable<'a>(condition: tree_sitter::Node, source: &'a [u8]) -> Option<
         }
     }
     None
+}
+
+/// True if `body` contains the element access `<collection>[<index_var>]` on
+/// the loop's bounding receiver — what a `for`/`.iter()` rewrite binds to
+/// `item`.
+fn body_indexes_collection(body: tree_sitter::Node, bound: &IndexBound, source: &[u8]) -> bool {
+    let mut stack = vec![body];
+    while let Some(cur) = stack.pop() {
+        if is_element_access(cur, bound, source) {
+            return true;
+        }
+        let mut cursor = cur.walk();
+        for child in cur.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True if `node` is the element access `<collection>[<index_var>]`. The base is
+/// matched by source text, so `self.stack[i]` matches the `self.stack` of
+/// `i < self.stack.len()`, and the subscript must be the bare loop variable:
+/// `x[i + 1]` or `x[i..]` reads a neighbour or a slice, not the element the
+/// iterator would yield.
+///
+/// Macro arguments parse as a token stream rather than an expression, so there
+/// the same access is a `[`-delimited `token_tree` (`println!("{}", v[i])`).
+fn is_element_access(node: tree_sitter::Node, bound: &IndexBound, source: &[u8]) -> bool {
+    match node.kind() {
+        "index_expression" => {
+            node.named_child(0)
+                .is_some_and(|base| base.utf8_text(source) == Ok(bound.collection))
+                && subscripts_index_var(node.named_child(1), bound, source)
+        }
+        "token_tree" => {
+            node.child(0).is_some_and(|open| open.kind() == "[")
+                && node.named_child_count() == 1
+                && subscripts_index_var(node.named_child(0), bound, source)
+                && receiver_tokens_precede(node, bound.collection, source)
+        }
+        _ => false,
+    }
+}
+
+/// True if `subscript` is the bare loop index identifier.
+fn subscripts_index_var(
+    subscript: Option<tree_sitter::Node>,
+    bound: &IndexBound,
+    source: &[u8],
+) -> bool {
+    subscript
+        .is_some_and(|n| n.kind() == "identifier" && n.utf8_text(source) == Ok(bound.index_var))
+}
+
+/// True if the tokens immediately before `node` spell `collection`, starting at
+/// a token boundary. Inside a macro's token stream `self.stack[i]` is the
+/// sibling run `self` `.` `stack` followed by the `[i]` token tree; requiring a
+/// sibling to start exactly where `collection` starts keeps `xv[i]` from
+/// matching the receiver `v`.
+fn receiver_tokens_precede(node: tree_sitter::Node, collection: &str, source: &[u8]) -> bool {
+    let Some(start) = node.start_byte().checked_sub(collection.len()) else {
+        return false;
+    };
+    let mut sibling = node.prev_sibling();
+    while let Some(prev) = sibling {
+        if prev.start_byte() == start {
+            return source.get(start..node.start_byte()) == Some(collection.as_bytes());
+        }
+        if prev.start_byte() < start {
+            return false;
+        }
+        sibling = prev.prev_sibling();
+    }
+    false
 }
 
 /// Collect the distinct bare-identifier index variables mutated anywhere in the
@@ -280,24 +386,23 @@ fn is_literal_one(node: tree_sitter::Node, source: &[u8]) -> bool {
     digits == "1"
 }
 
-/// True if `node` contains a `.len()` method call anywhere in its subtree.
-fn subtree_calls_len(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut stack = vec![node];
-    while let Some(cur) = stack.pop() {
-        if cur.kind() == "call_expression"
-            && let Some(func) = cur.child_by_field_name("function")
-            && func.kind() == "field_expression"
-            && let Some(field) = func.child_by_field_name("field")
-            && field.utf8_text(source) == Ok("len")
-        {
-            return true;
-        }
-        let mut cursor = cur.walk();
-        for child in cur.children(&mut cursor) {
-            stack.push(child);
-        }
+/// Source text of the receiver of the first `.len()` method call in `node`'s
+/// subtree, in source order: `self.stack.len()` yields `self.stack`, and
+/// `v.len() - 1` yields `v`.
+fn len_call_receiver<'a>(node: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() == "call_expression"
+        && let Some(func) = node.child_by_field_name("function")
+        && func.kind() == "field_expression"
+        && let Some(field) = func.child_by_field_name("field")
+        && field.utf8_text(source) == Ok("len")
+        && let Some(receiver) = func.child_by_field_name("value")
+        && let Ok(text) = receiver.utf8_text(source)
+    {
+        return Some(text);
     }
-    false
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .find_map(|child| len_call_receiver(child, source))
 }
 
 /// True if the loop body contains a `remove(index_var)` or
@@ -506,7 +611,7 @@ mod tests {
         // `map.remove(&key)` does not use the index variable — still fires.
         let src = "fn f(v: &[i32], map: &mut std::collections::HashMap<i32, i32>, key: i32) { \
                    let mut i = 0; \
-                   while i < v.len() { map.remove(&key); i += 1; } }";
+                   while i < v.len() { map.remove(&key); use_it(v[i]); i += 1; } }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -648,6 +753,79 @@ mod tests {
                    let mut i = 0usize; \
                    while i < v.len() { let _ = v[i]; i += 1; } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_method_accessor_body_issue_8156() {
+        // harfbuzz/ttf-parser charstring.rs: `ArgumentsStack` exposes `len()`
+        // and `at(i)` but no `iter`, no `IntoIterator`, no `Index`. The body
+        // never indexes the receiver, so neither `for item in self.stack` nor
+        // `self.stack.iter()` compiles.
+        let src = "fn f(&mut self) { \
+                   let mut i = 0; \
+                   while i < self.stack.len() { self.total += self.stack.at(i); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_get_accessor_body_issue_8156() {
+        // Same shape through `get(i)`: no `<recv>[i]` element expression means
+        // no `item` binding for a `for` rewrite.
+        let src = "fn f(s: &S, out: &mut Vec<u8>) { \
+                   let mut i = 0; \
+                   while i < s.len() { out.push(s.get(i)); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_index_on_different_receiver_issue_8156() {
+        // The body indexes `b`, but `a.len()` bounds the loop: `a` has no
+        // element expression, so no iterator over `a` produces the body's value.
+        let src = "fn f(a: &[i32], b: &[i32]) { \
+                   let mut i = 0; \
+                   while i < a.len() { use_it(b[i]); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_index_on_len_receiver_issue_8156() {
+        // Control: the body indexes the very receiver whose `len()` bounds the
+        // loop, so `for item in &self.stack` has an `item` to bind.
+        let src = "fn f(&mut self) { \
+                   let mut i = 0; \
+                   while i < self.stack.len() { self.total += self.stack[i]; i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_index_inside_macro_argument_issue_8156() {
+        // Macro arguments parse as tokens: `self.stack[i]` is the sibling run
+        // `self` `.` `stack` followed by a `[i]` token tree, still an element
+        // access on the bounding receiver.
+        let src = "fn f(&self) { \
+                   let mut i = 0; \
+                   while i < self.stack.len() { println!(\"{}\", self.stack[i]); i += 1; } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_macro_index_on_receiver_suffix_issue_8156() {
+        // `xv[i]` only ends with the bounding receiver's name; the token run
+        // does not start at `v`, so it is an access on a different collection.
+        let src = "fn f(v: &[i32], xv: &[i32]) { \
+                   let mut i = 0; \
+                   while i < v.len() { println!(\"{}\", xv[i]); i += 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_condition_without_len_call_issue_8156() {
+        // No `.len()` anywhere in the condition: not an index sweep over a
+        // collection, so no index analysis and no diagnostic.
+        let src = "fn f(limit: usize) { \
+                   let mut x = 0; \
+                   while x < limit { use_it(x); x += 1; } }";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
