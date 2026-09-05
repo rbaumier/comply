@@ -5,10 +5,15 @@
 //! `this` parameter, parameter properties and decorated parameters are
 //! declarations, not arguments. Skips function expressions / arrow functions
 //! passed as fixed-signature library callbacks (TanStack Query `onError` /
-//! `queryFn` / etc.) since the user has no control over those arities.
+//! `queryFn` / etc.) since the user has no control over those arities. The
+//! diagnostic names the function through
+//! [`crate::oxc_helpers::function_declared_name`], so a method or a bound
+//! arrow is reported under the name it is declared with.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, is_fixed_signature_library_callback};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, function_declared_name, is_fixed_signature_library_callback,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -36,10 +41,6 @@ fn is_positional(param: &oxc_ast::ast::FormalParameter) -> bool {
     !param.has_modifier() && param.decorators.is_empty()
 }
 
-fn func_name<'a>(func: &'a oxc_ast::ast::Function<'a>) -> &'a str {
-    func.id.as_ref().map_or("<anonymous>", |id| id.name.as_str())
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::Function, AstType::ArrowFunctionExpression]
@@ -54,7 +55,7 @@ impl OxcCheck for Check {
     ) {
         let max_params = ctx.config.threshold("max-params", "max", ctx.lang);
 
-        let (count, name, span) = match node.kind() {
+        let (count, span) = match node.kind() {
             AstKind::Function(func) => {
                 // A bodyless `Function` node is a type-level declaration with no
                 // executable body (overload signature, `declare function`, or an
@@ -64,15 +65,16 @@ impl OxcCheck for Check {
                 if func.body.is_none() {
                     return;
                 }
-                (count_params(&func.params), func_name(func), func.span())
+                (count_params(&func.params), func.span())
             }
             AstKind::ArrowFunctionExpression(arrow) => {
-                (count_params(&arrow.params), "<anonymous>", arrow.span())
+                (count_params(&arrow.params), arrow.span())
             }
             _ => return,
         };
 
         if count > max_params && !is_fixed_signature_library_callback(node, semantic) {
+            let name = function_declared_name(node, semantic).unwrap_or("<anonymous>");
             let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
@@ -335,6 +337,114 @@ mod oxc_tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    fn only_message(src: &str) -> String {
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected exactly one diagnostic: {diags:?}");
+        diags[0].message.clone()
+    }
+
+    #[test]
+    fn names_class_method_from_its_key_issue_8144() {
+        // Regression for rbaumier/comply#8144 — `lucaong/minisearch`
+        // `src/MiniSearch.ts:1873` shape: a class method's `Function` node has
+        // no `id`; the name lives on the enclosing `MethodDefinition` key.
+        let src = r"
+            export class Engine {
+                private termResults (a: number, b: number, c: number, d: number, e: number): number {
+                    return a + b + c + d + e
+                }
+            }
+        ";
+        assert!(
+            only_message(src).contains("`termResults`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn names_arrow_from_its_binding_issue_8144() {
+        let src = "const scale = (a: number, b: number, c: number, d: number, e: number) => a;";
+        assert!(only_message(src).contains("`scale`"), "{}", only_message(src));
+    }
+
+    #[test]
+    fn names_object_literal_method_from_its_key_issue_8144() {
+        let src = "const obj = { handle(a, b, c, d, e) { return a; } };";
+        assert!(
+            only_message(src).contains("`handle`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn names_function_expression_from_its_binding_issue_8144() {
+        let src = "const f = function (a, b, c, d, e) { return a; };";
+        assert!(only_message(src).contains("`f`"), "{}", only_message(src));
+    }
+
+    #[test]
+    fn names_class_property_arrow_from_its_key_issue_8144() {
+        let src = r"
+            class Engine {
+                compute = (a: number, b: number, c: number, d: number, e: number) => a;
+            }
+        ";
+        assert!(
+            only_message(src).contains("`compute`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn names_private_class_method_from_its_key_issue_8144() {
+        let src = r"
+            class Engine {
+                #compute(a, b, c, d, e) { return a; }
+            }
+        ";
+        assert!(
+            only_message(src).contains("`compute`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn keeps_anonymous_for_an_iife_issue_8144() {
+        let src = "(function (a, b, c, d, e) { return a; })(1, 2, 3, 4, 5);";
+        assert!(
+            only_message(src).contains("`<anonymous>`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn keeps_anonymous_for_a_computed_key_method_issue_8144() {
+        let src = r"
+            const key = 'k';
+            const obj = { [key](a, b, c, d, e) { return a; } };
+        ";
+        assert!(
+            only_message(src).contains("`<anonymous>`"),
+            "{}",
+            only_message(src)
+        );
+    }
+
+    #[test]
+    fn still_names_top_level_declaration_issue_8144() {
+        let src = "function standalone(a, b, c, d, e) { return a; }";
+        assert!(
+            only_message(src).contains("`standalone`"),
+            "{}",
+            only_message(src)
+        );
     }
 
     #[test]

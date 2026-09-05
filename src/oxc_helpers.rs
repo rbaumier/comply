@@ -8914,6 +8914,49 @@ pub fn function_is_immediately_invoked(
     false
 }
 
+/// The name a function or arrow node is declared under.
+///
+/// A `function foo() {}` declaration and a named function expression carry their
+/// own `id`; every other form takes its name from the declaration that binds it,
+/// which is the node's parent: a `MethodDefinition` / `PropertyDefinition` /
+/// `ObjectProperty` key, or a `VariableDeclarator` binding identifier. `None` for
+/// a genuinely anonymous position — an IIFE, an inline callback argument, a
+/// computed key, a default export.
+#[must_use]
+pub fn function_declared_name<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a str> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::BindingPattern;
+
+    if let AstKind::Function(func) = node.kind()
+        && let Some(id) = func.id.as_ref()
+    {
+        return Some(id.name.as_str());
+    }
+    match semantic.nodes().parent_kind(node.id()) {
+        AstKind::MethodDefinition(method) => member_key_name(&method.key),
+        AstKind::PropertyDefinition(prop) => member_key_name(&prop.key),
+        AstKind::ObjectProperty(prop) => member_key_name(&prop.key),
+        AstKind::VariableDeclarator(decl) => match &decl.id {
+            BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The static name of a class or object member key, including a private name
+/// (`#compute`, stored without its `#`). `None` for a computed key, whose name
+/// is only known at runtime.
+fn member_key_name<'a>(key: &'a oxc_ast::ast::PropertyKey<'a>) -> Option<&'a str> {
+    match key {
+        oxc_ast::ast::PropertyKey::PrivateIdentifier(id) => Some(id.name.as_str()),
+        _ => property_key_name(key),
+    }
+}
+
 #[cfg(test)]
 mod oxc_helpers_tests {
     use super::{byte_offset_to_line_col, mask_comments, reset_file_caches, source_contains};
