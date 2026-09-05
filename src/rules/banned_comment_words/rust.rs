@@ -5,55 +5,120 @@
 //! boundary. The diagnostic is anchored on the word, so a `/* */` block that
 //! runs over several lines points at the line the word is on.
 //!
-//! Three kinds of comment are out of scope: doc comments (`///`, `//!`,
-//! `/** */`, `/*! */`), safety comments (`// SAFETY: …`), and any comment in a
-//! test context.
+//! Four kinds of comment are out of scope: doc comments (`///`, `//!`,
+//! `/** */`, `/*! */`), safety comments (`// SAFETY: …`), any comment in a
+//! test context, and a comment block already over the word budget.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::comment_blocks::{self, RawComment};
 use crate::rules::rust_helpers::{is_safety_marker, is_test_code};
+use std::sync::Arc;
 
-crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, diagnostics|
-    let Ok(text) = node.utf8_text(source) else { return; };
-    // Doc comments (`///`, `//!`, `/** */`, `/*! */`) are deliberate API prose
-    // rendered by rustdoc, where words like `just`/`only`/`simply` are legitimate
-    // precision qualifiers, not dismissive filler. Mirror `comment-prose-quality`,
-    // which restricts this class of prose check to inline comments. Only inline
-    // `//` and `/* */` comments are checked.
-    let trimmed = text.trim_start();
-    if trimmed.starts_with("///")
-        || trimmed.starts_with("//!")
-        || trimmed.starts_with("/**")
-        || trimmed.starts_with("/*!")
-    {
-        return;
+pub struct Check;
+
+/// One banned word found in a comment the per-comment guards let through.
+struct Match {
+    word: &'static str,
+    line: usize,
+    column: usize,
+    start_byte: usize,
+}
+
+/// What the walk collects: every comment, so the block budget can be measured
+/// over the runs a reader sees, and the matches inside them.
+#[derive(Default)]
+struct State {
+    comments: Vec<RawComment>,
+    matches: Vec<Match>,
+}
+
+impl AstCheck for Check {
+    fn interested_kinds(&self) -> Option<&'static [&'static str]> {
+        Some(&["line_comment", "block_comment"])
     }
-    let Some((word, offset)) = super::find_banned_word(text) else { return; };
-    // `SAFETY:` opens a documented precondition. `rust-undocumented-unsafe`
-    // requires that comment; this rule's remediation is to delete it. Both rules
-    // read the marker through `is_safety_marker`, so they cannot disagree.
-    if is_safety_marker(trimmed) {
-        return;
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(State::default()))
     }
-    // A comment in a test characterises the fixture the test feeds in. "A string
-    // that's clearly broken" states how malformed an input is; no production
-    // complexity sits behind it.
-    if is_test_code(node, source, ctx) {
-        return;
+
+    fn visit_node(
+        &self,
+        node: tree_sitter::Node,
+        ctx: &CheckCtx,
+        state: Option<&mut dyn std::any::Any>,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let collected = state.unwrap().downcast_mut::<State>().unwrap();
+        if let Some(comment) = comment_blocks::from_tree_sitter(&node, ctx.source) {
+            collected.comments.push(comment);
+        }
+        let source = ctx.source.as_bytes();
+        let Ok(text) = node.utf8_text(source) else {
+            return;
+        };
+        // Doc comments (`///`, `//!`, `/** */`, `/*! */`) are deliberate API prose
+        // rendered by rustdoc, where words like `just`/`only`/`simply` are legitimate
+        // precision qualifiers, not dismissive filler. Mirror `comment-prose-quality`,
+        // which restricts this class of prose check to inline comments. Only inline
+        // `//` and `/* */` comments are checked.
+        if comment_blocks::is_doc_comment(text) {
+            return;
+        }
+        let Some((word, offset)) = super::find_banned_word(text) else {
+            return;
+        };
+        // `SAFETY:` opens a documented precondition. `rust-undocumented-unsafe`
+        // requires that comment; this rule's remediation is to delete it. Both rules
+        // read the marker through `is_safety_marker`, so they cannot disagree.
+        if is_safety_marker(text.trim_start()) {
+            return;
+        }
+        // A comment in a test characterises the fixture the test feeds in. "A string
+        // that's clearly broken" states how malformed an input is; no production
+        // complexity sits behind it.
+        if is_test_code(node, source, ctx) {
+            return;
+        }
+        let (line, column) = word_position(node, text, offset);
+        collected.matches.push(Match {
+            word,
+            line,
+            column,
+            start_byte: node.start_byte() + offset,
+        });
     }
-    let (line, column) = word_position(node, text, offset);
-    diagnostics.push(Diagnostic {
-        path: std::sync::Arc::clone(&ctx.path_arc),
-        line,
-        column,
-        rule_id: super::META.id.into(),
-        message: format!(
-            "Comment uses `{word}` — dismissive filler that hides complexity. \
-             Either explain the actual subtlety or delete the comment if the \
-             line is genuinely self-explanatory."
-        ),
-        severity: Severity::Error,
-        span: Some((node.start_byte() + offset, word.len())),
-    });
+
+    fn finish(
+        &self,
+        ctx: &CheckCtx,
+        state: Option<Box<dyn std::any::Any>>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let collected = *state.unwrap().downcast::<State>().unwrap();
+        let budget = super::explanation_budget(ctx);
+        let explained = super::explained_rows(collected.comments, ctx.source, budget);
+        for found in collected
+            .matches
+            .iter()
+            .filter(|found| !explained.contains(&found.line))
+        {
+            let word = found.word;
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line: found.line,
+                column: found.column,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Comment uses `{word}` — dismissive filler that hides complexity. \
+                     Either explain the actual subtlety or delete the comment if the \
+                     line is genuinely self-explanatory."
+                ),
+                severity: Severity::Error,
+                span: Some((found.start_byte, word.len())),
+            });
+        }
+    }
 }
 
 /// The file position of byte `offset` into `text`, the source text of `node`,
@@ -151,12 +216,12 @@ mod tests {
     /// The `starship/starship` shape reported in #8366, reduced: a block comment
     /// holding its banned word four lines below the `/*`, a `SAFETY:`
     /// justification, a production comment, and a `#[cfg(test)]` module.
-    const STARSHIP_SHAPE: &str = r#"/* We use a two-phase init here: the first phase gives a simple command to the
-shell. This command evaluates a more complicated script using `source` and
-process substitution.
+    const STARSHIP_SHAPE: &str = r#"/* Two-phase init: the first phase hands the shell a command.
+That command sources a longer script.
 
-In the future, this may be changed to just directly evaluating the initscript
-using whatever mechanism is available in the host shell.
+
+In future this may be changed to just evaluate the initscript.
+
 */
 
 pub fn dispatch(name: &str) -> Option<&str> {
@@ -292,6 +357,27 @@ mod tests {
         assert!(run(test_fn).is_empty());
         let block = "#[test]\nfn t() {\n    /* this\n       simply works */\n}\n";
         assert!(run(block).is_empty());
+    }
+
+    #[test]
+    fn allows_banned_word_in_a_block_over_the_word_budget_issue_8184() {
+        // Past the `comment-max-block-words` budget the block has spent what an
+        // explanation costs, and that rule reports it for the length. Both
+        // verdicts on one block would leave no wording either accepts.
+        let src = "\
+// The reader needs the whole story here, so this note names the compiler
+// version, the shorter form that fails to build, what the checker infers
+// instead, why that inference is wrong for this call, and it ends on the
+// upstream issue, because we could just write the shorter form otherwise.
+fn f() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_banned_word_in_a_block_under_the_word_budget() {
+        // The gate is the block's length, so a short note stays in scope.
+        let src = "// we could just write the shorter form here\nfn f() {}";
+        assert_eq!(run(src).len(), 1);
     }
 
     #[test]

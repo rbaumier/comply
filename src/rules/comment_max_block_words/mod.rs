@@ -46,7 +46,7 @@ pub(crate) struct Flag {
 pub(crate) fn flagged_blocks(comments: Vec<RawComment>, source: &str, max: usize) -> Vec<Flag> {
     comment_blocks::merge(comments, source)
         .into_iter()
-        .filter(|block| block.word_count() > max && !block.is_license())
+        .filter(|block| block.exceeds_budget(max))
         .map(|block| Flag { line: block.line, column: block.column, words: block.word_count() })
         .collect()
 }

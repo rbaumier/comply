@@ -3,6 +3,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{CheckCtx, OxcCheck};
+use crate::rules::comment_blocks;
 use std::sync::Arc;
 
 pub struct Check;
@@ -13,6 +14,12 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
+        let budget = super::explanation_budget(ctx);
+        let explained = super::explained_rows(
+            comment_blocks::from_oxc(semantic, ctx.source),
+            ctx.source,
+            budget,
+        );
         let mut diagnostics = Vec::new();
         for comment in semantic.comments() {
             let start = comment.span.start as usize;
@@ -28,6 +35,9 @@ impl OxcCheck for Check {
             // often holds none of what the message is about.
             let word_start = start + offset;
             let (line, column) = byte_offset_to_line_col(ctx.source, word_start);
+            if explained.contains(&line) {
+                continue;
+            }
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line,
@@ -154,6 +164,37 @@ mod tests {
             &line[diags[0].column - 1..diags[0].column - 1 + word.len()],
             word
         );
+    }
+
+    /// The `kpdecker/jsdiff` comment reported in #8184, verbatim: it names the
+    /// compiler version, the shorter form that fails, what the checker infers
+    /// instead, and the upstream issue. `comment-max-block-words` reports the
+    /// same block for its length.
+    const JSDIFF_BLOCK: &str = "\
+// It would be cleaner if instead of the line below we could just write
+//     return patch.map(unixToWin)
+// but mysteriously TypeScript (v5.7.3 at the time of writing) does not like this and it will
+// refuse to compile, thinking that unixToWin could then return StructuredPatch[][] and the
+// result would be incompatible with the overload signatures.
+// See bug report at https://github.com/microsoft/TypeScript/issues/61398.
+export const c = 3;
+";
+
+    #[test]
+    fn allows_banned_word_in_a_block_over_the_word_budget_issue_8184() {
+        assert!(run(JSDIFF_BLOCK).is_empty());
+    }
+
+    #[test]
+    fn flags_the_same_sentence_on_its_own() {
+        // The gate is the block's length, not the sentence's wording.
+        assert_eq!(run("// we could just write the shorter form").len(), 1);
+    }
+
+    #[test]
+    fn allows_negation_on_either_side_of_the_filler_word_issue_8184() {
+        assert!(run("// I can't really see a better way").is_empty());
+        assert!(run("// I really can't see a better way").is_empty());
     }
 
     #[test]
