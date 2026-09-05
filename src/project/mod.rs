@@ -1827,6 +1827,17 @@ fn specifier_resolves_to(config_dir: &Path, spec: &str, target: &Path) -> bool {
         || resolved_stem.join("index") == target_stem
 }
 
+/// The part of `spec` a `compilerOptions.paths` alias `key` leaves for the
+/// mapping's `*` to stand in for: the text after the key's literal prefix for a
+/// wildcard key (`@/*` and `@/hooks/useTable` → `hooks/useTable`), the empty
+/// string for an exact key matching `spec`. `None` when the key does not match.
+fn alias_suffix<'a>(key: &str, spec: &'a str) -> Option<&'a str> {
+    match key.strip_suffix('*') {
+        Some(prefix) => spec.strip_prefix(prefix),
+        None => (key == spec).then_some(""),
+    }
+}
+
 /// `path` with `.` components dropped and `..` components collapsed against the
 /// preceding segment, without touching the filesystem. Lets a config specifier
 /// (`'./global-setup.ts'`) compare equal to the target's stored path
@@ -3161,6 +3172,13 @@ pub struct ProjectCtx {
     // lazily on first miss by a bounded downward scan and reused for the run.
     virtual_module_ids_cache: Mutex<FxHashMap<PathBuf, Arc<FxHashSet<String>>>>,
 
+    // Modules the project's `unplugin-auto-import` configuration registers as
+    // sources of auto-imported globals, keyed by the resolved root directory.
+    // The registration can sit in any source file under the root, so finding it
+    // is a tree scan; the answer is project-wide, so it is built lazily on first
+    // miss (only for a project declaring the plugin) and reused for the run.
+    auto_import_registrations_cache: Mutex<FxHashMap<PathBuf, Arc<Vec<AutoImportRegistration>>>>,
+
     // Files the engine read and found to contain no `comply-ignore` substring.
     // The post-filter (`ignore_comments::apply_to_all`) otherwise re-reads every
     // discovered file from disk just to run that one substring check; for files
@@ -3946,6 +3964,94 @@ impl ProjectCtx {
         self.effective_package_jsons(path)
             .iter()
             .any(|pkg| pkg.has_dep_or_engine("unplugin-auto-import"))
+    }
+
+    /// Export names of the module `path` that the project's
+    /// `unplugin-auto-import` configuration injects as globals. The plugin's
+    /// `imports:` option maps a module specifier to the names it makes available
+    /// app-wide at build time, so a listed export is consumed by that injection
+    /// and reaches its call sites without a static import.
+    ///
+    /// Reads the configuration the project actually declares, so an
+    /// auto-imported module is recognized wherever it lives; an export the
+    /// configuration does not list stays subject to the usual liveness rules.
+    /// Empty for a project whose manifest chain does not declare the plugin.
+    ///
+    /// `path` must be canonical — the specifier is compared against it as a
+    /// path, and the configuration is read from the canonicalized project root.
+    #[must_use]
+    pub fn auto_imported_names_for_module(&self, path: &Path) -> FxHashSet<String> {
+        let mut names = FxHashSet::default();
+        if !self.uses_unplugin_auto_import(path) {
+            return names;
+        }
+        let Some(root) = self.tree_dep_root(path) else {
+            return names;
+        };
+        // `path` reaches here in the import index's canonical (absolute) form,
+        // and the scan derives each config file's path from the root it starts
+        // at — so a project root given as a relative path (`comply .`) would
+        // compare a relative specifier against an absolute target.
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
+        for registration in self.auto_import_registrations(&root).iter() {
+            if self.config_specifier_denotes(
+                &registration.config_file,
+                &registration.specifier,
+                path,
+            ) {
+                names.extend(registration.names.iter().cloned());
+            }
+        }
+        names
+    }
+
+    /// Auto-import registrations declared anywhere under `root`, scanned once
+    /// per root and memoized for the rest of the run.
+    fn auto_import_registrations(&self, root: &Path) -> Arc<Vec<AutoImportRegistration>> {
+        if let Some(hit) = self.auto_import_registrations_cache.lock().unwrap().get(root) {
+            return Arc::clone(hit);
+        }
+        let found = Arc::new(collect_auto_import_registrations(root));
+        self.auto_import_registrations_cache
+            .lock()
+            .unwrap()
+            .insert(root.to_path_buf(), Arc::clone(&found));
+        found
+    }
+
+    /// True when the module specifier `spec`, written in `config_file`, denotes
+    /// `target`. A relative specifier resolves against the config's own
+    /// directory; a non-relative one goes through the `compilerOptions.paths`
+    /// aliases of the tsconfig governing the config file, then through its
+    /// `baseUrl`. The comparison is lexical, so a bare package specifier
+    /// (`'vue'`) matches no project file.
+    fn config_specifier_denotes(&self, config_file: &Path, spec: &str, target: &Path) -> bool {
+        let Some(config_dir) = config_file.parent() else {
+            return false;
+        };
+        if spec.starts_with('.') {
+            return specifier_resolves_to(config_dir, spec, target);
+        }
+        let (Some(tsconfig), Some(tsconfig_dir)) = (
+            self.nearest_tsconfig(config_file),
+            self.nearest_tsconfig_dir(config_file),
+        ) else {
+            return false;
+        };
+        let base = match &tsconfig.base_url {
+            Some(base_url) => tsconfig_dir.join(base_url),
+            None => tsconfig_dir,
+        };
+        let alias_hit = tsconfig.paths.iter().any(|(key, mappings)| {
+            let Some(suffix) = alias_suffix(key, spec) else {
+                return false;
+            };
+            mappings
+                .iter()
+                .any(|mapping| specifier_resolves_to(&base, &mapping.replace('*', suffix), target))
+        });
+        alias_hit
+            || (tsconfig.base_url.is_some() && specifier_resolves_to(&base, spec, target))
     }
 
     /// True when the effective `package.json` chain for `path` declares the
@@ -6552,15 +6658,14 @@ fn collect_tree_dep_names(root: &Path) -> FxHashSet<String> {
 /// (`src/module/plugins/options.ts`) both use these.
 const PLUGIN_SOURCE_EXTS: &[&str] = &["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"];
 
-/// Collect every virtual module ID registered by a plugin defined under `root`
-/// (excluding `node_modules` and dot-directories), bounded by a depth limit. Each
-/// plugin-source file is read once and scanned for string literals co-occurring
-/// with a `resolveId`/`load` resolver hook; the union of those literals is the
-/// project's registered virtual module IDs.
-fn collect_virtual_module_ids(root: &Path) -> FxHashSet<String> {
-    use crate::rules::no_implicit_deps::collect_virtual_ids;
+/// Read every plugin-source file under `root` (excluding `node_modules` and
+/// dot-directories), bounded by a depth limit, and hand its path and contents to
+/// `visit`. A build-time plugin registration lives wherever the project chose to
+/// put it — inline in `vite.config.ts`, or in the build helper module the config
+/// imports — so the source tree, not a set of config filenames, is the search
+/// space. Each file is read once.
+fn for_each_plugin_source(root: &Path, mut visit: impl FnMut(&Path, &str)) {
     const MAX_DEPTH: u32 = 8;
-    let mut ids = FxHashSet::default();
     let mut stack: Vec<(PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
 
     while let Some((dir, depth)) = stack.pop() {
@@ -6589,11 +6694,245 @@ fn collect_virtual_module_ids(root: &Path) -> FxHashSet<String> {
             if is_plugin_source
                 && let Ok(source) = std::fs::read_to_string(&path)
             {
-                collect_virtual_ids(&source, &mut ids);
+                visit(&path, &source);
             }
         }
     }
+}
+
+/// Collect every virtual module ID registered by a plugin defined under `root`.
+/// Each plugin-source file is scanned for string literals co-occurring with a
+/// `resolveId`/`load` resolver hook; the union of those literals is the
+/// project's registered virtual module IDs.
+fn collect_virtual_module_ids(root: &Path) -> FxHashSet<String> {
+    use crate::rules::no_implicit_deps::collect_virtual_ids;
+    let mut ids = FxHashSet::default();
+    for_each_plugin_source(root, |_, source| collect_virtual_ids(source, &mut ids));
     ids
+}
+
+/// Package whose plugin injects the auto-imported globals. Matched on the
+/// specifier so every bundler entry point (`unplugin-auto-import/vite`,
+/// `/webpack`, `/rollup`, …) counts.
+const AUTO_IMPORT_PACKAGE: &str = "unplugin-auto-import";
+
+/// A module the project's `unplugin-auto-import` configuration registers as a
+/// source of auto-imported globals, with the export names it injects.
+#[derive(Debug)]
+struct AutoImportRegistration {
+    /// The file declaring the `AutoImport({ … })` call. `specifier` is written
+    /// there, so it is resolved against this file.
+    config_file: PathBuf,
+    /// Module specifier as written in the plugin's `imports:` map.
+    specifier: String,
+    /// Export names of that module the plugin injects app-wide.
+    names: Vec<String>,
+}
+
+/// Collect every `unplugin-auto-import` registration declared under `root`: the
+/// `{ '<module>': ['<name>', …] }` entries of the `imports:` option of an
+/// `AutoImport({ … })` call.
+///
+/// Only the `imports:` map is read. The plugin's other source of auto-imports,
+/// `dirs:`, names directories relative to the bundler's own root rather than to
+/// the declaring file — a base this scan cannot name — and is covered instead by
+/// the auto-imported-directory convention
+/// ([`crate::rules::path_utils::is_nuxt_auto_imported_file`]).
+fn collect_auto_import_registrations(root: &Path) -> Vec<AutoImportRegistration> {
+    let mut out = Vec::new();
+    for_each_plugin_source(root, |path, source| {
+        // Cheap gate: only a file naming the package can configure the plugin,
+        // and the scan visits every source file in the tree.
+        if !source.contains(AUTO_IMPORT_PACKAGE) {
+            return;
+        }
+        let Some(lang) = crate::files::Language::from_path(path) else {
+            return;
+        };
+        collect_auto_import_calls(source, lang, path, &mut out);
+    });
+    out
+}
+
+/// Push every `imports:` registration of an `AutoImport({ … })` call in `source`
+/// into `out`. The callee is matched against the local binding the file's
+/// `unplugin-auto-import` import introduces, so an unrelated `AutoImport` helper
+/// contributes nothing.
+fn collect_auto_import_calls(
+    source: &str,
+    lang: crate::files::Language,
+    config_file: &Path,
+    out: &mut Vec<AutoImportRegistration>,
+) {
+    let Some(grammar) = crate::parsing::ts_language_for(lang) else {
+        return;
+    };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return;
+    }
+    let Some(tree) = parser.parse(source, None) else {
+        return;
+    };
+    let bytes = source.as_bytes();
+    let mut bindings: FxHashSet<String> = FxHashSet::default();
+    crate::rules::walker::walk_tree(&tree, |node| {
+        if node.kind() == "import_statement" {
+            collect_auto_import_bindings(node, bytes, &mut bindings);
+        }
+    });
+    if bindings.is_empty() {
+        return;
+    }
+    crate::rules::walker::walk_tree(&tree, |node| {
+        if node.kind() == "call_expression" {
+            collect_call_registrations(node, bytes, config_file, &bindings, out);
+        }
+    });
+}
+
+/// Local names bound by `node` (an `import_statement`) when it imports the
+/// auto-import plugin. Every identifier in the import clause is taken: the
+/// plugin is used through its default export, whatever the file calls it.
+fn collect_auto_import_bindings(
+    node: tree_sitter::Node,
+    source: &[u8],
+    out: &mut FxHashSet<String>,
+) {
+    let is_plugin_import = node
+        .child_by_field_name("source")
+        .and_then(|src| src.utf8_text(source).ok())
+        .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
+        .is_some_and(|spec| {
+            spec == AUTO_IMPORT_PACKAGE
+                || spec.starts_with(&format!("{AUTO_IMPORT_PACKAGE}/"))
+        });
+    if !is_plugin_import {
+        return;
+    }
+    let Some(clause) = node
+        .named_children(&mut node.walk())
+        .find(|c| c.kind() == "import_clause")
+    else {
+        return;
+    };
+    let mut stack = vec![clause];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "identifier"
+            && let Ok(name) = current.utf8_text(source)
+        {
+            out.insert(name.to_string());
+        }
+        stack.extend(current.named_children(&mut current.walk()));
+    }
+}
+
+/// Push the registrations `call` declares into `out` when its callee is one of
+/// `bindings` — i.e. the call configures the auto-import plugin. Reads the
+/// `imports:` option's object entries; a preset element (`'vue'`) names no
+/// project module and is skipped.
+fn collect_call_registrations(
+    call: tree_sitter::Node,
+    source: &[u8],
+    config_file: &Path,
+    bindings: &FxHashSet<String>,
+    out: &mut Vec<AutoImportRegistration>,
+) {
+    let is_plugin_call = call
+        .child_by_field_name("function")
+        .filter(|f| f.kind() == "identifier")
+        .and_then(|f| f.utf8_text(source).ok())
+        .is_some_and(|name| bindings.contains(name));
+    if !is_plugin_call {
+        return;
+    }
+    let Some(options) = call
+        .child_by_field_name("arguments")
+        .and_then(|args| args.named_children(&mut args.walk()).find(|c| c.kind() == "object"))
+    else {
+        return;
+    };
+    let Some(imports) = object_property_value(options, source, "imports")
+        .filter(|value| value.kind() == "array")
+    else {
+        return;
+    };
+    for element in imports
+        .named_children(&mut imports.walk())
+        .filter(|c| c.kind() == "object")
+    {
+        for pair in element
+            .named_children(&mut element.walk())
+            .filter(|c| c.kind() == "pair")
+        {
+            let Some(specifier) = pair
+                .child_by_field_name("key")
+                .and_then(|key| string_literal_text(key, source))
+            else {
+                continue;
+            };
+            let Some(value) = pair
+                .child_by_field_name("value")
+                .filter(|value| value.kind() == "array")
+            else {
+                continue;
+            };
+            let names: Vec<String> = value
+                .named_children(&mut value.walk())
+                .filter_map(|item| match item.kind() {
+                    // `['default', 'Alias']` injects the module's `default`
+                    // under a local alias — the exported name is the first
+                    // element, the second is the name at the use site.
+                    "array" => item
+                        .named_children(&mut item.walk())
+                        .next()
+                        .and_then(|first| string_literal_text(first, source)),
+                    _ => string_literal_text(item, source),
+                })
+                .map(str::to_string)
+                .collect();
+            if names.is_empty() {
+                continue;
+            }
+            out.push(AutoImportRegistration {
+                config_file: config_file.to_path_buf(),
+                specifier: specifier.to_string(),
+                names,
+            });
+        }
+    }
+}
+
+/// Value node of `object`'s `key` property, matching both `key: v` and
+/// `'key': v`. `None` when the object declares no such property.
+fn object_property_value<'a>(
+    object: tree_sitter::Node<'a>,
+    source: &[u8],
+    key: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    object
+        .named_children(&mut object.walk())
+        .filter(|member| member.kind() == "pair")
+        .find(|pair| {
+            pair.child_by_field_name("key")
+                .and_then(|k| match k.kind() {
+                    "property_identifier" => k.utf8_text(source).ok(),
+                    _ => string_literal_text(k, source),
+                })
+                .is_some_and(|name| name == key)
+        })
+        .and_then(|pair| pair.child_by_field_name("value"))
+}
+
+/// Text of `node` when it is a string literal, without its quotes. `None` for
+/// any other node, so a computed or templated key never passes for a literal.
+fn string_literal_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> Option<&'a str> {
+    if node.kind() != "string" {
+        return None;
+    }
+    node.named_children(&mut node.walk())
+        .find(|c| c.kind() == "string_fragment")
+        .and_then(|fragment| fragment.utf8_text(source).ok())
 }
 
 /// Parse + cache the manifest `filename` located directly in `manifest_dir`.
@@ -10607,6 +10946,41 @@ model Envelope {
         ]);
         let path = dir.path().join("src/composables/dark.ts");
         assert!(!ctx.uses_unplugin_auto_import(&path));
+    }
+
+    // Issue #8050: the plugin's `imports:` map is the project's own statement of
+    // which exports it injects as globals. A relative specifier resolves against
+    // the declaring config, and the `['exported', 'Alias']` form registers the
+    // exported name, not the local alias.
+    #[test]
+    fn auto_imported_names_read_the_plugin_configuration_issue_8050() {
+        let (dir, ctx) = load_with_files(&[
+            (
+                "package.json",
+                r#"{"name":"app","devDependencies":{"unplugin-auto-import":"^0.17.0"}}"#,
+            ),
+            (
+                "vite.config.ts",
+                "import AutoImport from 'unplugin-auto-import/vite'\n\
+                 export default { plugins: [AutoImport({ imports: [\n\
+                 \x20 'vue',\n\
+                 \x20 { './src/lib/table': ['useTable', ['default', 'Table']] }\n\
+                 ] })] }\n",
+            ),
+            ("src/lib/table.ts", "export const useTable = 1;\n"),
+            ("src/lib/other.ts", "export const useOther = 1;\n"),
+        ]);
+
+        // The lever compares against the canonical path the import index hands
+        // rules, which on macOS differs from the temp dir's symlinked form.
+        let canonical = |rel: &str| std::fs::canonicalize(dir.path().join(rel)).unwrap();
+
+        let table = ctx.auto_imported_names_for_module(&canonical("src/lib/table.ts"));
+        assert!(table.contains("useTable"), "{table:?}");
+        assert!(table.contains("default"), "the aliased form registers `default`: {table:?}");
+
+        let other = ctx.auto_imported_names_for_module(&canonical("src/lib/other.ts"));
+        assert!(other.is_empty(), "an unregistered module gets nothing: {other:?}");
     }
 
     // Issue #4385: in a project whose `tsconfig.json` sets a non-React
