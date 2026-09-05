@@ -471,6 +471,30 @@ pub fn is_developer_script_path(path: &Path) -> bool {
     has_path_segment(path, &["scripts", "bin", "migrations"])
 }
 
+/// Benchmark-harness directory names, matched as exact path segments so
+/// `benches-old/` or `workbench/` do not qualify.
+const BENCHMARK_DIR_SEGMENTS: &[&str] = &["benches", "bench", "benchmark", "benchmarks"];
+
+/// True when `path` is a benchmark source file: a [`BENCHMARK_DIR_SEGMENTS`]
+/// directory segment, a file stem carrying a `_bench`/`-bench` marker (e.g.
+/// `parse_bench.rs`), a `.bench.` filename infix (e.g. `parse.bench.ts`), or a
+/// file whose stem is exactly `bench` or `benchmark` (e.g. Turf's per-package
+/// `bench.ts`). A benchmark harness measures and prints; it is never published
+/// and never imported, so rules about shipped product code do not apply to it.
+pub fn is_benchmark_path(path: &Path) -> bool {
+    if has_path_segment(path, BENCHMARK_DIR_SEGMENTS) {
+        return true;
+    }
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if name.contains(".bench.") {
+        return true;
+    }
+    let stem = name.split('.').next().unwrap_or("");
+    stem == "bench" || stem == "benchmark" || stem.ends_with("_bench") || stem.ends_with("-bench")
+}
+
 /// Top-level directory names that hold CLI tools, build/automation scripts, and
 /// benchmark harnesses run directly (by Node, a build runner, or a shell),
 /// never `import`-ed as library modules. Matched only at the project root, so a
