@@ -4,8 +4,8 @@
 //! need arbitrary type queries (`getTypeAtLocation`, structural comparison)
 //! that no fixed linter exposes, so comply drives a TypeScript checker itself
 //! via `crate::typeaware`. Each rule here carries only its `RuleMeta`; the
-//! actual logic lives in the sidecar and is keyed by the rule id. They run
-//! only when `--type-aware` is passed.
+//! actual logic lives in the sidecar and is keyed by the rule id. The sidecar
+//! runs only while at least one of them is enabled for the project.
 
 use crate::diagnostic::Severity;
 use crate::rules::backend::Backend;

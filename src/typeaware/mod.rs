@@ -7,19 +7,19 @@
 //! sidecar: it sends the tsconfig + file list + enabled rule ids, the sidecar
 //! builds the program once and returns the violations as JSON.
 //!
-//! Only invoked when `--type-aware` is passed (see `main::lint_typescript`),
-//! so the standard run stays AstCheck-only and keeps its sub-60s budget. The
-//! sidecar phase accepts a much higher cost (building the program dominates).
+//! Invoked when at least one rule needing that program is still enabled for
+//! the project (`main::type_aware_rules_active`). Building the program
+//! dominates the run, so a project that disables them all skips the phase
+//! entirely and keeps the AstCheck-only budget.
 //!
-//! Failure handling splits by cause, because silently skipping a type-aware
-//! analysis that the user explicitly asked for makes a clean exit
-//! indistinguishable from "the toolchain wasn't there". When type-aware rules
-//! are enabled and there are TS files to analyze, an *environment-config*
-//! failure — `node` absent, `@typescript/native-preview` unresolved, the
-//! checker API failing to initialize, or the program snapshot failing — is a
-//! hard error (`Err`, non-zero exit) carrying an actionable message. A
-//! missing tsconfig (nothing to type-check) and a sidecar timeout (a hang, not
-//! a config gap) stay graceful: a one-line stderr notice and no diagnostics.
+//! Failure handling splits by cause, because silently skipping the phase makes
+//! a clean exit indistinguishable from "the toolchain wasn't there". A
+//! *toolchain* failure — `node` absent, `@typescript/native-preview`
+//! unresolved, the checker API failing to initialize, or the program snapshot
+//! failing — is a hard `ToolchainError`: non-zero exit, and the remedy comply
+//! knows. A missing tsconfig (nothing to type-check) and a sidecar timeout (a
+//! hang, not a toolchain gap) stay graceful: a one-line stderr notice and no
+//! diagnostics.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
