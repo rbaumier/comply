@@ -185,7 +185,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     expression_yields_buffer, find_identifier_type, is_in_kani_proof, is_in_never_fn,
-    is_in_test_context, is_under_tests_dir, local_binding_init_expression, trait_base_name,
+    is_in_test_context, is_under_tests_dir, local_binding_init_expression, macro_last_name_segment,
+    macro_token_tree, macro_writer_identifier, trait_base_name, type_text_is_buffer,
 };
 use tree_sitter::Node;
 
@@ -1000,10 +1001,11 @@ fn is_unwrapping_call(value: Node, source: &[u8]) -> bool {
 /// unit rather than ignoring an error — the macro sibling of the
 /// `write_str`/`write_char` method exemption.
 ///
-/// The writer is the first comma-delimited macro argument; it is resolved only
-/// when it is a bare identifier, from the enclosing scope: an annotation naming a
-/// buffer type (via [`find_identifier_type`]), or the expression the writer's
-/// binding takes its value from (via
+/// The writer is the first comma-delimited macro argument, borrowed or not
+/// ([`macro_writer_identifier`]); it is resolved only when it is a bare
+/// identifier, from the enclosing scope: an annotation naming a buffer type (via
+/// [`find_identifier_type`]), or the expression the writer's binding takes its
+/// value from (via
 /// [`local_binding_init_expression`][crate::rules::rust_helpers::local_binding_init_expression])
 /// when that expression yields a `String`/`Vec`. A fallible `io::Write` writer
 /// (`File`, `BufWriter`, socket), a non-identifier writer (`self.buf`), or an
@@ -1018,7 +1020,8 @@ fn is_fmt_write_macro_to_buffer(value: Node, source: &[u8]) -> bool {
     {
         return false;
     }
-    let Some(writer) = macro_token_tree(value).and_then(macro_first_arg_identifier) else {
+    let Some(writer) = macro_token_tree(value).and_then(|tt| macro_writer_identifier(tt, source))
+    else {
         return false;
     };
     let Ok(name) = writer.utf8_text(source) else {
@@ -1035,61 +1038,19 @@ fn is_fmt_write_macro_to_buffer(value: Node, source: &[u8]) -> bool {
         .is_some_and(|origin| expression_yields_buffer(origin, source))
 }
 
-/// The last segment of a macro invocation's name — `writeln` for both `writeln!`
-/// and a qualified `std::writeln!`.
-fn macro_last_name_segment<'a>(value: Node, source: &'a [u8]) -> Option<&'a str> {
-    let name = value.child_by_field_name("macro")?.utf8_text(source).ok()?;
-    Some(name.rsplit("::").next().unwrap_or(name))
-}
-
-/// A macro invocation's token tree — an unnamed child, so no field name reaches
-/// it.
-fn macro_token_tree(value: Node<'_>) -> Option<Node<'_>> {
-    let mut cursor = value.walk();
-    value
-        .children(&mut cursor)
-        .find(|child| child.kind() == "token_tree")
-}
-
-/// The writer of a `write!`/`writeln!` `token_tree` when it is a single bare
-/// identifier. tree-sitter parses the macro body as an opaque token stream, so
-/// the writer appears as the tokens up to the first top-level `,`. Returns that
-/// identifier node only when the segment is exactly one `identifier` token — a
-/// `self.buf`/`x.y` writer spans several tokens and is deliberately not resolved
-/// here (it stays flagged). Only the token tree's direct children are read, so a
-/// comma nested in a deeper `token_tree` does not end the writer segment early.
-fn macro_first_arg_identifier(token_tree: Node<'_>) -> Option<Node<'_>> {
-    let mut cursor = token_tree.walk();
-    let mut writer: Option<Node<'_>> = None;
-    let mut token_count = 0usize;
-    for child in token_tree.children(&mut cursor) {
-        match child.kind() {
-            "(" | ")" | "[" | "]" | "{" | "}" => {}
-            "," => break,
-            "identifier" => {
-                token_count += 1;
-                writer = Some(child);
-            }
-            _ => token_count += 1,
-        }
-    }
-    if token_count == 1 { writer } else { None }
-}
-
-/// True if `ty` (a resolved binding/parameter type's source text) names an
-/// in-memory write buffer whose `write!`/`writeln!` result is structurally
-/// `Ok(())`: `String`, `fmt::Formatter`, or `Vec<u8>`, seen through any leading
-/// `&`/`&mut` and trailing generic (`<'_>`) args. A fallible `io::Write` writer
-/// (`File`, `BufWriter`, `TcpStream`) does not match.
+/// True if `ty` (a resolved binding/parameter type's source text) names a writer
+/// whose `write!`/`writeln!` result is structurally `Ok(())`: an in-memory buffer
+/// per [`type_text_is_buffer`], or a `fmt::Formatter`, which writes into the
+/// buffer the caller is formatting into. A fallible `io::Write` writer (`File`,
+/// `BufWriter`, `TcpStream`) does not match.
 fn is_in_memory_writer_type(ty: &str) -> bool {
-    let base = ty.trim().trim_start_matches('&').trim_start();
-    let base = base.strip_prefix("mut ").unwrap_or(base).trim_start();
-    if base.replace(' ', "") == "Vec<u8>" {
+    if type_text_is_buffer(ty) {
         return true;
     }
+    let base = ty.trim().trim_start_matches('&').trim_start();
+    let base = base.strip_prefix("mut ").unwrap_or(base).trim_start();
     let head = base.split('<').next().unwrap_or(base).trim();
-    let last = head.rsplit("::").next().unwrap_or(head).trim();
-    matches!(last, "String" | "Formatter")
+    head.rsplit("::").next().unwrap_or(head).trim() == "Formatter"
 }
 
 /// True if any method in the `value` call chain is `.map_err(<closure>)` or
@@ -1216,7 +1177,7 @@ fn is_std_stream_write_macro(value: Node, source: &[u8]) -> bool {
         "print" | "println" | "eprint" | "eprintln" => true,
         "write" | "writeln" => macro_token_tree(value).is_some_and(|token_tree| {
             macro_first_arg_heads_at_std_stream(token_tree, source)
-                || macro_first_arg_identifier(token_tree)
+                || macro_writer_identifier(token_tree, source)
                     .is_some_and(|writer| receiver_roots_at_std_stream(writer, source))
         }),
         _ => false,
