@@ -753,6 +753,32 @@ pub fn is_mock_or_fixture_dir_path(path: &Path) -> bool {
     )
 }
 
+/// Test-suite directory segments: the roots a test runner discovers specs and
+/// their scaffolding under. Matched as whole path segments, so `src/contest/`
+/// and `src/latest/` are not test suites.
+const TEST_SUITE_DIR_SEGMENTS: &[&str] = &["test", "tests", "__tests__", "regression"];
+
+/// True when `path` is test scaffolding by its path alone: it carries a
+/// `.test.`/`.spec.` filename infix, sits under a test-suite directory
+/// ([`TEST_SUITE_DIR_SEGMENTS`]), or sits under a mock/fixture directory
+/// ([`is_mock_or_fixture_dir_path`]).
+///
+/// Such a file is exercised by the test runner and never shipped as production
+/// source, so it may mirror the exact camelCase/PascalCase symbol it tests
+/// instead of the production filename convention, and may carry test-only name
+/// markers (`_test`/`_spec` suffixes, `issue-NNNN-` regression prefixes,
+/// `@<version>` suite discriminators). The three signals are one question — "is
+/// this file test scaffolding?" — so they answer it in one place: a `.test.`
+/// file co-located in `src/` and a suffix-less fixture under `test/` are the
+/// same kind of file and must get the same verdict.
+pub fn is_test_scaffolding_path(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || has_path_segment(path, TEST_SUITE_DIR_SEGMENTS)
+        || is_mock_or_fixture_dir_path(path)
+}
+
 /// True when `path` lives under a `testing/` directory, the test-infrastructure
 /// convention (popularised by bulletproof-react) for housing test utilities,
 /// mock handlers, test setup files, and test-data generators co-located with
@@ -2102,6 +2128,29 @@ mod aux_path_tests {
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/__testfixtures__data/index.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("syntax-tests-data/foo.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn test_scaffolding_path_covers_dirs_and_infixes() {
+        // A test-suite directory segment, at the root or nested.
+        assert!(is_test_scaffolding_path(&PathBuf::from("test/plots/shorthand-tickX.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from("packages/foo/tests/io.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from("__tests__/Router-test.tsx")));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "packages/tests/server/regression/issue-3351-TRPCError.test.ts"
+        )));
+        // A mock/fixture directory segment, via the shared classifier.
+        assert!(is_test_scaffolding_path(&PathBuf::from("__fixtures__/render-My.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from("src/__mocks__/server.ts")));
+        // A `.test.`/`.spec.` infix on a file co-located in production source.
+        assert!(is_test_scaffolding_path(&PathBuf::from("src/plots/shorthand-tickX.test.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from("src/plots/aspect.spec.ts")));
+        // Segment (not substring) match — `contest/`, `latest/` and a stem
+        // merely containing `test` are production source.
+        assert!(!is_test_scaffolding_path(&PathBuf::from("src/contest/shorthand-tickX.ts")));
+        assert!(!is_test_scaffolding_path(&PathBuf::from("src/latest/index.ts")));
+        assert!(!is_test_scaffolding_path(&PathBuf::from("src/testHarness.ts")));
+        assert!(!is_test_scaffolding_path(&PathBuf::from("src/app/login.ts")));
     }
 
     #[test]
