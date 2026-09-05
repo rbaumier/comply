@@ -19,13 +19,16 @@ pub struct Check;
 ///
 /// Coercion positions (flagged): the test of an `if`/`while`/`do-while`/`for`,
 /// the test of a conditional expression, the operand of logical-NOT `!`, or an
-/// operand that itself reaches such a position through `&&`/`||`, parentheses, or
-/// an optional chain. Every other parent — a variable initializer, assignment
-/// right-hand side, call/`new` argument, arithmetic/comparison operand,
-/// `return`/property value, template interpolation, or `??` operand — is a value
-/// position and is not flagged. `&&`/`||` operands coerce only when the logical
-/// expression's own result lands in a boolean context (`if (a.length && b)`), so
-/// the walk continues upward through them.
+/// operand that itself reaches such a position through `&&`/`||`, parentheses, an
+/// optional chain, a value-preserving TS wrapper (`!`, `as`, `satisfies`, an
+/// angle-bracket type assertion), or the last operand of a comma sequence. Every
+/// other parent — a variable initializer, assignment right-hand side, call/`new`
+/// argument, arithmetic/comparison operand, `return`/property value, JSX
+/// attribute value or expression child, template interpolation, a discarded
+/// sequence operand, or a `??` operand — is a value position and is not flagged.
+/// `&&`/`||` operands coerce only when the logical expression's own result lands
+/// in a boolean context (`if (a.length && b)`), so the walk continues upward
+/// through them.
 fn is_boolean_coercion_position(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -69,8 +72,25 @@ fn is_boolean_coercion_position(
                     return false;
                 }
             }
-            AstKind::ParenthesizedExpression(_) | AstKind::ChainExpression(_) => {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::ChainExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSTypeAssertion(_) => {
                 // Transparent wrappers — the wrapped value keeps its position.
+            }
+            AstKind::SequenceExpression(sequence) => {
+                // A sequence yields its last operand; the earlier ones are
+                // evaluated and discarded, so only the last inherits the
+                // sequence's own context.
+                let is_last_operand = sequence
+                    .expressions
+                    .last()
+                    .is_some_and(|last| last.span() == child_span);
+                if !is_last_operand {
+                    return false;
+                }
             }
             _ => return false,
         }
@@ -430,5 +450,51 @@ mod tests {
     #[test]
     fn still_flags_bare_length_in_while_issue_7202() {
         assert_eq!(run_on("while (arr.length) {}").len(), 1);
+    }
+
+    // Regression #7267 — the TS-only wrappers erase types, never the runtime
+    // value, so a `.length` behind one of them in a test is still coerced.
+    #[test]
+    fn flags_non_null_asserted_length_in_if_issue_7267() {
+        assert_eq!(run_on("if (arr.length!) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_as_cast_length_in_if_issue_7267() {
+        assert_eq!(run_on("if (arr.length as unknown) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_satisfies_length_in_if_issue_7267() {
+        assert_eq!(run_on("if (arr.length satisfies number) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_type_asserted_length_in_if_issue_7267() {
+        assert_eq!(run_on("if (<number>arr.length) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_wrapped_length_in_negation_issue_7267() {
+        assert_eq!(run_on("if (!(arr.length as number)) {}").len(), 1);
+    }
+
+    // Regression #7267 — a comma sequence yields its last operand, so only that
+    // operand inherits the surrounding boolean context.
+    #[test]
+    fn flags_length_as_last_sequence_operand_issue_7267() {
+        assert_eq!(run_on("if ((a, arr.length)) {}").len(), 1);
+    }
+
+    #[test]
+    fn allows_length_as_discarded_sequence_operand_issue_7267() {
+        assert!(run_on("if ((arr.length, a)) {}").is_empty());
+    }
+
+    // A TS wrapper in a value position stays a value position — the wrapper is
+    // transparent in both directions.
+    #[test]
+    fn allows_as_cast_length_in_variable_initializer_issue_7267() {
+        assert!(run_on("const n = arr.length as number;").is_empty());
     }
 }
