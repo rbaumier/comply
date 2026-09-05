@@ -15,10 +15,16 @@
 //! `insert`/`update`/`delete`) additionally require two independent signals:
 //! the receiver chain anchored on a DB-like binding, so a `HashMap::insert` or
 //! a GraphQL `extensions.execute(..)` pipeline is not mistaken for a query, and
-//! a database crate reached by the file (`rust_helpers::file_references_db_crate`),
-//! so an HTTP, gRPC or object-storage client sharing one of those binding names
-//! is not read as a database handle. This mirrors the `file_imports_db_library`
-//! gate the TypeScript backend applies to the same overloaded names.
+//! crate provenance for that receiver, so an HTTP, gRPC or object-storage client
+//! sharing one of those binding names is not read as a database handle.
+//!
+//! Provenance is decided per receiver, from the crate that declares the
+//! receiver's type ([`rust_helpers::receiver_type_origins`]): a `tonic::Channel`
+//! and a `tokio_postgres::Client` may both be called `client`, and only the
+//! second anchors. When the file declares no type for the receiver, or declares
+//! one the linted crate owns, provenance falls back to the file's own imports
+//! and qualified paths (`rust_helpers::file_references_db_crate`) — the gate the
+//! TypeScript backend applies to the same overloaded names.
 //!
 //! Inline `#[cfg(test)]` modules are exempt: parametrized tests routinely
 //! create a fresh in-memory datastore per loop iteration and run one query
@@ -27,7 +33,9 @@
 //! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{file_references_db_crate, is_test_code};
+use crate::rules::rust_helpers::{
+    TypeOrigin, file_references_db_crate, is_db_crate, is_test_code, receiver_type_origins,
+};
 use crate::rules::sql_helpers::contains_word;
 
 /// Method names that are unambiguously sqlx/ORM driver calls — DB-specific by
@@ -37,8 +45,8 @@ const UNAMBIGUOUS_METHODS: &[&str] = &["fetch_one", "fetch_all", "fetch_optional
 /// Method names that are heavily overloaded across the ecosystem (futures
 /// executors, command runners, `HashMap::insert`, GraphQL pipelines, …). A
 /// match on one of these flags only when the receiver chain is anchored on a
-/// DB-like binding (see `DB_RECEIVER_NAMES`) *and* the file reaches a database
-/// crate.
+/// DB-like binding (see `DB_RECEIVER_NAMES`) *and* that receiver carries
+/// database provenance (see [`receiver_is_db_handle`]).
 const GENERIC_METHODS: &[&str] = &["query", "execute", "find", "insert", "update", "delete"];
 
 /// Binding/field names a database handle can carry. Matched case-insensitively
@@ -49,7 +57,7 @@ const GENERIC_METHODS: &[&str] = &["query", "execute", "find", "insert", "update
 /// `reqwest::Client`, `tonic` gRPC channels and S3 clients as much as
 /// `tokio_postgres::Client` — so a match here narrows the candidates but never
 /// establishes that the receiver is a database handle: the crate-provenance
-/// gate in [`is_db_call`] decides that.
+/// gate in [`receiver_is_db_handle`] decides that.
 const DB_RECEIVER_NAMES: &[&str] = &[
     "conn",
     "connection",
@@ -73,10 +81,10 @@ const DB_RECEIVER_NAMES: &[&str] = &[
 /// `<receiver>.<method>`. Unambiguous sqlx methods flag on the method name
 /// alone. Generic, overloaded method names additionally require the receiver
 /// chain to be anchored on a DB-like name — either the chain's root identifier
-/// or the immediate receiver field the method is called on — and the file to
-/// reach a database crate through an import or a qualified path. The binding
-/// name is chosen by the author and says nothing about what the value is; the
-/// crate the file talks to is what makes the call a database query.
+/// or the immediate receiver field the method is called on — and that receiver
+/// to carry database provenance ([`receiver_is_db_handle`]). The binding name is
+/// chosen by the author and says nothing about what the value is; the crate the
+/// receiver's type comes from is what makes the call a database query.
 fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut current = node;
     // Peel `?` / `.await` wrappers around the call.
@@ -119,9 +127,37 @@ fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
         return false;
     }
 
-    // …and a database crate in the file, so the anchor names a database handle
-    // rather than an HTTP/gRPC/object-storage client that shares the name.
-    file_references_db_crate(current, source)
+    // …and database provenance for that receiver, so the anchor names a database
+    // handle rather than an HTTP/gRPC/object-storage client sharing the name.
+    receiver_is_db_handle(receiver, source)
+}
+
+/// True if the anchored `receiver` is a database handle.
+///
+/// The evidence is the crate that declares the receiver's type, resolved in the
+/// file ([`receiver_type_origins`]):
+/// - a database crate declares it → a database handle;
+/// - external crates alone declare it → not a database handle, whatever else the
+///   file talks to;
+/// - the linted crate declares it, or the file declares no type for it at all →
+///   the file's own imports and qualified paths answer, the strongest evidence
+///   left once the receiver itself resolves to nothing.
+fn receiver_is_db_handle(receiver: tree_sitter::Node, source: &[u8]) -> bool {
+    let origins = receiver_type_origins(receiver, source);
+    if origins
+        .iter()
+        .any(|origin| matches!(origin, TypeOrigin::ExternalCrate(name) if is_db_crate(name)))
+    {
+        return true;
+    }
+    if !origins.is_empty()
+        && origins
+            .iter()
+            .all(|origin| matches!(origin, TypeOrigin::ExternalCrate(_)))
+    {
+        return false;
+    }
+    file_references_db_crate(receiver, source)
 }
 
 /// True if the receiver the method is called directly on carries a DB-like
@@ -538,6 +574,57 @@ mod tests {
             async fn load(client: &Client, ids: Vec<i32>) {
                 for id in ids {
                     client.query("SELECT * FROM users WHERE id = $1", &[&id]).await;
+                }
+            }
+        "#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #8280: a file that talks to a database does not make every receiver
+    // in it a database handle. The gRPC channel field carries a name a database
+    // handle can carry too, but its declared type comes from `tonic`, so the
+    // awaited `execute` is a remote call, not a query.
+    #[test]
+    fn allows_grpc_client_execute_in_loop_beside_db_pool_field() {
+        let src = r#"
+            use sqlx::PgPool;
+            use tonic::transport::Channel;
+
+            struct Gateway {
+                client: Channel,
+                pool: PgPool,
+            }
+
+            impl Gateway {
+                async fn forward_all(&self, requests: Vec<Request>) {
+                    for req in requests {
+                        self.client.execute(req).await;
+                    }
+                }
+            }
+        "#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Issue #8280, negative space: the same file, same method name, the other
+    // field. `self.pool` is declared `sqlx::PgPool`, so the N+1 still fires —
+    // the fix is per-receiver provenance, not distrust of the file.
+    #[test]
+    fn flags_db_pool_execute_in_loop_beside_grpc_client_field() {
+        let src = r#"
+            use sqlx::PgPool;
+            use tonic::transport::Channel;
+
+            struct Gateway {
+                client: Channel,
+                pool: PgPool,
+            }
+
+            impl Gateway {
+                async fn touch_all(&self, ids: Vec<i32>) {
+                    for id in ids {
+                        self.pool.execute(build(id)).await;
+                    }
                 }
             }
         "#;
