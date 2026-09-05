@@ -365,6 +365,12 @@ pub struct ImportIndex {
     /// reached through the import graph keeps the files it re-exports reachable,
     /// so reachability traversal follows these edges as well as import edges.
     reexport_edges: FxHashMap<PathBuf, Vec<PathBuf>>,
+    /// The wildcard half of [`reexport_edges`]: re-exporting file → resolved
+    /// source files of its `export * from './m'` declarations. A wildcard
+    /// re-export republishes the origin's *whole* export list under no name of
+    /// its own, so a rule reasoning about which symbols a barrel publishes needs
+    /// these edges separately from the named ones.
+    star_edges: FxHashMap<PathBuf, Vec<PathBuf>>,
     /// Canonical directories referenced by a template-literal dynamic import
     /// (`import(\`./locales/${lang}\`)`). The runtime path is computed, so any
     /// file under such a directory is reachable and its exports are live —
@@ -724,6 +730,7 @@ impl ImportIndex {
             namespace_imported,
             reexport_targets,
             reexport_edges,
+            star_edges,
             dynamic_import_dirs,
             mod_edges,
             augmented_exports,
@@ -931,6 +938,40 @@ impl ImportIndex {
         self.reexport_targets
             .get(&(self.canonical_key(path).to_path_buf(), name.to_string()))
             .map(PathBuf::as_path)
+    }
+
+    /// Every file that republishes `path`'s whole export list through
+    /// `export * from`, following chains so a barrel wildcard-re-exporting
+    /// another barrel is reported too. Empty when nothing wildcard-re-exports
+    /// `path` — including for every file in a project that declares no
+    /// `export * from` at all, which costs no allocation.
+    ///
+    /// A wildcard re-export names no symbol, so [`reexport_target`] cannot
+    /// answer this; a rule deciding whether a barrel publishes `path`'s exports
+    /// asks here.
+    ///
+    /// [`reexport_target`]: ImportIndex::reexport_target
+    #[must_use]
+    pub fn star_reexporters_of(&self, path: &Path) -> Vec<&Path> {
+        if self.star_edges.is_empty() {
+            return Vec::new();
+        }
+        let target = self.canonical_key(path);
+        let mut found: Vec<&Path> = Vec::new();
+        let mut frontier: Vec<&Path> = vec![target];
+        let mut seen: FxHashSet<&Path> = FxHashSet::default();
+        seen.insert(target);
+        while let Some(current) = frontier.pop() {
+            for (barrel, origins) in &self.star_edges {
+                if origins.iter().any(|origin| origin == current)
+                    && seen.insert(barrel.as_path())
+                {
+                    found.push(barrel.as_path());
+                    frontier.push(barrel.as_path());
+                }
+            }
+        }
+        found
     }
 
     /// Files reachable from `roots` via import edges (BFS). Unreachable files

@@ -151,6 +151,10 @@
 //!     (the package's public surface) and a namespace-imported barrel's, since
 //!     `import * as ns from './barrel'` reaches `m`'s `X` as `ns.X`. See
 //!     `collect_barrel_forwarded_names`.
+//!   - A module a published entry barrel republishes wholesale
+//!     (`export * from './m'`, chains included) is public surface in full: the
+//!     wildcard forwards its entire export list across the same package
+//!     boundary. See `ImportIndex::star_reexporters_of`.
 //!   - If any file imports the current module via a namespace import
 //!     (`import * as ns from './m'`), `symbol_usages` is intentionally not
 //!     populated for individual names. In that case every export on the
@@ -555,8 +559,12 @@ fn is_co_occurrence_exempt(export_name: &str, export_names: &FxHashSet<&str>) ->
 /// than per indexed file.
 ///
 /// Named re-exports only. A barrel's `export * from './m'` names no symbol, so
-/// the symbols it forwards are not collected here (for the namespace-import case
-/// the index already marks the whole origin module namespace-imported).
+/// the symbols it forwards are not collected here: the index already marks the
+/// whole origin module namespace-imported for a namespace-imported barrel, and
+/// [`ImportIndex::star_reexporters_of`] settles the published-entry case before
+/// the per-name scan is reached.
+///
+/// [`ImportIndex::star_reexporters_of`]: crate::project::import_index::ImportIndex::star_reexporters_of
 fn collect_barrel_forwarded_names(
     index: &crate::project::import_index::ImportIndex,
     project: &crate::project::ProjectCtx,
@@ -684,6 +692,20 @@ impl TextCheck for Check {
         // Its exports cross the package boundary, so no in-repo importer is
         // expected.
         if is_public_entry_file(ctx.project, &canon) {
+            return Vec::new();
+        }
+        // A module a published entry barrel republishes wholesale through
+        // `export * from './m'` — directly or through a chain of such barrels.
+        // The wildcard forwards the module's entire export list across the same
+        // package boundary a `export { x } from './m'` in that barrel forwards
+        // `x` across, so every export here is public surface with no in-repo
+        // importer to expect. Gated on the barrel being a published entry, so a
+        // feature-folder barrel wildcard-re-exporting a module confers nothing.
+        if index
+            .star_reexporters_of(&canon)
+            .iter()
+            .any(|barrel| is_public_entry_file(ctx.project, barrel))
+        {
             return Vec::new();
         }
         // shadcn-style component-registry source file — listed under a
@@ -5234,5 +5256,95 @@ mod tests {
         let versioned = r#"{"name":"app","private":true,"version":"1.0.0"}"#;
         let (_d1, published) = run_on_project_with_pkg(Some(versioned), &files, "src/index.ts");
         assert!(published.is_empty(), "a versioned package publishes its barrel: {published:?}");
+    }
+
+    /// #8451's repro: a versioned manifest declaring no `main`/`exports`, whose
+    /// `src/index.ts` barrel publishes `./helper` wholesale and `./named` by
+    /// name. Both symbols reach a consumer of the package by the same route.
+    fn wildcard_barrel_files() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            (
+                "src/index.ts",
+                "export * from './helper';\nexport { named } from './named';\n",
+            ),
+            ("src/helper.ts", "export const helper = 1;\n"),
+            ("src/named.ts", "export const named = 2;\n"),
+        ]
+    }
+
+    #[test]
+    fn no_fp_for_module_wildcard_reexported_by_the_entry_barrel_issue_8451() {
+        // The entry barrel forwards `helper` with `export *` and `named` with
+        // `export { … } from`. Both cross the package boundary through that one
+        // barrel, so neither is dead — the re-export *form* must not decide.
+        let pkg = r#"{"name":"starlib","version":"1.0.0"}"#;
+        let files = wildcard_barrel_files();
+
+        let (_d0, helper) = run_on_project_with_pkg(Some(pkg), &files, "src/helper.ts");
+        assert!(
+            helper.is_empty(),
+            "a module the entry barrel wildcard-re-exports is published: {helper:?}"
+        );
+        let (_d1, named) = run_on_project_with_pkg(Some(pkg), &files, "src/named.ts");
+        assert!(named.is_empty(), "the named re-export stays published: {named:?}");
+    }
+
+    #[test]
+    fn wildcard_reexport_exemption_follows_barrel_chains_issue_8451() {
+        // `src/index.ts` wildcard-re-exports `src/utils/index.ts`, which
+        // wildcard-re-exports `src/utils/misc/x.ts`. The terminal module's
+        // exports reach the package boundary through the chain.
+        let pkg = r#"{"name":"starlib","version":"1.0.0"}"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/index.ts", "export * from './utils';\n"),
+            ("src/utils/index.ts", "export * from './misc/x';\n"),
+            ("src/utils/misc/x.ts", "export const deepThing = 1;\n"),
+        ];
+
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/utils/misc/x.ts");
+        assert!(
+            diags.is_empty(),
+            "a chain of wildcard re-exports still ends at the published barrel: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn wildcard_reexport_exemption_is_scoped_to_published_barrels_issue_8451() {
+        // A feature-folder barrel is not a published entry, so wildcard-
+        // re-exporting through it publishes nothing and the origin stays dead.
+        let pkg = r#"{"name":"starlib","version":"1.0.0"}"#;
+        let files: Vec<(&str, &str)> = vec![
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            ("src/index.ts", "export const root = 1;\n"),
+            ("src/components/index.ts", "export * from './a';\n"),
+            ("src/components/a.ts", "export const a = 2;\n"),
+        ];
+
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/components/a.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a nested barrel confers no published surface: {diags:?}"
+        );
+        assert!(diags[0].message.contains("`a`"), "{diags:?}");
+    }
+
+    #[test]
+    fn dropping_the_wildcard_reexport_restores_the_diagnostic_issue_8451() {
+        // Scoped to what the barrel actually forwards: with the `export *` gone,
+        // `helper` reaches no consumer and is dead again.
+        let pkg = r#"{"name":"starlib","version":"1.0.0"}"#;
+        let mut files = wildcard_barrel_files();
+        files[1].1 = "export { named } from './named';\n";
+
+        let (_dir, diags) = run_on_project_with_pkg(Some(pkg), &files, "src/helper.ts");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a module the barrel does not forward is still dead: {diags:?}"
+        );
+        assert!(diags[0].message.contains("`helper`"), "{diags:?}");
     }
 }
