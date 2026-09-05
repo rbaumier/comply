@@ -55,12 +55,15 @@ impl CommentBlock {
         out
     }
 
-    /// How many words the block spends on prose and on transcribed samples.
-    /// Banners and tool directives are framing, so they cost nothing.
+    /// How many words of prose the block spends.
+    ///
+    /// A transcribed sample, a banner and a tool directive cost nothing: their
+    /// length is fixed by what they show, not by how much the author had to
+    /// explain, and half of one shows nothing.
     pub fn word_count(&self) -> usize {
         self.lines
             .iter()
-            .filter(|line| line.kind != LineKind::Structure)
+            .filter(|line| line.kind == LineKind::Prose)
             .map(|line| line.text.split_whitespace().filter(|t| is_word(t)).count())
             .sum()
     }
@@ -95,9 +98,24 @@ impl CommentBlock {
 /// A run of punctuation carries no prose: `«`, `»`, `—` and `───` are what
 /// surrounds words, not words. Neither is markup or code, which a written word
 /// never spells with an angle bracket, a brace or an equals sign — `<div`,
-/// `class="palette"` and `div{width:2rem}` are transcribed syntax.
+/// `class="palette"` and `div{width:2rem}` are transcribed syntax. Nor is a
+/// number: the letters in `0x00010000` and `1024u32` spell a radix and a type,
+/// not a word.
 pub fn is_word(token: &str) -> bool {
-    token.chars().any(char::is_alphabetic) && !token.contains(['<', '>', '{', '}', '='])
+    token.chars().any(char::is_alphabetic)
+        && !token.contains(['<', '>', '{', '}', '='])
+        && !is_numeric_literal(token)
+}
+
+/// True when `token` spells one numeric value.
+///
+/// A digit opens the literal, and its radix prefix, digit separators and type
+/// suffix all belong to it. Sentence punctuation may close it, so `0x0001,`
+/// and `1024u32.` are still numbers, while a hyphen keeps `64-bit` a word.
+fn is_numeric_literal(token: &str) -> bool {
+    let value = token.trim_end_matches(['.', ',', ';', ':', ')', ']']);
+    value.starts_with(|c: char| c.is_ascii_digit())
+        && value.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// True for a documentation comment (`///`, `//!`, `/**`, `/*!`).
@@ -791,6 +809,43 @@ mod tests {
         for token in ["Report", "vide", "docs/agents/frontend-patterns.md", "register()"] {
             assert!(is_word(token), "not counted as a word: {token}");
         }
+    }
+
+    #[test]
+    fn numeric_literals_are_not_words() {
+        for token in ["0x00010000", "0x0001000a,", "0b1010_0110", "0o777", "1024u32."] {
+            assert!(!is_word(token), "counted as a word: {token}");
+        }
+        for token in ["64-bit", "u32", "x86"] {
+            assert!(is_word(token), "not counted as a word: {token}");
+        }
+    }
+
+    #[test]
+    fn a_fenced_sample_costs_the_block_nothing() {
+        let source = "\
+// Splits the area.
+// ```rust
+// let layout = Layout::default()
+//     .constraints(sizes)
+//     .split(area);
+// ```";
+        let blocks = merge(line_comments_of(source), source);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].word_count(), 3);
+    }
+
+    #[test]
+    fn an_unterminated_fence_ends_with_its_block() {
+        let source = "\
+// ```rust
+// let layout = Layout::default();
+fn f() {}
+// Reads the layout back out again.";
+        let blocks = merge(line_comments_of(source), source);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].word_count(), 0);
+        assert_eq!(blocks[1].word_count(), 6);
     }
 
     #[test]

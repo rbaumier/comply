@@ -71,8 +71,36 @@ fn_placeholder();";
         assert!(run("// short note\n// second short line\nconst x = 1;").is_empty());
     }
 
-    // The same column of trailing field labels the Rust backend keeps apart:
-    // both backends read blocks through the shared merge.
+    // Both backends read blocks through the shared merge.
+    #[test]
+    fn a_fenced_sample_holds_no_prose() {
+        let src = r#"/**
+ * Splits the area.
+ *
+ * ```ts
+ * const layout = splitLayout(frame.area(), [
+ *   Constraint.length(3),
+ *   Constraint.min(0),
+ * ]);
+ * const header = paragraph('Header').block(bordered());
+ * const body = paragraph('Body').block(bordered());
+ * renderWidget(header, layout[0]);
+ * renderWidget(body, layout[1]);
+ * renderWidget(footer, layout[2]);
+ * renderWidget(status, layout[3]);
+ * renderWidget(sidebar, layout[4]);
+ * renderWidget(toolbar, layout[5]);
+ * renderWidget(gutter, layout[6]);
+ * renderWidget(overlay, layout[7]);
+ * renderWidget(tooltip, layout[8]);
+ * renderWidget(cursor, layout[9]);
+ * ```
+ */
+export function split() {}"#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // The column the Rust backend keeps apart, in TypeScript.
     #[test]
     fn column_aligned_trailing_field_labels_are_not_one_block() {
         let src = "\
