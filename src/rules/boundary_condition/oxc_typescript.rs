@@ -389,6 +389,31 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `m[0]` in a branch narrowed by the very assignment that produced `m` —
+        // `while ((m = re.exec(s))) { m[0] }` or `if ((m = re.exec(s))) { m[0] }`,
+        // the scan idiom MDN and the TypeScript handbook show for a `g`-flagged
+        // regex. The condition evaluates to the value it just stored, so the branch
+        // runs only when that value is truthy, and a non-null exec/match result is
+        // a `RegExpExecArray`/`RegExpMatchArray` whose index 0 (the full match)
+        // always exists. Reading the value off the assignment is what makes the
+        // declaration irrelevant here: the idiom writes a bare `let m;`, which no
+        // initializer-based provenance check can resolve.
+        if is_first
+            && let Expression::Identifier(obj_ident) = &member.object
+            && reference_in_narrowed_branch(
+                node.id(),
+                node.kind().span(),
+                obj_ident.name.as_str(),
+                semantic.nodes(),
+                |test, name| {
+                    condition_assignment_source(test, name)
+                        .is_some_and(is_regex_exec_or_match_call)
+                },
+            )
+        {
+            return;
+        }
+
         // `match[0]` where `match` is the element bound by
         // `for (const match of <expr>.matchAll(...))`. Each element yielded by
         // `String.prototype.matchAll` is a `RegExpMatchArray` whose index 0 (the
@@ -3939,65 +3964,119 @@ fn reference_is_guarded(
 
 /// Returns true when an enclosing construct truthy-narrows `name` and the
 /// reference at `ref_span` lives in the branch that runs only when `name` was
-/// truthy: the consequent of `if (<truthy name guard>)`, the consequent of a
-/// `<truthy name guard> ? <ref> : …` ternary, or the right operand of a
-/// `<truthy name guard> && <ref>` logical-and. The guard test is recognized by
-/// [`condition_truthy_narrows`].
+/// truthy. The guard test is recognized by [`condition_truthy_narrows`]; the
+/// branches are listed on [`reference_in_narrowed_branch`].
 fn reference_in_truthy_narrowed_branch(
     ref_node_id: oxc_semantic::NodeId,
     ref_span: oxc_span::Span,
     name: &str,
     nodes: &oxc_semantic::AstNodes,
 ) -> bool {
+    reference_in_narrowed_branch(ref_node_id, ref_span, name, nodes, condition_truthy_narrows)
+}
+
+/// Returns true when an enclosing construct tests a condition `condition_narrows`
+/// accepts for `name`, and the reference at `ref_span` lives in the branch that
+/// runs only when that condition held:
+///   - the consequent of an `if`,
+///   - the consequent of a `<test> ? <ref> : …` ternary,
+///   - the right operand of a `<test> && <ref>` logical-and,
+///   - the body of a `while (<test>)`, whose test is re-evaluated before every
+///     iteration,
+///   - the update and body of a `for (…; <test>; …)`, both of which run only
+///     after the test held.
+///
+/// `do { … } while (<test>)` is deliberately NOT a guard: its body runs once
+/// before the test is ever evaluated, so the test does not dominate the first
+/// iteration. The walk stops at the enclosing function, since a guard outside it
+/// says nothing about the state where the function body runs.
+fn reference_in_narrowed_branch(
+    ref_node_id: oxc_semantic::NodeId,
+    ref_span: oxc_span::Span,
+    name: &str,
+    nodes: &oxc_semantic::AstNodes,
+    mut condition_narrows: impl FnMut(&Expression, &str) -> bool,
+) -> bool {
     for ancestor in nodes.ancestors(ref_node_id) {
-        match ancestor.kind() {
-            AstKind::IfStatement(if_stmt) => {
-                if condition_truthy_narrows(&if_stmt.test, name)
-                    && span_contains(if_stmt.consequent.span(), ref_span)
-                {
-                    return true;
-                }
+        let (test, narrowed) = match ancestor.kind() {
+            AstKind::IfStatement(if_stmt) => (&if_stmt.test, if_stmt.consequent.span()),
+            AstKind::ConditionalExpression(cond) => (&cond.test, cond.consequent.span()),
+            AstKind::LogicalExpression(logical)
+                if matches!(logical.operator, LogicalOperator::And) =>
+            {
+                (&logical.left, logical.right.span())
             }
-            AstKind::ConditionalExpression(cond) => {
-                if condition_truthy_narrows(&cond.test, name)
-                    && span_contains(cond.consequent.span(), ref_span)
-                {
-                    return true;
-                }
-            }
-            AstKind::LogicalExpression(logical) => {
-                if matches!(logical.operator, LogicalOperator::And)
-                    && condition_truthy_narrows(&logical.left, name)
-                    && span_contains(logical.right.span(), ref_span)
-                {
-                    return true;
-                }
+            AstKind::WhileStatement(while_stmt) => (&while_stmt.test, while_stmt.body.span()),
+            AstKind::ForStatement(for_stmt) => {
+                let Some(test) = &for_stmt.test else { continue };
+                // Everything after the test inside the statement — the update and
+                // the body — runs only once the test has held.
+                (test, oxc_span::Span::new(test.span().end, for_stmt.span().end))
             }
             // Leaving the binding's scope without finding a guard.
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
                 return false;
             }
-            _ => {}
+            _ => continue,
+        };
+        if condition_narrows(test, name) && span_contains(narrowed, ref_span) {
+            return true;
         }
     }
     false
 }
 
 /// Returns true when `expr` is a condition whose truth implies `name` is truthy
-/// (non-nullish): a bare `name`, or `name && …` where the left operand is the
-/// truthy check on `name`. This is the narrowing that makes a use of `name` in the
-/// guarded branch safe.
+/// (non-nullish): a bare `name`, an assignment `name = …` (which evaluates to the
+/// value it just stored — see [`condition_assignment_source`]), or either of
+/// those as the left operand of a `&&`. This is the narrowing that makes a use of
+/// `name` in the guarded branch safe.
 fn condition_truthy_narrows(expr: &Expression, name: &str) -> bool {
     match expr {
         Expression::Identifier(id) => id.name.as_str() == name,
         Expression::ParenthesizedExpression(paren) => {
             condition_truthy_narrows(&paren.expression, name)
         }
+        Expression::AssignmentExpression(_) => condition_assignment_source(expr, name).is_some(),
         Expression::LogicalExpression(logical) => {
             matches!(logical.operator, LogicalOperator::And)
                 && condition_truthy_narrows(&logical.left, name)
         }
         _ => false,
+    }
+}
+
+/// Returns the right-hand side of a plain `=` assignment to `name` written as a
+/// condition — `while ((m = re.exec(s)))`, `if ((m = next()) && ok)`. An
+/// assignment expression evaluates to the value it stored, so a condition of this
+/// shape both narrows `name` and names the exact value the narrowed branch sees,
+/// however the binding was declared. Parentheses and the left operand of `&&` are
+/// peeled, matching [`condition_truthy_narrows`]. A compound or logical
+/// assignment (`+=`, `&&=`, `??=`) stores a value derived from the current one
+/// rather than the right-hand side, so it yields `None`.
+fn condition_assignment_source<'a, 'b>(
+    expr: &'b Expression<'a>,
+    name: &str,
+) -> Option<&'b Expression<'a>> {
+    match expr {
+        Expression::ParenthesizedExpression(paren) => {
+            condition_assignment_source(&paren.expression, name)
+        }
+        Expression::LogicalExpression(logical)
+            if matches!(logical.operator, LogicalOperator::And) =>
+        {
+            condition_assignment_source(&logical.left, name)
+        }
+        Expression::AssignmentExpression(assign) => {
+            if assign.operator != AssignmentOperator::Assign {
+                return None;
+            }
+            let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left else {
+                return None;
+            };
+            (target.name.as_str() == name).then_some(&assign.right)
+        }
+        _ => None,
     }
 }
 
@@ -7059,6 +7138,62 @@ mod tests {
         // At each level only the statements strictly before the one holding the
         // read count, so a guard written after it does not vouch it safe.
         let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_exec_assignment_in_a_while_condition_issue_8122() {
+        // chessops `src/pgn.ts`: the PGN tokenizer's scan loop. `match` is a bare
+        // `let`, so the exec result is only visible on the condition's assignment.
+        let src = "function f(line) { const re = /x/g; let match; const out = []; while ((match = re.exec(line))) { out.push(match[0]); } return out; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_exec_assignment_in_an_if_condition_issue_8122() {
+        let src = "function f(line) { const re = /x/g; let match; if ((match = re.exec(line))) { return match[0]; } return undefined; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_match_assignment_in_a_for_condition_issue_8122() {
+        let src = "function f(line) { const re = /x/g; let m; for (; (m = re.exec(line)); ) { use(m[0]); } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_exec_read_after_the_assigning_loop_issue_8122() {
+        // Outside the body the loop has exited, which is exactly when the
+        // assignment stored `null`.
+        let src = "function f(line) { const re = /x/g; let m; while ((m = re.exec(line))) {} return m[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_guarded_by_an_assignment_to_another_binding_issue_8122() {
+        let src = "function f(line, arr) { const re = /x/g; let m; while ((m = re.exec(line))) { use(arr[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_non_regex_assignment_in_a_while_condition_issue_8122() {
+        // A truthy non-regex value proves nothing: an empty array is truthy.
+        let src = "function f() { let chunk; while ((chunk = readChunk())) { use(chunk[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_read_after_a_logical_assignment_condition_issue_8122() {
+        // `??=` stores a value derived from the current one, not its right-hand
+        // side, so the condition does not name the exec result.
+        let src = "function f(line) { const re = /x/g; let m; if ((m ??= re.exec(line))) { use(m[0]); } }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_do_while_body_read_under_an_assigning_test_issue_8122() {
+        // A `do…while` body runs once before its test is ever evaluated.
+        let src = "function f(line) { const re = /x/g; let m; do { use(m[0]); } while ((m = re.exec(line))); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
