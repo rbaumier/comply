@@ -5887,6 +5887,11 @@ const VUE_SHALLOW_REACTIVE_FACTORIES: &[&str] = &["shallowReactive"];
 const VUE_WRITABLE_REF_TYPE_NAMES: &[&str] =
     &["Ref", "ShallowRef", "WritableComputedRef", "ModelRef"];
 
+/// Vue 3 *read-only* ref-wrapper type-annotation name. `computed(getter)` returns
+/// a `ComputedRef` whose `.value` is readable but not assignable — not a mutation
+/// point, yet a trackable reactive source exactly like a writable ref.
+const VUE_READONLY_REF_TYPE_NAMES: &[&str] = &["ComputedRef"];
+
 /// True when `ident` resolves to a `const`/`let` binding initialised by one of
 /// `factories`, where the factory is Vue's. Resolves the binding via
 /// `reference_id` → symbol → declaration node, then confirms the declarator
@@ -5974,14 +5979,13 @@ pub fn reference_resolves_to_no_local_binding(
     semantic.scoping().get_reference(ref_id).symbol_id().is_none()
 }
 
-/// The type-name identifier of a *writable* Vue ref annotation — `Ref` for
-/// `Ref<T>`, and likewise `ShallowRef`/`WritableComputedRef`/`ModelRef` (see
-/// [`VUE_WRITABLE_REF_TYPE_NAMES`]). `None` for any other type, for the read-only
-/// `ComputedRef`, and for a qualified (`Vue.Ref`) or `this`-qualified name: the
-/// exemption is restricted to a bare ref-wrapper reference whose import
-/// provenance a caller can resolve.
-fn writable_vue_ref_type_ident<'a>(
+/// The type-name identifier of a Vue ref annotation whose name is one of `names`
+/// — `Ref` for `Ref<T>`. `None` for any other type, and for a qualified
+/// (`Vue.Ref`) or `this`-qualified name: the callers are restricted to a bare
+/// ref-wrapper reference whose import provenance they can resolve.
+fn vue_ref_type_ident<'a>(
     ty: &'a oxc_ast::ast::TSType<'a>,
+    names: &[&str],
 ) -> Option<&'a oxc_ast::ast::IdentifierReference<'a>> {
     use oxc_ast::ast::{TSType, TSTypeName};
     let TSType::TSTypeReference(tref) = ty else {
@@ -5990,9 +5994,33 @@ fn writable_vue_ref_type_ident<'a>(
     let TSTypeName::IdentifierReference(id) = &tref.type_name else {
         return None;
     };
-    VUE_WRITABLE_REF_TYPE_NAMES
-        .contains(&id.name.as_str())
-        .then_some(id.as_ref())
+    names.contains(&id.name.as_str()).then_some(id.as_ref())
+}
+
+/// True when `ty` is a Vue ref annotation named by `names` whose type name is
+/// Vue's — imported from `vue`, or a bare/ambient name resolving to no other
+/// import (Vue's globally-declared or `unplugin-auto-import`-injected ref types).
+/// A name imported from a non-`vue` module is rejected, so a look-alike `Ref`
+/// from another package does not match.
+fn is_vue_ref_type_named(
+    ty: &oxc_ast::ast::TSType,
+    names: &[&str],
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    vue_ref_type_ident(ty, names).is_some_and(|id| {
+        type_ident_import_source(id, semantic).is_none_or(|module| module == "vue")
+    })
+}
+
+/// True when `ty` is any Vue ref-wrapper type whose type name is Vue's — the
+/// writable `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef` and the read-only
+/// `ComputedRef`. A value of such a type is a trackable reactive source whatever
+/// container exposes it, which is a different question from whether its `.value`
+/// is assignable (see [`is_writable_vue_ref_type`]).
+#[must_use]
+pub fn is_vue_ref_type(ty: &oxc_ast::ast::TSType, semantic: &oxc_semantic::Semantic) -> bool {
+    is_vue_ref_type_named(ty, VUE_WRITABLE_REF_TYPE_NAMES, semantic)
+        || is_vue_ref_type_named(ty, VUE_READONLY_REF_TYPE_NAMES, semantic)
 }
 
 /// True when `ident` resolves to a binding whose declared type is a writable Vue
@@ -6011,19 +6039,16 @@ fn binding_is_writable_vue_ref_typed(
         .is_some_and(|ty| is_writable_vue_ref_type(ty, semantic))
 }
 
-/// True when `ty` is a writable Vue ref type whose type name is Vue's: a
-/// `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef` reference (see
-/// [`writable_vue_ref_type_ident`]) whose name is imported from `vue`, or is a
-/// bare/ambient name resolving to no other import (Vue's globally-declared or
-/// `unplugin-auto-import`-injected ref types). A name imported from a non-`vue`
-/// module is rejected, so a look-alike `Ref` from another package stays flagged.
+/// True when `ty` is a writable Vue ref type whose type name is Vue's — a
+/// `Ref`/`ShallowRef`/`WritableComputedRef`/`ModelRef` reference resolved to
+/// `vue` (see [`is_vue_ref_type_named`]). The read-only `ComputedRef` is
+/// excluded: a `computed(getter)` value's `.value` is not assignable, so writing
+/// it stays a genuine error.
 fn is_writable_vue_ref_type(
     ty: &oxc_ast::ast::TSType,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    writable_vue_ref_type_ident(ty).is_some_and(|id| {
-        type_ident_import_source(id, semantic).is_none_or(|module| module == "vue")
-    })
+    is_vue_ref_type_named(ty, VUE_WRITABLE_REF_TYPE_NAMES, semantic)
 }
 
 /// The module a type-position identifier is imported from (`import { Ref } from
@@ -6371,6 +6396,32 @@ pub fn is_vue_ref_binding(
         || binding_is_writable_vue_ref_typed(ident, semantic)
         || binding_default_inits_vue_ref_factory(ident, semantic, project, path)
         || binding_is_imported_vue_ref(ident, semantic, project, path)
+}
+
+/// True when `expr` evaluates to a Vue `Ref` wrapper — a direct call to one of
+/// Vue's ref factories `ref`/`shallowRef`/`customRef`/`computed` (resolved to
+/// Vue; see [`callee_is_vue_factory`]), or an identifier bound to a ref (see
+/// [`is_vue_ref_binding`]). Transparent wrappers are peeled first, so
+/// `ref(0) as Ref<number>` is recognized. Answers what a *value position* holds —
+/// a property of an object literal, an argument — where [`is_vue_ref_binding`]
+/// answers it for a binding.
+#[must_use]
+pub fn expression_is_vue_ref(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    use oxc_ast::ast::Expression;
+    match peel_value_wrappers(expr) {
+        Expression::CallExpression(call) => matches!(
+            &call.callee,
+            Expression::Identifier(callee)
+                if callee_is_vue_factory(callee, VUE_REF_FACTORIES, semantic, project, path)
+        ),
+        Expression::Identifier(ident) => is_vue_ref_binding(ident, semantic, project, path),
+        _ => false,
+    }
 }
 
 /// True when `member` is a `<ref>.value` access where `<ref>` is a direct

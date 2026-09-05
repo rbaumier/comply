@@ -9,9 +9,12 @@
 //! where `ctx` comes from `inject()` or a composable, is normally a `Ref` or a
 //! `ComputedRef`, and `watch(ref, …)` is correct Vue 3 usage.
 //!
-//! Nor is a proven receiver enough on its own: `reactive()` converts every
-//! nesting level, so an object-valued property of a deep proxy reads back as a
-//! nested proxy and is a valid `watch` source.
+//! Nor is a proven receiver enough on its own — what a read returns depends on
+//! the property too. `reactive()` converts every nesting level, so an
+//! object-valued property of a deep proxy reads back as a nested proxy. A
+//! shallow proxy, `shallowReactive()` and the props object alike, stores values
+//! as-is, so a `Ref` it holds reads back as the `Ref` itself. Both are valid
+//! `watch` sources.
 //!
 //! The `OxcCheck` sits here rather than in the usual sibling `oxc_typescript.rs`:
 //! the rule is registered for `Language::Vue` only, so a TypeScript module would
@@ -19,57 +22,94 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    binding_init_call_object_literal_arg, byte_offset_to_line_col, is_pinia_store_binding,
-    is_vue_deep_reactive_receiver, is_vue_reactive_object_target, object_literal_property_value,
-    root_identifier_of_expr,
+    binding_init_call_object_literal_arg, byte_offset_to_line_col, expression_is_vue_ref,
+    is_pinia_store_binding, is_vue_deep_reactive_receiver, is_vue_reactive_object_target,
+    is_vue_ref_type, object_literal_property_value, root_identifier_of_expr, ts_type_member_type,
 };
 use crate::rules::backend::{AstCheck, AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::{vue_sfc, vue_sfc_oxc};
-use oxc_ast::ast::{Expression, IdentifierReference, StaticMemberExpression};
+use oxc_ast::ast::{CallExpression, Expression, IdentifierReference, StaticMemberExpression};
 use oxc_semantic::Semantic;
 use oxc_span::GetSpan;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-/// Whether `expr` is a `defineProps(…)` call, alone or under the `withDefaults`
-/// wrapper the macro is used with.
-fn is_define_props_call(expr: &Expression) -> bool {
+/// The `defineProps(…)` call `expr` is, seen through the `withDefaults` wrapper
+/// the macro is used with. `None` for any other expression.
+fn as_define_props_call<'a>(expr: &'a Expression<'a>) -> Option<&'a CallExpression<'a>> {
     let Expression::CallExpression(call) = expr else {
-        return false;
+        return None;
     };
     let Expression::Identifier(callee) = &call.callee else {
-        return false;
+        return None;
     };
     match callee.name.as_str() {
-        "defineProps" => true,
+        "defineProps" => Some(call),
         "withDefaults" => call
             .arguments
             .first()
             .and_then(|arg| arg.as_expression())
-            .is_some_and(is_define_props_call),
-        _ => false,
+            .and_then(as_define_props_call),
+        _ => None,
     }
 }
 
-/// Whether `ident` resolves to the `<script setup>` props object. The macro is
-/// compiled away and has no import to trace, unlike the `vue` factories that
-/// [`is_vue_reactive_object_target`] resolves, so the call shape is the only
-/// evidence available.
-fn binding_is_props_object(ident: &IdentifierReference, semantic: &Semantic) -> bool {
+/// The `defineProps(…)` call that produced the `<script setup>` props object
+/// `ident` resolves to. The macro is compiled away and has no import to trace,
+/// unlike the `vue` factories that [`is_vue_reactive_object_target`] resolves, so
+/// the call shape is the only evidence available. `None` when the binding is
+/// anything else.
+fn props_binding_define_props_call<'a>(
+    ident: &IdentifierReference,
+    semantic: &Semantic<'a>,
+) -> Option<&'a CallExpression<'a>> {
     let scoping = semantic.scoping();
-    let Some(symbol_id) = ident
+    let symbol_id = ident
         .reference_id
         .get()
-        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
-    else {
-        return false;
-    };
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())?;
     let AstKind::VariableDeclarator(decl) =
         semantic.nodes().kind(scoping.symbol_declaration(symbol_id))
     else {
+        return None;
+    };
+    as_define_props_call(decl.init.as_ref()?)
+}
+
+/// Whether the prop `key` is declared as a Vue ref wrapper on the type argument
+/// of the `defineProps<…>()` call `call` — read from an inline type literal or
+/// from a same-file `interface` / `type` alias (see [`ts_type_member_type`]).
+///
+/// Vue builds the props object with `shallowReactive`, so a `Ref` passed in by
+/// the parent reads back as the `Ref` itself and `watch()` tracks it. The
+/// read-only `ComputedRef` counts too: not being assignable does not make it a
+/// snapshot. The runtime form (`defineProps({ model: Object })`) declares no
+/// such type and never matches.
+fn prop_is_ref_typed<'a>(call: &'a CallExpression<'a>, key: &str, semantic: &Semantic<'a>) -> bool {
+    call.type_arguments
+        .as_ref()
+        .and_then(|args| args.params.first())
+        .and_then(|props_type| ts_type_member_type(props_type, key, semantic))
+        .is_some_and(|ty| is_vue_ref_type(ty, semantic))
+}
+
+/// Whether the shallow-proxy read `member` returns a `Ref` rather than a
+/// snapshot. `shallowReactive()` stores values as-is — its handler returns
+/// before the ref-unwrapping step — so a `Ref` held by the object comes back as
+/// the `Ref` itself, and `watch(ref, …)` is correct Vue 3. Proven from the object
+/// literal the proxy was built from: the watched key's value must be a Vue ref
+/// factory call or a binding holding a ref (see [`expression_is_vue_ref`]).
+fn shallow_read_yields_a_ref(
+    member: &StaticMemberExpression,
+    semantic: &Semantic,
+    ctx: &CheckCtx,
+) -> bool {
+    let Expression::Identifier(root) = &member.object else {
         return false;
     };
-    decl.init.as_ref().is_some_and(is_define_props_call)
+    binding_init_call_object_literal_arg(root, semantic)
+        .and_then(|literal| object_literal_property_value(literal, member.property.name.as_str()))
+        .is_some_and(|value| expression_is_vue_ref(value, semantic, ctx.project, ctx.path))
 }
 
 /// The static key path of a member chain, root first — `["user", "name"]` for
@@ -153,10 +193,12 @@ fn deep_read_yields_a_proxy(member: &StaticMemberExpression, semantic: &Semantic
 /// Proving the container is only half the question: what the read returns also
 /// depends on the property. A deep `reactive()` proxy converts every nesting
 /// level, so an object-valued property reads back as a proxy and is a valid
-/// `watch` source (see [`deep_read_yields_a_proxy`]).
-fn member_reads_a_snapshot(
+/// `watch` source (see [`deep_read_yields_a_proxy`]). The two shallow containers
+/// — `shallowReactive()` and the props object — expose a stored `Ref` as the
+/// `Ref` itself (see [`shallow_read_yields_a_ref`] and [`prop_is_ref_typed`]).
+fn member_reads_a_snapshot<'a>(
     member: &StaticMemberExpression,
-    semantic: &Semantic,
+    semantic: &Semantic<'a>,
     ctx: &CheckCtx,
 ) -> bool {
     if is_vue_deep_reactive_receiver(&member.object, semantic, ctx.project, ctx.path) {
@@ -166,12 +208,19 @@ fn member_reads_a_snapshot(
     // here — a root-level read off a shallow proxy, which returns the stored
     // value as-is.
     if is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path) {
-        return true;
+        return !shallow_read_yields_a_ref(member, semantic, ctx);
     }
-    root_identifier_of_expr(&member.object).is_some_and(|root| {
-        binding_is_props_object(root, semantic)
-            || is_pinia_store_binding(root, semantic, ctx.project, ctx.path)
-    })
+    let Some(root) = root_identifier_of_expr(&member.object) else {
+        return false;
+    };
+    if let Some(call) = props_binding_define_props_call(root, semantic) {
+        // Only a direct `props.<key>` read reaches a declared prop; deeper in
+        // the chain the value is a raw object the parent passed in, which props'
+        // shallow proxy never converts.
+        return !matches!(&member.object, Expression::Identifier(_))
+            || !prop_is_ref_typed(call, member.property.name.as_str(), semantic);
+    }
+    is_pinia_store_binding(root, semantic, ctx.project, ctx.path)
 }
 
 /// A source slice reduced to one line — a diagnostic is one line.
@@ -514,6 +563,140 @@ mod tests {
                  watch(state.user.address, cb)"
             )
             .is_empty()
+        );
+    }
+
+    /// #8224: a shallow proxy returns a stored `Ref` as-is — its handler stops
+    /// before the unwrapping step a deep proxy performs.
+    #[test]
+    fn allows_ref_valued_property_of_shallow_reactive_object() {
+        assert!(
+            run(
+                "import { shallowReactive, ref, watch } from 'vue'\n\
+                 const state = shallowReactive({ r: ref(0) })\n\
+                 watch(state.r, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// The shorthand property holds the very same ref binding.
+    #[test]
+    fn allows_shorthand_ref_binding_in_shallow_reactive_object() {
+        assert!(
+            run(
+                "import { shallowReactive, ref, watch } from 'vue'\n\
+                 const r = ref(0)\n\
+                 const state = shallowReactive({ r })\n\
+                 watch(state.r, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// #8224: `componentProps.ts` builds the props object with
+    /// `shallowReactive`, so a `Ref`-typed prop reads back as the `Ref` itself.
+    #[test]
+    fn allows_ref_typed_prop() {
+        assert!(
+            run(
+                "import { watch } from 'vue'\n\
+                 import type { Ref } from 'vue'\n\
+                 const props = defineProps<{ model: Ref<string> }>()\n\
+                 watch(props.model, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// Same through a named `interface`, the form `defineProps` is usually
+    /// written with.
+    #[test]
+    fn allows_ref_typed_prop_declared_by_an_interface() {
+        assert!(
+            run(
+                "import { watch } from 'vue'\n\
+                 import type { Ref } from 'vue'\n\
+                 interface Props { model: Ref<string> }\n\
+                 const props = defineProps<Props>()\n\
+                 watch(props.model, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// Read-only does not make it a snapshot: a `ComputedRef` is a trackable
+    /// `watch` source.
+    #[test]
+    fn allows_computed_ref_typed_prop() {
+        assert!(
+            run(
+                "import { watch } from 'vue'\n\
+                 import type { ComputedRef } from 'vue'\n\
+                 const props = defineProps<{ total: ComputedRef<number> }>()\n\
+                 watch(props.total, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// A `Ref` type from another package is not Vue's.
+    #[test]
+    fn flags_prop_typed_by_a_look_alike_ref_from_another_package() {
+        assert_eq!(
+            run(
+                "import { watch } from 'vue'\n\
+                 import type { Ref } from 'preact'\n\
+                 const props = defineProps<{ model: Ref<string> }>()\n\
+                 watch(props.model, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
+    /// The runtime form declares no member type, so nothing proves the prop
+    /// holds a ref.
+    #[test]
+    fn flags_prop_of_runtime_define_props() {
+        assert_eq!(
+            run(
+                "import { watch } from 'vue'\n\
+                 const props = defineProps({ model: Object })\n\
+                 watch(props.model, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
+    /// Props are shallow: below the prop itself the value is the raw object the
+    /// parent passed in, whatever the prop's own type says.
+    #[test]
+    fn flags_nested_read_under_a_ref_typed_prop() {
+        assert_eq!(
+            run(
+                "import { watch } from 'vue'\n\
+                 import type { Ref } from 'vue'\n\
+                 const props = defineProps<{ model: Ref<{ a: string }> }>()\n\
+                 watch(props.model.a, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
+    /// A plain-valued property of a shallow proxy is still a snapshot.
+    #[test]
+    fn flags_plain_valued_property_of_shallow_reactive_object() {
+        assert_eq!(
+            run(
+                "import { shallowReactive, watch } from 'vue'\n\
+                 const state = shallowReactive({ r: 0 })\n\
+                 watch(state.r, cb)"
+            )
+            .len(),
+            1
         );
     }
 
