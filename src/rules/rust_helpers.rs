@@ -1180,6 +1180,42 @@ pub fn is_db_crate(name: &str) -> bool {
     DB_CRATES.contains(&name)
 }
 
+/// True if the module that declares the symbol `local` — resolved through the
+/// crate's own module graph, so a `use crate::db::DbPool;` lands on the file
+/// backing `crate::db` — itself reaches a database crate.
+///
+/// This is the provenance a `crate::`-rooted path hides: its leftmost segment is
+/// `crate`, never a crate name, so [`file_references_db_crate`] can only answer
+/// for the file it is given. Returns `false` when no import binds `local`, when
+/// the module graph does not resolve it inside the project (an external crate, a
+/// module the crate root does not declare), or when the declaring file cannot be
+/// read.
+pub fn import_source_references_db_crate(
+    project: &ProjectCtx,
+    importer: &Path,
+    local: &str,
+) -> bool {
+    let index = project.import_index();
+    let canonical = index.canonical(importer);
+    let Some(declaring) = index
+        .get_imports(&canonical)
+        .iter()
+        .find(|import| import.local_name == local)
+        .and_then(|import| import.source_path.as_ref())
+    else {
+        return false;
+    };
+    let Ok(source) = std::fs::read_to_string(declaring) else {
+        return false;
+    };
+    // A file naming no database crate at all cannot reach one; skip the parse.
+    if !DB_CRATES.iter().any(|db| source.contains(db)) {
+        return false;
+    }
+    parse_rust_source(&source)
+        .is_some_and(|tree| file_references_db_crate(tree.root_node(), source.as_bytes()))
+}
+
 /// Where the crate that declares a type sits, relative to the crate being
 /// linted. Read off the file's `use` graph, its generic bounds and its own type
 /// declarations — never off a user-chosen binding name, since `reqwest::Client`

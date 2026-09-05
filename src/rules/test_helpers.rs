@@ -191,24 +191,40 @@ pub fn run_rule_with_cargo(
     source: &str,
     rel_src: &str,
 ) -> Vec<Diagnostic> {
+    run_rule_in_indexed_crate(check, &[("Cargo.toml", cargo_toml), (rel_src, source)])
+}
+
+/// Write every `(path relative to the crate root, source)` pair into a temporary
+/// crate, index them all via `ProjectCtx::for_test_with_files`, then run `check`
+/// on the last one. A rule that resolves a symbol across the crate's files — a
+/// crate-scoped index reads sibling sources off `indexed_paths()` — needs them
+/// indexed, which [`run_rule_in_module_tree`] (default project context) does not
+/// do. Each file's language is inferred from its extension.
+///
+/// # Panics
+///
+/// Panics when `files` is empty: there is no file to run the rule on.
+#[must_use]
+pub fn run_rule_in_indexed_crate(check: &dyn AstCheck, files: &[(&str, &str)]) -> Vec<Diagnostic> {
     use std::fs;
     use tempfile::TempDir;
     let dir = TempDir::new().expect("tempdir");
-    let cargo_path = dir.path().join("Cargo.toml");
-    fs::write(&cargo_path, cargo_toml).expect("write Cargo.toml");
-    let src_path = dir.path().join(rel_src);
-    fs::create_dir_all(src_path.parent().expect("src parent")).expect("create src dir");
-    fs::write(&src_path, source).expect("write source");
-    let source_files = [
-        SourceFile { path: cargo_path, language: Language::Toml },
-        SourceFile { path: src_path.clone(), language: Language::Rust },
-    ];
-    let refs: Vec<&SourceFile> = source_files.iter().collect();
+    let mut written = Vec::with_capacity(files.len());
+    for &(rel, source) in files {
+        let path = dir.path().join(rel);
+        fs::create_dir_all(path.parent().expect("file parent")).expect("create dir");
+        fs::write(&path, source).expect("write file");
+        let language = Language::from_path(&path).unwrap_or(Language::Rust);
+        written.push((SourceFile { path, language }, source));
+    }
+    let (leaf, leaf_source) = written.last().expect("at least one file to run the rule on");
+    let leaf_path = leaf.path.clone();
+    let refs: Vec<&SourceFile> = written.iter().map(|(file, _)| file).collect();
     let project = ProjectCtx::for_test_with_files(&refs);
     run_ast_check(
         check,
-        source,
-        &src_path,
+        leaf_source,
+        &leaf_path,
         &project,
         crate::rules::file_ctx::default_static_file_ctx(),
     )
