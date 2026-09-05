@@ -642,8 +642,25 @@ mod tests {
     /// so the crate-shape check resolves against a controlled manifest
     /// instead of comply's own (binary-only) `Cargo.toml`.
     fn run_in_crate(cargo_toml_contents: &str, rel_path: &str, source: &str) -> Vec<Diagnostic> {
+        run_in_crate_layout(cargo_toml_contents, rel_path, source, &[])
+    }
+
+    /// [`run_in_crate`] with `sibling_paths` also written (empty) into the temp
+    /// crate, for the crate-shape checks that read the directory layout rather
+    /// than the manifest text — Cargo's auto-discovered `src/bin/` targets.
+    fn run_in_crate_layout(
+        cargo_toml_contents: &str,
+        rel_path: &str,
+        source: &str,
+        sibling_paths: &[&str],
+    ) -> Vec<Diagnostic> {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("Cargo.toml"), cargo_toml_contents).unwrap();
+        for sibling in sibling_paths {
+            let path = dir.path().join(sibling);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "").unwrap();
+        }
         let src_path = dir.path().join(rel_path);
         if let Some(parent) = src_path.parent() {
             fs::create_dir_all(parent).unwrap();
@@ -1012,6 +1029,51 @@ required-features = ["std"]
     fn allows_eprintln_in_bin_dir() {
         let source = "fn main() { eprintln!(\"oops\"); }";
         assert!(run_on(source, "src/bin/tool.rs").is_empty());
+    }
+
+    /// A crate with neither a `[[bin]]` table nor a `src/main.rs`, whose only
+    /// executable is `src/bin/<name>/main.rs`.
+    const AUTO_BIN_CARGO_TOML: &str = r#"
+[package]
+name = "autobin"
+version = "0.1.0"
+edition = "2021"
+"#;
+
+    /// Regression for #7679: Cargo auto-discovers a binary from the nested
+    /// `src/bin/<name>/main.rs` layout as well as from a direct-child
+    /// `src/bin/<name>.rs`. A crate shipping one is an application that owns its
+    /// stderr, so its library modules are exempt like any other binary crate's.
+    #[test]
+    fn allows_eprintln_in_crate_with_nested_auto_discovered_binary() {
+        let source = "pub fn helper() { eprintln!(\"something went wrong\"); }";
+        assert!(
+            run_in_crate_layout(
+                AUTO_BIN_CARGO_TOML,
+                "src/lib.rs",
+                source,
+                &["src/bin/foo/main.rs"],
+            )
+            .is_empty()
+        );
+    }
+
+    /// The same crate without the `main.rs` in `src/bin/foo/` ships no binary,
+    /// so its `eprintln!` stays flagged: the nested layout is the target, not
+    /// the directory.
+    #[test]
+    fn flags_eprintln_in_crate_whose_src_bin_dir_has_no_main() {
+        let source = "pub fn helper() { eprintln!(\"something went wrong\"); }";
+        assert_eq!(
+            run_in_crate_layout(
+                AUTO_BIN_CARGO_TOML,
+                "src/lib.rs",
+                source,
+                &["src/bin/foo/helpers.rs"],
+            )
+            .len(),
+            1
+        );
     }
 
     /// Regression for #1310: `eprintln!` gated behind `if self.verbose() { … }`
