@@ -1,6 +1,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_inherent_impl_type, has_outer_attribute_path, is_in_test_context,
+    enclosing_inherent_impl_type, has_outer_attribute_path, is_comment_node, is_in_test_context,
     is_in_trait_definition, is_in_trait_impl, type_has_inherent_method,
 };
 
@@ -149,6 +149,16 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // A `&self` receiver cannot assign to `self`, so plain accessors never match.
     if mutates_receiver(node) { return; }
 
+    // A method whose body *builds* its return value exposes nothing: ratatui's
+    // `fn get_frame(&mut self) -> Frame<'_> { … Frame { … } }` assembles a `Frame`
+    // from several fields on a type that has no `frame` field, so there is no
+    // field for the rename to name. Matched on the body's tail expression being a
+    // struct literal, or a call to an associated function of `Self` (a type cannot
+    // hold a by-value field of itself, so `Self::new()` is a constructor). A field
+    // read — `self.area`, `&self.title`, `self.name.clone()` — is none of these
+    // and stays flagged.
+    if returns_constructed_value(node, source) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &name_node,
@@ -194,6 +204,49 @@ fn is_self_rooted(place: tree_sitter::Node) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when the method body evaluates to a freshly constructed value: its tail
+/// expression is a struct literal (`Frame { … }`), or a call to an associated
+/// function of the impl's own type (`Self::new(…)` — a type cannot hold a
+/// by-value field of itself, so this can only be a constructor). Such a method
+/// produces a value rather than exposing one, so there is no field for the
+/// suggested rename to name.
+fn returns_constructed_value(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let Some(tail) = block_tail_expression(body) else {
+        return false;
+    };
+    match tail.kind() {
+        "struct_expression" => true,
+        "call_expression" => tail
+            .child_by_field_name("function")
+            .is_some_and(|callee| is_self_associated_path(callee, source)),
+        _ => false,
+    }
+}
+
+/// The block's trailing expression — its last named child once comments are
+/// skipped. Statement kinds (`let_declaration`, `expression_statement`) are
+/// returned as-is; callers match on the kinds they accept.
+fn block_tail_expression(block: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let mut cursor = block.walk();
+    block
+        .named_children(&mut cursor)
+        .filter(|child| !is_comment_node(*child))
+        .last()
+}
+
+/// True when `callee` is a `Self::<name>` path — an associated function of the
+/// enclosing impl's own type.
+fn is_self_associated_path(callee: tree_sitter::Node, source: &[u8]) -> bool {
+    callee.kind() == "scoped_identifier"
+        && callee
+            .child_by_field_name("path")
+            .and_then(|p| p.utf8_text(source).ok())
+            == Some("Self")
 }
 
 /// True when the method body contains an `unsafe` block that delegates to a
@@ -960,6 +1013,48 @@ mod tests {
     fn flags_get_prefix_reading_field_method_issue_8343() {
         // A `&self` body that only reads cannot assign to `self` — still a getter.
         let src = "impl Bag {\n    fn get_count(&self) -> usize { self.items.len() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_constructing_its_return_value_issue_8325() {
+        // ratatui's `Terminal::get_frame` assembles a `Frame` from several fields;
+        // `Terminal` has no `frame` field, so there is nothing for `frame()` to name.
+        let src = "impl Terminal {\n\
+            pub fn get_frame(&mut self) -> Frame<'_> {\n\
+                let count = self.frame_count;\n\
+                Frame { viewport_area: self.viewport_area, buffer: &mut self.buffer, count }\n\
+            }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_self_constructor_body_issue_8325() {
+        // A type cannot hold a by-value field of itself, so `Self::new()` can only
+        // be a constructor — there is no `default` field to rename the method to.
+        let src = "impl Config {\n    fn get_default(&self) -> Self { Self::new() }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_returning_field_of_constructed_type_issue_8325() {
+        // The return type is irrelevant — this body reads a field, so it is a getter.
+        let src = "impl Terminal {\n    fn get_frame(&self) -> &Frame { &self.frame }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_get_prefix_field_read_through_clone_issue_8325() {
+        // A field read wrapped in `.clone()` still exposes the field.
+        let src = "impl Terminal {\n    fn get_name(&self) -> String { self.name.clone() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_get_prefix_copy_field_read_issue_8325() {
+        // A by-value read of a `Copy` field is the plainest C-GETTER there is.
+        let src = "impl Terminal {\n    fn get_area(&self) -> Rect { self.area }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
