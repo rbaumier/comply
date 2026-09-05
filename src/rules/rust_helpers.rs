@@ -3839,7 +3839,7 @@ pub fn arm_body_is_diverging(arm: Node, source: &[u8]) -> bool {
 /// single statement is unwrapped to its inner expression so `{ bail!("…"); }`
 /// is treated like `bail!("…")`; a block doing other work before diverging is
 /// not classified as diverging.
-pub fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
+fn expr_is_diverging(expr: Node, source: &[u8]) -> bool {
     match expr.kind() {
         "block" => {
             // Only an unconditional single-statement body is a guard:
@@ -6347,6 +6347,69 @@ pub(crate) fn block_tail_produces_value(node: Node) -> bool {
     }
 }
 
+/// True if `node` is a `block` with nothing in it — no statement, no comment.
+///
+/// tree-sitter-rust makes a comment a *named* child, so a block holding only a
+/// comment answers false: that comment is the justification the empty-block
+/// rules (`justify-inaction`, `no-empty-catch`) accept, and both read emptiness
+/// through this one predicate so they cannot drift apart on what "empty" means.
+pub(crate) fn block_is_empty(node: Node) -> bool {
+    node.kind() == "block" && node.named_child_count() == 0
+}
+
+/// True when `if_expr` is a *pattern assertion*: an `if let PATTERN = expr { … }`
+/// whose `else` branch refuses to continue.
+///
+/// In `if let PATTERN = expr { } else { panic!(…) }` the empty block is the
+/// branch that runs when the pattern *matched* — the outcome the code demands —
+/// and every other outcome is handled by the `else`. Nothing is ignored and
+/// nothing is swallowed, so an empty consequent there is an assertion holding,
+/// not inaction.
+///
+/// The `else` refuses to continue when its tail diverges per [`node_diverges`],
+/// or when it is itself a pattern assertion — the retry shape
+/// `else { retry(); if let PATTERN = expr { } else { panic!(…) } }`, where the
+/// first failure is re-tested instead of accepted.
+///
+/// `justify-inaction` and `no-empty-catch` both read empty blocks and both ask
+/// this, so one construct gets one verdict from both.
+pub(crate) fn if_let_is_pattern_assertion(if_expr: Node, source: &[u8]) -> bool {
+    if if_expr.kind() != "if_expression" {
+        return false;
+    }
+    let Some(condition) = if_expr.child_by_field_name("condition") else {
+        return false;
+    };
+    if !matches!(condition.kind(), "let_condition" | "let_chain") {
+        return false;
+    }
+    if_expr
+        .child_by_field_name("alternative")
+        .and_then(|alternative| alternative.named_child(0))
+        .is_some_and(|else_body| else_refuses_to_continue(else_body, source))
+}
+
+/// True when the `else` branch of a pattern test never falls through silently:
+/// its tail diverges, or it re-asserts through a nested pattern assertion. An
+/// `else if` chain resolves to neither and answers false — the outer empty
+/// branch then has no assertion behind it.
+fn else_refuses_to_continue(node: Node, source: &[u8]) -> bool {
+    match node.kind() {
+        "block" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .filter(|child| !is_comment_node(*child))
+                .last()
+                .is_some_and(|tail| else_refuses_to_continue(tail, source))
+        }
+        "expression_statement" => node
+            .named_child(0)
+            .is_some_and(|inner| else_refuses_to_continue(inner, source)),
+        "if_expression" => if_let_is_pattern_assertion(node, source),
+        _ => node_diverges(node, source),
+    }
+}
+
 /// True if `block` (a `block` node) unconditionally diverges — its final element
 /// is a diverging tail per [`node_diverges`], so control never falls through to
 /// the statement following the block. A trailing comment is not an element: it
@@ -6369,8 +6432,9 @@ pub(crate) fn block_diverges(block: Node, source: &[u8]) -> bool {
 /// any of them.
 ///
 /// The three control-flow exits and the never-returning macros are language
-/// syntax, so their node kind settles the question. A `-> !` call is spelled like
-/// any other call, so it is settled by resolving the callee instead — see
+/// syntax, so their node kind settles the question — `bail!` counts among them:
+/// it expands to `return Err(…)`. A `-> !` call is spelled like any other call,
+/// so it is settled by resolving the callee instead — see
 /// [`callee_never_returns`].
 ///
 /// Only an `unsafe` block is looked through. A `return` inside an `async` or
@@ -6383,7 +6447,9 @@ pub(crate) fn node_diverges(node: Node, source: &[u8]) -> bool {
         "macro_invocation" => node
             .child_by_field_name("macro")
             .and_then(|m| m.utf8_text(source).ok())
-            .is_some_and(|n| matches!(n, "panic" | "unreachable" | "todo" | "unimplemented")),
+            .is_some_and(|n| {
+                matches!(n, "panic" | "unreachable" | "todo" | "unimplemented" | "bail")
+            }),
         "call_expression" => callee_never_returns(node, source),
         "unsafe_block" => node
             .named_child(0)

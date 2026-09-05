@@ -5,10 +5,19 @@
 //! - `match r { Ok(_) => ..., Err(_) => {} }` — empty `Err(_)` arm.
 //! - `if let Err(_) = r {}` — empty if-let block over an `Err(_)` pattern.
 //!
-//! A body is considered "empty" when it is a `block` with zero named
-//! children AND contains no comment. A comment acts as an explicit
-//! justification for swallowing the error, whether placed inside the `{}`
-//! block or as a leading comment on its own line directly above the arm.
+//! A body is considered "empty" per the shared
+//! [`crate::rules::rust_helpers::block_is_empty`] — a `block` holding neither a
+//! statement nor a comment. A comment acts as an explicit justification for
+//! swallowing the error, whether placed inside the `{}` block or as a leading
+//! comment on its own line directly above the arm.
+//!
+//! An `if let Err(…) = expr { } else { … }` is exempt when it is a *pattern
+//! assertion* per the shared
+//! [`crate::rules::rust_helpers::if_let_is_pattern_assertion`]: the empty block
+//! runs because the demanded error arrived, and the `else` — which aborts, or
+//! re-asserts through a nested `if let` — owns every other outcome, so nothing
+//! is swallowed. `justify-inaction` reads the same predicate, so the two rules
+//! cannot reach different verdicts on the construct.
 //!
 //! An empty `Err(CONST_PATH) => {}` arm is exempt: a payload that is a
 //! const/path binding nothing (`Err(Self::REGISTERED)`, `Err(MAX_RETRIES)`)
@@ -41,7 +50,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    arm_body_is_diverging, expr_is_diverging, tuple_struct_pattern_binds_const,
+    arm_body_is_diverging, block_is_empty, if_let_is_pattern_assertion,
+    tuple_struct_pattern_binds_const,
 };
 
 crate::ast_check! { on ["match_arm", "let_condition", "let_chain", "if_expression"] => |node, source, ctx, diagnostics|
@@ -52,7 +62,7 @@ match node.kind() {
                 return;
             }
             let Some(value) = node.child_by_field_name("value") else { return };
-            if !is_empty_block(&value, source) {
+            if !block_is_empty(value) {
                 return;
             }
             // A value-specific no-op: `Err(Self::REGISTERED) => {}` /
@@ -116,21 +126,16 @@ match node.kind() {
                 return;
             }
             let Some(cons) = node.child_by_field_name("consequence") else { return };
-            if !is_empty_block(&cons, source) {
+            if !block_is_empty(cons) {
                 return;
             }
             // A controlled assertion: `if let Err(Foo) = expr {} else { panic!() }`
             // asserts the result must be this exact error — the empty then-block is
-            // the success case and the diverging `else` proves intent, not silent
-            // error-swallowing. This mirrors the `match_arm` diverging-sibling guard.
-            // The `alternative` field is an `else_clause`; its first named child is
-            // the `else` `block` (or an `if_expression` for `else if`, which
-            // `expr_is_diverging` classifies as non-diverging — leaving `else if`
-            // chains flagged).
-            if let Some(alt) = node.child_by_field_name("alternative")
-                && let Some(else_body) = alt.named_child(0)
-                && expr_is_diverging(else_body, source)
-            {
+            // the branch that ran because the error arrived, and the `else` handles
+            // every other outcome, so nothing is swallowed. `justify-inaction` reads
+            // the same shared predicate, which is what keeps the two rules from
+            // disagreeing on one construct.
+            if if_let_is_pattern_assertion(node, source) {
                 return;
             }
             push_diag(node, ctx, diagnostics);
@@ -224,7 +229,7 @@ fn has_disjoint_capturing_sibling_err_arm(
         let Some(value) = sibling.child_by_field_name("value") else {
             continue;
         };
-        if is_empty_block(&value, source) {
+        if block_is_empty(value) {
             continue;
         }
         // Non-empty `Err(...)` sibling that captures the error. Disjoint when
@@ -289,24 +294,6 @@ fn arm_has_leading_comment(arm: &tree_sitter::Node) -> bool {
         && prev.start_position().row <= before.end_position().row
     {
         return false;
-    }
-    true
-}
-
-fn is_empty_block(node: &tree_sitter::Node, _source: &[u8]) -> bool {
-    if node.kind() != "block" {
-        return false;
-    }
-    if node.named_child_count() != 0 {
-        return false;
-    }
-    // A block with only a comment has zero named children in tree-sitter-rust,
-    // but the comment is still reachable via the raw child list.
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "line_comment" || child.kind() == "block_comment" {
-            return false;
-        }
     }
     true
 }
@@ -724,10 +711,37 @@ mod tests {
     }
 
     #[test]
-    fn flags_empty_if_let_err_with_work_then_diverging_else_issue_6323() {
-        // Narrowness guard: an `else` that does other work before diverging is
-        // not a pure assertion guard — it stays flagged.
+    fn allows_empty_if_let_err_with_work_then_diverging_else_issue_8269() {
+        // An `else` that prepares before aborting still cannot fall through, so
+        // the empty block is reached only on the demanded error — an assertion,
+        // whatever the `else` does first.
         let src = "fn t() { if let Err(_) = expr { } else { cleanup(); panic!(); } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_err_with_retrying_else_issue_8269() {
+        // The `else` retries, then re-asserts with a nested `if let` whose own
+        // `else` panics. Neither empty block swallows an error: the inner
+        // assertion owns the outcome the outer one did not get.
+        let src = "fn t() {\n\
+                   if let Err(AllocError { .. }) = try_reserve(10) {\n\
+                   } else {\n\
+                   let _ = try_reserve(20);\n\
+                   if let Err(AllocError { .. }) = try_reserve(40) {\n\
+                   } else {\n\
+                   panic!(\"should trigger an OOM!\");\n\
+                   }\n\
+                   }\n\
+                   }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_err_with_continuing_else_issue_8269() {
+        // Narrowness guard: an `else` that neither aborts nor re-asserts leaves
+        // the error genuinely dropped — production swallow, still flagged.
+        let src = "fn d() { if let Err(_e) = try_reserve(10) { } else { println!(\"ok\"); } }";
         assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 
