@@ -6838,4 +6838,12 @@ mod tests {
         let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
         assert_eq!(run_on(src).len(), 1);
     }
+
+    #[test]
+    fn no_fp_module_scope_const_array_literal_read_in_a_call_argument_issue_1967() {
+        // react-three-fiber `example/src/demos/Activity.tsx`: the read sits in a
+        // call argument of a destructuring declarator, not directly in one.
+        let src = "const colors = ['orange', 'hotpink', 'cyan'];\nconst [color, setColor] = useState(colors[0]);";
+        assert!(run_on(src).is_empty());
+    }
 }
