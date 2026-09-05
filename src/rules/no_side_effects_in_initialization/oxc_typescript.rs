@@ -83,15 +83,20 @@
 //!   required so an ordinary module that happens to call a local `render()` is
 //!   still flagged;
 //! - Vue 3 application entry points by content shape: a module that creates the
-//!   app at module scope with a top-level `createApp(...)` call and mounts it
-//!   with a top-level `.mount(...)` call, covering both the split form
-//!   (`const app = createApp(App); app.use(router); app.mount('#app')`) and the
-//!   chained form (`createApp(App).use(router).mount('#app')`). Mounting the app
-//!   at module level is the entry file's purpose, and entry points are never
-//!   imported by other modules, so the surrounding `app.use` / `app.component` /
-//!   `app.provide` registrations are intentional side effects. Both `createApp`
-//!   and `.mount` are required, so an ordinary module that merely calls a local
-//!   `createApp()` helper or some unrelated `.mount()` is still flagged;
+//!   app at module scope with a top-level `createApp(...)` call and mounts that
+//!   app. The mount counts either as a top-level `.mount(...)` call — the split
+//!   form (`const app = createApp(App); app.use(router); app.mount('#app')`) and
+//!   the chained form (`createApp(App).use(router).mount('#app')`) — or as a
+//!   `.mount(...)` anywhere in the module whose receiver resolves to the binding
+//!   the top-level `createApp(...)` produced, which is the deferred bootstrap
+//!   (`getPlatformConfig(app).then(async () => { … app.mount('#app') })`) that
+//!   starts the app after an async config load. Mounting the app at module level
+//!   is the entry file's purpose, and entry points are never imported by other
+//!   modules, so the surrounding `app.use` / `app.component` / `app.provide`
+//!   registrations are intentional side effects. Both `createApp` and a mount
+//!   attributable to it are required, so an ordinary module that merely calls a
+//!   local `createApp()` helper, or defers an unrelated object's `.mount()`, is
+//!   still flagged;
 //! - Preact application entry points by content shape: a module that imports the
 //!   `render` binding from `"preact"` and calls it at the top level
 //!   (`render(<App />, document.getElementById('app')!)`). `render` is Preact's
@@ -930,19 +935,75 @@ fn chain_contains_mount_call(expr: &Expression) -> bool {
     }
 }
 
+/// Symbol of the module-scope binding holding the Vue app —
+/// `const app = createApp(App)`, including a chained initializer
+/// (`const app = createApp(App).use(router)`). `None` when no top-level
+/// declaration is initialized from a `createApp(...)` chain.
+fn vue_app_binding_symbol(program: &Program) -> Option<oxc_semantic::SymbolId> {
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else { continue };
+        for declarator in &decl.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                continue;
+            };
+            if declarator.init.as_ref().is_some_and(chain_contains_create_app_call) {
+                return id.symbol_id.get();
+            }
+        }
+    }
+    None
+}
+
+/// True when some `.mount(...)` call in the module — at any depth, including
+/// inside a bootstrap callback — has `app_symbol` as its receiver. The receiver
+/// is resolved through the symbol table, so only the binding `createApp(...)`
+/// produced counts; a same-named or unrelated object's `.mount(...)` does not.
+fn symbol_is_mount_receiver(
+    app_symbol: oxc_semantic::SymbolId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    semantic.nodes().iter().any(|node| {
+        let oxc_ast::AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(m) = &call.callee else {
+            return false;
+        };
+        if m.property.name != "mount" {
+            return false;
+        }
+        let Expression::Identifier(receiver) = &m.object else {
+            return false;
+        };
+        receiver
+            .reference_id
+            .get()
+            .and_then(|ref_id| semantic.scoping().get_reference(ref_id).symbol_id())
+            == Some(app_symbol)
+    })
+}
+
 /// True when the program is a Vue 3 application entry point (`main.ts`,
-/// `main.tsx`, …): it both creates the app at module scope with a top-level
-/// `createApp(...)` call and mounts it with a top-level `.mount(...)` call,
-/// covering the split form (`const app = createApp(App); app.use(router);
-/// app.mount('#app')`) and the chained form
-/// (`createApp(App).use(router).mount('#app')`). Mounting the app at module
-/// level is the entry file's whole purpose, and entry points are never imported
-/// by other modules, so the surrounding `app.use` / `app.component` /
+/// `main.tsx`, …): it creates the app at module scope with a top-level
+/// `createApp(...)` call and mounts that app. Mounting the app at module level
+/// is the entry file's whole purpose, and entry points are never imported by
+/// other modules, so the surrounding `app.use` / `app.component` /
 /// `app.provide` registrations are intentional side effects, not tree-shakeable
-/// library code. Requiring both `createApp` and `.mount` keeps an ordinary
-/// module that merely calls a local `createApp()` helper, or some unrelated
-/// `.mount()`, still flagged.
-fn is_vue_entry_shape(program: &Program) -> bool {
+/// library code.
+///
+/// The mount is recognized in two forms:
+/// - a top-level `.mount(...)` call statement, covering the chained form
+///   (`createApp(App).use(router).mount('#app')`) and the split form
+///   (`const app = createApp(App); app.use(router); app.mount('#app')`);
+/// - a `.mount(...)` anywhere in the module whose receiver resolves to the
+///   binding the top-level `createApp(...)` produced — the deferred bootstrap
+///   (`getPlatformConfig(app).then(async () => { … app.mount('#app') })`) that
+///   starts the app after an async config or i18n load.
+///
+/// Requiring `createApp` plus a mount attributable to it keeps an ordinary
+/// module that merely calls a local `createApp()` helper, or defers an unrelated
+/// object's `.mount()`, still flagged.
+fn is_vue_entry_shape(program: &Program, semantic: &oxc_semantic::Semantic) -> bool {
     let has_create_app = program.body.iter().any(|stmt| match stmt {
         Statement::ExpressionStatement(es) => chain_contains_create_app_call(&es.expression),
         Statement::VariableDeclaration(decl) => decl
@@ -954,10 +1015,13 @@ fn is_vue_entry_shape(program: &Program) -> bool {
     if !has_create_app {
         return false;
     }
-    program.body.iter().any(|stmt| {
+    let has_top_level_mount = program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         chain_contains_mount_call(&es.expression)
-    })
+    });
+    has_top_level_mount
+        || vue_app_binding_symbol(program)
+            .is_some_and(|app| symbol_is_mount_receiver(app, semantic))
 }
 
 /// True when the program imports the `render` binding from `"preact"` at the top
@@ -2540,7 +2604,7 @@ impl OxcCheck for Check {
             || is_cli_main_entry_shape(program)
             || is_react_entry_shape(program)
             || is_solid_entry_shape(program)
-            || is_vue_entry_shape(program)
+            || is_vue_entry_shape(program, semantic)
             || is_preact_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
@@ -6029,7 +6093,51 @@ precacheAndRoute(entries)
         );
     }
 
+    #[test]
+    fn skips_vue_entry_whose_mount_is_deferred_into_a_bootstrap_callback() {
+        // Issue #8085: `pure-admin/vue-pure-admin`'s `src/main.ts` builds the app
+        // at module scope, registers directives/components at the top level, and
+        // mounts inside `getPlatformConfig(app).then(async config => { … })` so
+        // the app starts only after the async config load. The module is still
+        // the application entry — never imported — so its registrations are its
+        // purpose, not a tree-shaking hazard.
+        let src = "\
+            import { createApp } from 'vue';\n\
+            import App from './App.vue';\n\
+            const app = createApp(App);\n\
+            Object.keys(directives).forEach(key => { app.directive(key, directives[key]); });\n\
+            app.component('IconifyIconOffline', IconifyIconOffline);\n\
+            getPlatformConfig(app).then(async config => {\n\
+              setupStore(app);\n\
+              app.use(router);\n\
+              await router.isReady();\n\
+              app.mount('#app');\n\
+            });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.ts");
+        assert!(
+            diags.is_empty(),
+            "a Vue entry that defers its mount must be exempt, got {diags:?}"
+        );
+    }
 
+    #[test]
+    fn flags_module_whose_deferred_mount_is_on_an_unrelated_binding() {
+        // The deferred-mount branch is anchored on the binding `createApp(...)`
+        // produced: a `.mount(...)` on some other object never makes the module
+        // a Vue entry, so its top-level side effects stay flagged.
+        let src = "\
+            import { createApp } from 'vue';\n\
+            const app = createApp(App);\n\
+            const widget = buildWidget();\n\
+            initAnalytics();\n\
+            ready().then(() => { widget.mount('#w'); });\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/bootstrap.ts");
+        assert_eq!(
+            diags.len(),
+            2,
+            "a deferred mount on an unrelated binding must not exempt the module, got {diags:?}"
+        );
+    }
 
     #[test]
     fn flags_define_property_on_require_aliased_prototype() {
