@@ -96,7 +96,7 @@ use crate::rules::rust_helpers::{
     cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
     cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
     cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_float_rounding, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
+    cast_operand_is_float, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
     cast_operand_is_modulo_bounded, cast_operand_is_modulo_bounded_via_binding,
     cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
     cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
@@ -289,8 +289,9 @@ impl AstCheck for Check {
         }
         let source_type = source_numeric_type(node, source_bytes);
         // A float source cast to an integer target — a resolved `f64`/`f32`
-        // operand, or one whose outermost expression is a std float rounding
-        // method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`). Std has no
+        // operand, or an expression proven float by its shape (float arithmetic,
+        // a std rounding method, an `f{32,64}::from`, a same-file function
+        // declared `-> f64`). Std has no
         // `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer type, so
         // `try_into()` / `i32::try_from(x)` — like the sibling rule's
         // `from`/`try_from` suggestion — is uncompilable. `as` is the only
@@ -299,7 +300,7 @@ impl AstCheck for Check {
         // logic below.
         if target_type.kind != NumericKind::Float
             && (source_type.is_some_and(|src| src.kind == NumericKind::Float)
-                || cast_operand_is_float_rounding(node, source_bytes))
+                || cast_operand_is_float(node, source_bytes))
         {
             return;
         }
@@ -1955,5 +1956,21 @@ mod tests {
         let src = "#[allow(clippy::needless_return)]\n\
                    pub fn d(x: f64) -> f32 { x as f32 }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_7607_float_expression_operands_not_flagged() {
+        // rbaumier/comply#7607 — the sibling rule owned these spans while it
+        // flagged them, so it is this rule's own float exemption that keeps its
+        // equally-uncompilable `try_into()` from taking over the diagnostic once
+        // the sibling stops claiming them.
+        assert!(run_on("fn f(a: f64, b: f64) -> i32 { (a + b) as i32 }").is_empty());
+        assert!(run_on("fn f(x: f32) -> u8 { (x * 2.0) as u8 }").is_empty());
+        let local_fn = "fn round_to_even(v: f64) -> f64 { v }\n\
+                        fn f(v: f64) -> i32 { round_to_even(v) as i32 }";
+        assert!(run_on(local_fn).is_empty());
+        let inferred = "fn f(count: u32, gamma: f64) -> u32 { let fkn = gamma * f64::from(count); \
+                        fkn as u32 }";
+        assert!(run_on(inferred).is_empty());
     }
 }

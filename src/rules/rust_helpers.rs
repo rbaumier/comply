@@ -7308,10 +7308,7 @@ pub fn cast_operand_is_min_clamped(cast: Node, source: &[u8]) -> bool {
     false
 }
 
-/// True when `cast`'s operand's outermost expression is a std float rounding
-/// method call — `.floor()`, `.ceil()`, `.round()`, or `.trunc()`. These four
-/// methods are inherent to `f32`/`f64` only and each returns the same float
-/// type, so the operand is provably a float value.
+/// True when `cast`'s operand provably evaluates to an `f32`/`f64` value.
 ///
 /// A float source has no `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer
 /// type, so casting it to an integer with `as` is the only available conversion
@@ -7319,22 +7316,135 @@ pub fn cast_operand_is_min_clamped(cast: Node, source: &[u8]) -> bool {
 /// `from_bits` / SIMD carve-outs. Callers gate this on an integer target; a
 /// float target keeps its own precision handling.
 ///
-/// Matches only a method call — a `call_expression` whose `function` is a
-/// `field_expression` — so a same-named *free* function (`floor(x)`, which could
-/// return any type) is not matched. The `f32`/`f64` rounding methods are
-/// nullary, so a call carrying arguments (a `Decimal::round(2)`-style method on
-/// some other type) is rejected too. Transparent parentheses are peeled.
-///
 /// Shared by `rust-no-as-numeric-cast` and `rust-no-lossy-as-cast`, whose
 /// `from`/`try_from` and `try_into` remediations are alike uncompilable for a
-/// float source.
-pub fn cast_operand_is_float_rounding(cast: Node, source: &[u8]) -> bool {
+/// float source. See [`expression_yields_float`] for the shapes proven float.
+pub fn cast_operand_is_float(cast: Node, source: &[u8]) -> bool {
     cast.child_by_field_name("value")
-        .is_some_and(|value| expr_is_float_rounding_call(value, source))
+        .is_some_and(|value| expression_yields_float(value, source, 0))
+}
+
+/// How many nested operands and binding hops [`expression_yields_float`]
+/// follows. The walk descends strictly, so the bound only caps how much of a
+/// deep expression it can prove; it also keeps a self-naming rebinding
+/// (`let x = x * 2.0;`) from recursing without end.
+const MAX_FLOAT_INFERENCE_DEPTH: u32 = 8;
+
+/// True when `node` provably evaluates to an `f32`/`f64` value.
+///
+/// Each shape carries its own proof:
+///
+/// - a `float_literal` — `2.0`, `1e-3`, `2.0f32`;
+/// - a parenthesized or unary (`-x`, `*x`) expression, which carries its
+///   operand's type through unchanged;
+/// - an inner `as f32` / `as f64`, which names the type outright;
+/// - arithmetic (`+ - * / %`) with one provably-float operand: Rust's primitive
+///   operators take both operands at one type and yield that same type, and `as`
+///   compiles on primitives only, so one float side settles the expression.
+///   Comparisons yield `bool` and the bitwise and shift operators are
+///   integer-only, so no other operator qualifies;
+/// - a call proven float by [`call_yields_float`];
+/// - an identifier resolved through [`identifier_yields_float`].
+///
+/// Anything else — a field access, an index, a trait method — stays unproven, so
+/// the caller keeps flagging it.
+fn expression_yields_float(node: Node, source: &[u8], depth: u32) -> bool {
+    if depth >= MAX_FLOAT_INFERENCE_DEPTH {
+        return false;
+    }
+    let inner_depth = depth + 1;
+    match node.kind() {
+        "float_literal" => true,
+        "parenthesized_expression" | "unary_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| expression_yields_float(inner, source, inner_depth)),
+        "type_cast_expression" => node
+            .child_by_field_name("type")
+            .is_some_and(|declared| type_is_float(declared, source)),
+        "binary_expression" => {
+            let is_arithmetic = node
+                .child_by_field_name("operator")
+                .and_then(|operator| operator.utf8_text(source).ok())
+                .is_some_and(|operator| matches!(operator, "+" | "-" | "*" | "/" | "%"));
+            is_arithmetic
+                && ["left", "right"].iter().any(|side| {
+                    node.child_by_field_name(side)
+                        .is_some_and(|operand| expression_yields_float(operand, source, inner_depth))
+                })
+        }
+        "call_expression" => call_yields_float(node, source),
+        "identifier" => identifier_yields_float(node, source, inner_depth),
+        _ => false,
+    }
+}
+
+/// True when the type node `declared` is spelled `f32` or `f64`.
+fn type_is_float(declared: Node, source: &[u8]) -> bool {
+    declared
+        .utf8_text(source)
+        .is_ok_and(|text| matches!(text.trim(), "f32" | "f64"))
+}
+
+/// True when a `call_expression` provably returns a float: a std float rounding
+/// method, an `f32::from` / `f64::from` conversion (whose `From` impl returns
+/// `Self`), or a call to a `function_item` declared in the same file whose
+/// return type is `f32`/`f64`.
+///
+/// A callee defined in another file resolves to nothing, which leaves the caller
+/// with its unresolved case.
+fn call_yields_float(node: Node, source: &[u8]) -> bool {
+    if expr_is_float_rounding_call(node, source) {
+        return true;
+    }
+    let Some(function) = node.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() == "scoped_identifier"
+        && function
+            .child_by_field_name("path")
+            .is_some_and(|path| type_is_float(path, source))
+        && function
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            == Some("from")
+    {
+        return true;
+    }
+    callee_name(function, source).is_some_and(|name| {
+        file_fn_return_type_matches(node, name, source, |return_type| {
+            type_is_float(return_type, source)
+        })
+    })
+}
+
+/// True when the binding an identifier names holds a float: an `f32`/`f64`
+/// annotation settles it outright, and an unannotated one is answered by what
+/// its initializer yields — the inferred `let fkn = gamma * f64::from(count);`
+/// that a later `fkn as u32` casts.
+///
+/// A non-float annotation ends the walk: the initializer cannot contradict the
+/// type the binding declares.
+fn identifier_yields_float(node: Node, source: &[u8], depth: u32) -> bool {
+    let Ok(name) = node.utf8_text(source) else {
+        return false;
+    };
+    if let Some(declared) = find_identifier_type(node, name, source) {
+        return matches!(declared.trim(), "f32" | "f64");
+    }
+    local_binding_init_expression(node, name, source)
+        .is_some_and(|init| expression_yields_float(init, source, depth))
 }
 
 /// True when `node` is a nullary call to a float rounding method (`.floor()`,
 /// `.ceil()`, `.round()`, `.trunc()`), looking through transparent parentheses.
+/// These four methods are inherent to `f32`/`f64` only and each returns the same
+/// float type.
+///
+/// Matches only a method call — a `call_expression` whose `function` is a
+/// `field_expression` — so a same-named *free* function (`floor(x)`, which could
+/// return any type) is not matched. The `f32`/`f64` rounding methods are
+/// nullary, so a call carrying arguments (a `Decimal::round(2)`-style method on
+/// some other type) is rejected too.
 fn expr_is_float_rounding_call(node: Node, source: &[u8]) -> bool {
     if node.kind() == "parenthesized_expression" {
         return node
