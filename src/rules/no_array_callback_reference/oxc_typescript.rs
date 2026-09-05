@@ -28,11 +28,15 @@
 //! flagged.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, peel_parens};
+use crate::oxc_helpers::{
+    bound_positional_params, byte_offset_to_line_col, object_literal_callable_member_bounds,
+    peel_parens, resolved_object_type_members, type_callable_member_bounds,
+};
+use crate::project::import_index::ExportedSymbol;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     ClassElement, Expression, ForStatementLeft, FormalParameters, StaticMemberExpression,
-    TSSignature, TSType, TSTypeAnnotation, TSTypeName,
+    TSSignature, TSType, TSTypeAnnotation,
 };
 use std::sync::Arc;
 
@@ -50,7 +54,7 @@ use std::sync::Arc;
 /// footgun where `index` becomes an argument the callee reads — neither is
 /// exempt.
 fn callee_ignores_extra_args(params: &FormalParameters, value_params: u8) -> bool {
-    crate::oxc_helpers::bound_positional_params(params)
+    bound_positional_params(params)
         .is_some_and(|bound| bound <= value_params)
 }
 
@@ -97,47 +101,6 @@ fn members_declare_low_arity(
     })
 }
 
-/// Returns `true` when a named type reference (`Params` in `{ scale }: Params`)
-/// resolves to a `type`/`interface` declaration whose member list satisfies
-/// `members_hold`. The declaration is matched by name across the module — the
-/// established resolution shape in this codebase (see
-/// `ts_no_enum_object_literal_pattern`).
-fn named_type_members<'a>(
-    type_ref: &oxc_ast::ast::TSTypeReference<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-    members_hold: impl Fn(&[TSSignature<'a>]) -> bool,
-) -> bool {
-    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else { return false };
-    let type_name = id.name.as_str();
-    semantic.nodes().iter().any(|node| match node.kind() {
-        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
-            matches!(&alias.type_annotation, TSType::TSTypeLiteral(lit)
-                if members_hold(&lit.members))
-        }
-        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
-            members_hold(&iface.body.body)
-        }
-        _ => false,
-    })
-}
-
-/// Returns `true` when a named type reference resolves to a declaration whose
-/// `binding_name` member ignores the extra iterator arguments (see
-/// [`callee_ignores_extra_args`]). Generic type references carrying their own
-/// arguments are skipped: the member type may depend on a type parameter whose
-/// arity is not statically visible here.
-fn named_type_member_is_low_arity<'a>(
-    type_ref: &oxc_ast::ast::TSTypeReference<'a>,
-    binding_name: &str,
-    value_params: u8,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    type_ref.type_arguments.is_none()
-        && named_type_members(type_ref, semantic, |members| {
-            members_declare_low_arity(members, binding_name, value_params)
-        })
-}
-
 /// Returns `true` when a parameter's type annotation declares `binding_name` as
 /// a function that ignores the extra iterator arguments (see
 /// [`callee_ignores_extra_args`]). Covers a direct annotation
@@ -145,26 +108,28 @@ fn named_type_member_is_low_arity<'a>(
 /// (`{ scale }: { scale: (x) => y }`), and the destructured named-type case
 /// (`{ scale }: Params`) — the common D3/charting shape where scales and
 /// formatters are destructured from a typed params object.
+///
+/// A type reference carrying its own type arguments is skipped: the member type
+/// may depend on a type parameter whose arity is not statically visible here.
 fn param_binding_is_low_arity<'a>(
-    ann: &TSTypeAnnotation<'a>,
+    ann: &'a TSTypeAnnotation<'a>,
     binding_name: &str,
     value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    match &ann.type_annotation {
-        TSType::TSTypeLiteral(lit) => {
-            members_declare_low_arity(&lit.members, binding_name, value_params)
-        }
-        TSType::TSTypeReference(type_ref) => {
-            named_type_member_is_low_arity(type_ref, binding_name, value_params, semantic)
-        }
-        ty => is_low_arity_function_type(ty, value_params),
+    let ty = &ann.type_annotation;
+    if matches!(ty, TSType::TSTypeReference(type_ref) if type_ref.type_arguments.is_some()) {
+        return false;
+    }
+    match resolved_object_type_members(ty, semantic) {
+        Some(members) => members_declare_low_arity(members, binding_name, value_params),
+        None => is_low_arity_function_type(ty, value_params),
     }
 }
 
-/// Returns `true` when an object-type member list declares `member_name`,
-/// whatever its type — as a property signature (`{ map: (row) => R }`) or as a
-/// method signature (`{ map(row): R }`).
+/// Returns `true` when `member_name` appears at all in the member list of an
+/// object type — as a property signature (`{ map: (row) => R }`) or as a method
+/// signature (`{ map(row): R }`), whatever it is typed as.
 fn members_declare(members: &[TSSignature], member_name: &str) -> bool {
     members.iter().any(|member| match member {
         TSSignature::TSPropertySignature(prop) => {
@@ -177,6 +142,19 @@ fn members_declare(members: &[TSSignature], member_name: &str) -> bool {
     })
 }
 
+/// The symbol `ident` refers to and the node declaring it, when the reference
+/// resolves in this file. Cross-file imports do not resolve here
+/// (`symbol_id() == None`).
+fn resolved_binding(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<(oxc_semantic::SymbolId, oxc_semantic::NodeId)> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    Some((sym_id, scoping.symbol_declaration(sym_id)))
+}
+
 /// The type annotation a binding is declared with — on a variable
 /// (`const options: Options = …`) or on the formal parameter that introduces it
 /// (`(options: Options) => …`). `None` for an untyped or destructured binding.
@@ -184,10 +162,7 @@ fn binding_type_annotation<'a>(
     ident: &oxc_ast::ast::IdentifierReference<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> Option<&'a TSTypeAnnotation<'a>> {
-    let ref_id = ident.reference_id.get()?;
-    let scoping = semantic.scoping();
-    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
-    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let (_, decl_node_id) = resolved_binding(ident, semantic)?;
     let nodes = semantic.nodes();
     if let AstKind::VariableDeclarator(decl) = nodes.kind(decl_node_id) {
         return decl.type_annotation.as_deref();
@@ -214,13 +189,8 @@ fn receiver_declares_method<'a>(
 ) -> bool {
     let Expression::Identifier(ident) = receiver else { return false };
     let Some(ann) = binding_type_annotation(ident, semantic) else { return false };
-    match &ann.type_annotation {
-        TSType::TSTypeLiteral(lit) => members_declare(&lit.members, method_name),
-        TSType::TSTypeReference(type_ref) => named_type_members(type_ref, semantic, |members| {
-            members_declare(members, method_name)
-        }),
-        _ => false,
-    }
+    resolved_object_type_members(&ann.type_annotation, semantic)
+        .is_some_and(|members| members_declare(members, method_name))
 }
 
 /// Returns `true` when `callee` is a static member expression `Array.from` —
@@ -297,10 +267,8 @@ fn is_low_arity_local<'a>(
     value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else { return false };
+    let Some((sym_id, decl_node_id)) = resolved_binding(ident, semantic) else { return false };
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
     match nodes.kind(decl_node_id) {
         AstKind::VariableDeclarator(decl) => {
@@ -359,16 +327,16 @@ fn is_low_arity_local<'a>(
 }
 
 /// Returns `true` when `name` is a named/default import whose source module,
-/// resolved through the cross-file import graph, exports a callable that binds
-/// at most the method's per-iteration values (`ExportedSymbol::binds_at_most`) —
-/// the cross-file extension of [`is_low_arity_local`]. Passing such an imported
-/// callee bare to an array-iterator method drops the injected `index`/`array`
-/// exactly as a locally-declared one does, so `arr.map(f)` is identical to
-/// `arr.map(e => f(e))`. Imports whose specifier does not resolve to an indexed
-/// source file — external packages, unresolved re-export chains — carry no
-/// visible arity and stay flagged, matching the rule's conservative default for
-/// callees of unknown arity.
-fn is_low_arity_imported(name: &str, value_params: u8, ctx: &CheckCtx) -> bool {
+/// resolved through the cross-file import graph, exports a symbol satisfying
+/// `holds`. Imports whose specifier does not resolve to an indexed source file —
+/// external packages, unresolved re-export chains — carry no visible shape and
+/// yield `false`, matching the rule's conservative default for callees of
+/// unknown arity.
+fn imported_export_satisfies(
+    name: &str,
+    ctx: &CheckCtx,
+    holds: impl Fn(&ExportedSymbol) -> bool,
+) -> bool {
     let index = ctx.project.import_index();
     for imp in index.get_imports(ctx.path) {
         if imp.local_name != name {
@@ -380,9 +348,75 @@ fn is_low_arity_imported(name: &str, value_params: u8, ctx: &CheckCtx) -> bool {
         return index
             .get_exports(src_path)
             .iter()
-            .any(|export| export.name == imp.imported_name && export.binds_at_most(value_params));
+            .any(|export| export.name == imp.imported_name && holds(export));
     }
     false
+}
+
+/// Returns `true` when `name` is an import resolving to an exported callable
+/// that binds at most the method's per-iteration values
+/// (`ExportedSymbol::binds_at_most`) — the cross-file extension of
+/// [`is_low_arity_local`]. Passing such an imported callee bare to an
+/// array-iterator method drops the injected `index`/`array` exactly as a
+/// locally-declared one does, so `arr.map(f)` is identical to
+/// `arr.map(e => f(e))`.
+fn is_low_arity_imported(name: &str, value_params: u8, ctx: &CheckCtx) -> bool {
+    imported_export_satisfies(name, ctx, |export| export.binds_at_most(value_params))
+}
+
+/// The positional-parameter bound of every callable member the object `ident`
+/// is bound to declares, resolved in this file: from the binding's declared
+/// object type when it names them (`const Node: NodeFactory = freeze({…})`) and
+/// otherwise from a direct object-literal initializer
+/// (`const Node = { create(x) {…} }`). Empty for an object of unknown shape.
+fn local_callable_member_bounds<'a>(
+    ident: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Vec<(String, u8)> {
+    if let Some(ann) = binding_type_annotation(ident, semantic) {
+        let from_type =
+            type_callable_member_bounds(&ann.type_annotation, semantic);
+        if !from_type.is_empty() {
+            return from_type;
+        }
+    }
+    let Some((_, decl_node_id)) = resolved_binding(ident, semantic) else {
+        return Vec::new();
+    };
+    match semantic.nodes().kind(decl_node_id) {
+        AstKind::VariableDeclarator(decl) => match decl.init.as_ref() {
+            Some(Expression::ObjectExpression(object)) => {
+                object_literal_callable_member_bounds(object)
+            }
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Returns `true` when `<object>.<member>` is a factory method whose positional
+/// parameters absorb at most the iterator method's per-iteration values, so
+/// passing it bare drops the injected `index`/`array` — `columns.map(ColumnNode.create)`
+/// on a `create(column: string)` factory is identical to wrapping it in an
+/// arrow. The object is resolved in this file
+/// ([`local_callable_member_bounds`]) or through the cross-file import graph
+/// (`ExportedSymbol::member_binds_at_most`). An object of unknown shape — a
+/// global (`Number.parseInt`), an external package — carries no visible member
+/// arity and stays flagged.
+fn is_low_arity_member_callee<'a>(
+    member: &'a StaticMemberExpression<'a>,
+    value_params: u8,
+    ctx: &CheckCtx,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(object) = &member.object else { return false };
+    let member_name = member.property.name.as_str();
+    local_callable_member_bounds(object, semantic)
+        .iter()
+        .any(|(name, bound)| name == member_name && *bound <= value_params)
+        || imported_export_satisfies(object.name.as_str(), ctx, |export| {
+            export.member_binds_at_most(member_name, value_params)
+        })
 }
 
 /// Returns `true` when `ident` resolves to a namespace-import binding
@@ -396,11 +430,9 @@ fn is_namespace_import_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let Some(ref_id) = ident.reference_id.get() else { return false };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else { return false };
-    let decl = scoping.symbol_declaration(sym_id);
-    matches!(semantic.nodes().kind(decl), AstKind::ImportNamespaceSpecifier(_))
+    resolved_binding(ident, semantic).is_some_and(|(_, decl)| {
+        matches!(semantic.nodes().kind(decl), AstKind::ImportNamespaceSpecifier(_))
+    })
 }
 
 /// Returns `true` when `member` is `this.<method>` and `<method>` resolves, in
@@ -594,6 +626,13 @@ impl OxcCheck for Check {
                 // keeps `this` and drops the injected `index`/`array`, so
                 // passing it bare is safe.
                 if is_low_arity_bound_class_property(inner_member, value_params, node, semantic) {
+                    return;
+                }
+                // A factory method whose declared parameters stop at the
+                // method's per-iteration values drops the injected
+                // `index`/`array`, so `columns.map(ColumnNode.create)` is
+                // identical to wrapping it in an arrow.
+                if is_low_arity_member_callee(inner_member, value_params, ctx, semantic) {
                     return;
                 }
                 let text = &ctx.source
@@ -1507,6 +1546,119 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    // #6253: a same-file factory object literal exposes its members' arity —
+    // `create` binds only `element`, so passing it bare is identical to wrapping
+    // it in an arrow.
+    #[test]
+    fn allows_local_object_literal_factory_member() {
+        assert!(run_on(
+            "const Node = { create(value: string): string { return value; } }; const xs: string[] = []; xs.map(Node.create);"
+        )
+        .is_empty());
+    }
+
+    // #6253: a factory bound through a declared object type resolves the same
+    // way — the annotation names the members even when the initializer is a call.
+    #[test]
+    fn allows_local_typed_factory_member() {
+        assert!(run_on(
+            "type Factory = Readonly<{ create(value: string): string }>; const Node: Factory = build(); const xs: string[] = []; xs.map(Node.create);"
+        )
+        .is_empty());
+    }
+
+    // #6253 negative space: a *two*-parameter factory member reads `index` as its
+    // second argument — the genuine footgun — so it stays flagged.
+    #[test]
+    fn flags_local_object_literal_multi_arity_member() {
+        assert_eq!(
+            run_on(
+                "const Node = { create(value: string, index: number): string { return value + index; } }; const xs: string[] = []; xs.map(Node.create);"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // #6253 negative space: a global receiver carries no visible member arity —
+    // `['1','2','3'].map(Number.parseInt)` is the canonical extra-args bug.
+    #[test]
+    fn flags_global_object_member_reference() {
+        assert_eq!(run_on("const xs: string[] = []; xs.map(Number.parseInt);").len(), 1);
+    }
+
+    // #6253 repro (kysely-org/kysely `insert-values-parser.ts`):
+    // `Object.keys(v).map(ColumnNode.create)` on a factory object imported from a
+    // sibling module, whose members are declared by a module-local
+    // `Readonly<{ … }>` alias. The cross-file member arity resolves — must not flag.
+    #[test]
+    fn allows_imported_factory_member_from_typed_object() {
+        let files = &[
+            (
+                "column-node.ts",
+                "import { freeze } from './object-utils';\ntype ColumnNodeFactory = Readonly<{\n  is(node: { kind: string }): boolean\n  create(column: string): string\n}>;\nexport const ColumnNode: ColumnNodeFactory = freeze<ColumnNodeFactory>({\n  is(node) { return node.kind === 'ColumnNode'; },\n  create(column) { return column; },\n});",
+            ),
+            (
+                "object-utils.ts",
+                "export function freeze<T>(obj: T): Readonly<T> { return Object.freeze(obj); }",
+            ),
+            (
+                "insert-values-parser.ts",
+                "import { ColumnNode } from './column-node';\nexport const parse = (value: Record<string, unknown>): string[] =>\n  Object.keys(value).map(ColumnNode.create);",
+            ),
+        ];
+        assert!(run_on_project(files, "insert-values-parser.ts").is_empty());
+    }
+
+    // #6253: a plain object-literal export resolves its members too — no type
+    // annotation needed when the initializer is the object itself.
+    #[test]
+    fn allows_imported_factory_member_from_object_literal() {
+        let files = &[
+            (
+                "node.ts",
+                "export const Node = {\n  create(column: string): string { return column; },\n};",
+            ),
+            (
+                "consumer.ts",
+                "import { Node } from './node';\nconst columns: string[] = [];\nexport const out = columns.map(Node.create);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #6253 negative space: an imported *two*-parameter factory member exposes
+    // the `(element, index)` footgun and must stay flagged.
+    #[test]
+    fn flags_imported_multi_arity_factory_member() {
+        let files = &[
+            (
+                "node.ts",
+                "export const Node = {\n  create(column: string, index: number): string { return column + index; },\n};",
+            ),
+            (
+                "consumer.ts",
+                "import { Node } from './node';\nconst columns: string[] = [];\nexport const out = columns.map(Node.create);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    // #6253 negative space: an object whose members are not statically visible —
+    // here the export is a bare factory call with no declared type — carries no
+    // member arity and stays flagged.
+    #[test]
+    fn flags_imported_member_of_opaque_object() {
+        let files = &[
+            ("node.ts", "export const Node = buildFactory();"),
+            (
+                "consumer.ts",
+                "import { Node } from './node';\nconst columns: string[] = [];\nexport const out = columns.map(Node.create);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
     }
 
     // #8137 negative space: …and an imported *three*-parameter reducer is not.

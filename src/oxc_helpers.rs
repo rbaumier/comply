@@ -5329,6 +5329,156 @@ pub fn bound_positional_params(params: &oxc_ast::ast::FormalParameters) -> Optio
     params.rest.is_none().then(|| u8::try_from(params.items.len()).ok())?
 }
 
+/// The positional-parameter bound a *function type* declares (see
+/// [`bound_positional_params`]), parentheses unwrapped. `None` for any other
+/// type: it carries no visible parameter list.
+#[must_use]
+pub fn function_type_bound_positional_params(ty: &oxc_ast::ast::TSType) -> Option<u8> {
+    use oxc_ast::ast::TSType;
+    match ty {
+        TSType::TSFunctionType(f) => bound_positional_params(&f.params),
+        TSType::TSParenthesizedType(p) => {
+            function_type_bound_positional_params(&p.type_annotation)
+        }
+        _ => None,
+    }
+}
+
+/// Caps how far [`resolved_object_type_members`] follows named type references.
+/// A cyclic alias (`type A = B; type B = A`) is rejected by TypeScript but must
+/// not hang the linter.
+const MAX_TYPE_ALIAS_HOPS: u8 = 8;
+
+/// The member list an object type publishes, when it is statically visible here.
+///
+/// Follows an inline type literal, a `type`/`interface` declared elsewhere in
+/// the module (matched by name, the established resolution shape in this
+/// codebase), and the standard-library `Readonly<T>` mapped type, which
+/// republishes `T`'s members with the same signatures. `None` for a type that is
+/// opaque here — an unresolved or imported reference, a union, a primitive.
+#[must_use]
+pub fn resolved_object_type_members<'a>(
+    ty: &'a oxc_ast::ast::TSType<'a>,
+    semantic: &'a Semantic<'a>,
+) -> Option<&'a [oxc_ast::ast::TSSignature<'a>]> {
+    resolved_object_type_members_within(ty, semantic, MAX_TYPE_ALIAS_HOPS)
+}
+
+fn resolved_object_type_members_within<'a>(
+    ty: &'a oxc_ast::ast::TSType<'a>,
+    semantic: &'a Semantic<'a>,
+    hops_left: u8,
+) -> Option<&'a [oxc_ast::ast::TSSignature<'a>]> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{TSType, TSTypeName};
+    let hops_left = hops_left.checked_sub(1)?;
+    match ty {
+        TSType::TSTypeLiteral(lit) => Some(&lit.members),
+        TSType::TSParenthesizedType(p) => {
+            resolved_object_type_members_within(&p.type_annotation, semantic, hops_left)
+        }
+        TSType::TSTypeReference(type_ref) => {
+            let TSTypeName::IdentifierReference(id) = &type_ref.type_name else {
+                return None;
+            };
+            let type_name = id.name.as_str();
+            let declared = semantic.nodes().iter().find_map(|node| match node.kind() {
+                AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
+                    Some(resolved_object_type_members_within(
+                        &alias.type_annotation,
+                        semantic,
+                        hops_left,
+                    ))
+                }
+                AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
+                    Some(Some(iface.body.body.as_slice()))
+                }
+                _ => None,
+            });
+            if let Some(members) = declared {
+                return members;
+            }
+            // `Readonly<T>` is a standard-library mapped type: same members,
+            // same signatures, only the modifiers change.
+            match &type_ref.type_arguments {
+                Some(args) if type_name == "Readonly" && args.params.len() == 1 => {
+                    resolved_object_type_members_within(&args.params[0], semantic, hops_left)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The positional-parameter bound of every callable member an object type
+/// declares, paired with its name — `[("create", 1)]` for
+/// `{ create(column: string): Node }`. Resolution follows
+/// [`resolved_object_type_members`]. Empty for an opaque type, and for members
+/// whose own parameter list carries no bound: an absent member means unknown
+/// arity, never "unbounded".
+#[must_use]
+pub fn type_callable_member_bounds<'a>(
+    ty: &'a oxc_ast::ast::TSType<'a>,
+    semantic: &'a Semantic<'a>,
+) -> Vec<(String, u8)> {
+    resolved_object_type_members(ty, semantic)
+        .map(signature_callable_member_bounds)
+        .unwrap_or_default()
+}
+
+/// The positional-parameter bound of every callable member in an object-type
+/// signature list — a function-typed property (`{ create: (x) => y }`) or a
+/// method signature (`{ create(x): y }`).
+fn signature_callable_member_bounds(members: &[oxc_ast::ast::TSSignature]) -> Vec<(String, u8)> {
+    use oxc_ast::ast::TSSignature;
+    members
+        .iter()
+        .filter_map(|member| match member {
+            TSSignature::TSPropertySignature(prop) => {
+                let name = prop.key.static_name()?;
+                let ann = prop.type_annotation.as_ref()?;
+                let bound = function_type_bound_positional_params(&ann.type_annotation)?;
+                Some((name.into_owned(), bound))
+            }
+            TSSignature::TSMethodSignature(method) => {
+                let name = method.key.static_name()?;
+                let bound = bound_positional_params(&method.params)?;
+                Some((name.into_owned(), bound))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The positional-parameter bound of every callable own property an object
+/// literal defines, paired with its name — covering both the method shorthand
+/// (`{ create(x) {…} }`) and a function-valued property
+/// (`{ create: (x) => … }`). A computed, spread, or non-callable property
+/// carries no bound and is absent.
+#[must_use]
+pub fn object_literal_callable_member_bounds(
+    object: &oxc_ast::ast::ObjectExpression,
+) -> Vec<(String, u8)> {
+    use oxc_ast::ast::{Expression, ObjectPropertyKind};
+    object
+        .properties
+        .iter()
+        .filter_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(prop) = property else {
+                return None;
+            };
+            let name = prop.key.static_name()?;
+            let bound = match &prop.value {
+                Expression::ArrowFunctionExpression(f) => bound_positional_params(&f.params),
+                Expression::FunctionExpression(f) => bound_positional_params(&f.params),
+                _ => None,
+            }?;
+            Some((name.into_owned(), bound))
+        })
+        .collect()
+}
+
 /// True when `decl_node_id` is the declaration of a function's first formal
 /// parameter (the parameter chain reaches a `FormalParameters` whose first item
 /// spans the declaration before any enclosing function boundary).
