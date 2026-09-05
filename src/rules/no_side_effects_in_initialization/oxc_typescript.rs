@@ -75,13 +75,17 @@
 //!   `ReactDOM.createRoot(...).render(...)`, `hydrateRoot(...)`, or legacy
 //!   `ReactDOM.render(...)` (mounting the app at module level is the entry
 //!   file's purpose, and entry points are never imported by other modules);
-//! - Solid.js application entry points by content shape: a module that imports
-//!   the `render` binding from `"solid-js/web"` and calls it at the top level
-//!   (`render(() => <App />, root)`). `render` is Solid.js's app bootstrap, so
-//!   mounting the app at module level is the entry file's purpose and the
-//!   top-level call is an intentional side effect. The `solid-js/web` import is
-//!   required so an ordinary module that happens to call a local `render()` is
-//!   still flagged;
+//! - framework application entry points by content shape: a module that imports
+//!   a framework's app-bootstrap function and calls it at the top level —
+//!   Solid.js's `render(() => <App />, root)` from `"solid-js/web"`, Preact's
+//!   `render(<App />, el)` from `"preact"`, Angular's
+//!   `bootstrapApplication(AppComponent).catch(err => …)` from
+//!   `"@angular/platform-browser"`. Each is that framework's counterpart of
+//!   React's `createRoot().render()`: mounting the app at module level is the
+//!   entry file's purpose and the top-level call is an intentional side effect,
+//!   with a trailing `.catch(...)`/`.then(...)` continuation counting the same.
+//!   The import provenance is required so an ordinary module that happens to call
+//!   a local `render()` is still flagged;
 //! - Vue 3 application entry points by content shape: a module that creates the
 //!   app at module scope with a top-level `createApp(...)` call and mounts that
 //!   app. The mount counts either as a top-level `.mount(...)` call — the split
@@ -97,13 +101,6 @@
 //!   attributable to it are required, so an ordinary module that merely calls a
 //!   local `createApp()` helper, or defers an unrelated object's `.mount()`, is
 //!   still flagged;
-//! - Preact application entry points by content shape: a module that imports the
-//!   `render` binding from `"preact"` and calls it at the top level
-//!   (`render(<App />, document.getElementById('app')!)`). `render` is Preact's
-//!   app bootstrap, so mounting the app at module level is the entry file's
-//!   purpose and the top-level call is an intentional side effect. The `preact`
-//!   import is required so an ordinary module that happens to call a local
-//!   `render()` is still flagged;
 //! - Gulp task-registration files by content shape: a module that imports
 //!   `gulp` and registers tasks at the top level (`task(...)`, `gulp.task(...)`,
 //!   `series(...)`, `parallel(...)`, …). The registrations are the file's whole
@@ -679,15 +676,18 @@ fn is_listen_call(call: &oxc_ast::ast::CallExpression) -> bool {
     }
 }
 
-/// True when `call` is a `listen(...)` call, or a `.catch(...)`/`.then(...)`
-/// continuation chained onto one. The idiomatic Node.js server startup pattern
-/// attaches error handling to the listen promise — `app.listen({port}).catch(…)`
-/// or `app.listen({port}).then(…)` — so the top-level expression is a `.catch`
-/// member call whose object is the `listen` call. Unwrapping the trailing
-/// continuation recovers the underlying `listen`, matching both the bare call
-/// and the chained forms.
-fn call_chain_starts_with_listen(call: &oxc_ast::ast::CallExpression) -> bool {
-    if is_listen_call(call) {
+/// True when `call` satisfies `is_root`, or is a `.catch(...)`/`.then(...)`
+/// continuation chained onto a call that does. Entry points idiomatically attach
+/// error handling to the promise their startup call returns —
+/// `app.listen({ port }).catch(…)`, `main().catch(err => …)`,
+/// `bootstrapApplication(App).catch(err => …)` — so the top-level expression is
+/// a `.catch` member call whose object is the real startup call. Peeling the
+/// trailing continuations recovers it.
+fn call_chain_starts_with(
+    call: &oxc_ast::ast::CallExpression,
+    is_root: &dyn Fn(&oxc_ast::ast::CallExpression) -> bool,
+) -> bool {
+    if is_root(call) {
         return true;
     }
     let Expression::StaticMemberExpression(m) = &call.callee else {
@@ -699,16 +699,16 @@ fn call_chain_starts_with_listen(call: &oxc_ast::ast::CallExpression) -> bool {
     let Expression::CallExpression(inner) = &m.object else {
         return false;
     };
-    call_chain_starts_with_listen(inner)
+    call_chain_starts_with(inner, is_root)
 }
 
 /// True when `stmt` is an expression statement whose expression is a
 /// `listen(...)` call (or a `.catch(...)`/`.then(...)` continuation chained onto
-/// one — see `call_chain_starts_with_listen`).
+/// one — see [`call_chain_starts_with`]).
 fn is_listen_call_statement(stmt: &Statement) -> bool {
     let Statement::ExpressionStatement(es) = stmt else { return false };
     let Expression::CallExpression(call) = &es.expression else { return false };
-    call_chain_starts_with_listen(call)
+    call_chain_starts_with(call, &is_listen_call)
 }
 
 /// True when an `if` branch (consequent or alternate) contains a `listen(...)`
@@ -746,28 +746,6 @@ fn is_server_entry_shape(program: &Program) -> bool {
     })
 }
 
-/// True when `call` is a bare `main()` call, or a `.catch(...)`/`.then(...)`
-/// continuation chained onto one. CLI entry points commonly invoke the program
-/// through `main().catch(err => { … })` to surface async failures, so the
-/// top-level expression is a `.catch` member call whose object is the `main`
-/// call. Unwrapping the trailing continuation recovers the underlying `main`,
-/// matching both the bare call and the chained forms.
-fn call_chain_starts_with_main(call: &oxc_ast::ast::CallExpression) -> bool {
-    if matches!(&call.callee, Expression::Identifier(id) if id.name == "main") {
-        return true;
-    }
-    let Expression::StaticMemberExpression(m) = &call.callee else {
-        return false;
-    };
-    if !matches!(m.property.name.as_str(), "catch" | "then") {
-        return false;
-    }
-    let Expression::CallExpression(inner) = &m.object else {
-        return false;
-    };
-    call_chain_starts_with_main(inner)
-}
-
 /// True when the program is a Node.js CLI script entry point that runs itself by
 /// invoking a locally-defined `main` function at the top level — the
 /// conventional CLI shape `async function main() { … }` followed by `main()` (or
@@ -788,7 +766,9 @@ fn is_cli_main_entry_shape(program: &Program) -> bool {
     program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
-        call_chain_starts_with_main(call)
+        call_chain_starts_with(call, &|inner| {
+            matches!(&inner.callee, Expression::Identifier(id) if id.name == "main")
+        })
     })
 }
 
@@ -852,43 +832,68 @@ fn is_react_entry_shape(program: &Program) -> bool {
     })
 }
 
-/// True when the program imports the `render` binding from `"solid-js/web"` at
-/// the top level (`import { render } from "solid-js/web"`). The imported symbol
-/// name must be `render`; an alias (`import { render as r }`) still counts.
-fn has_solid_render_import(program: &Program) -> bool {
-    program.body.iter().any(|stmt| {
-        let Statement::ImportDeclaration(import) = stmt else { return false };
-        if import.source.value.as_str() != "solid-js/web" {
-            return false;
+/// Application-bootstrap functions of the frameworks whose bootstrap is a plain
+/// call to an imported binding: `(package specifier, exported binding)`.
+///
+/// React and Vue are absent on purpose — their bootstrap is a member-call chain
+/// (`createRoot(...).render(...)`, `createApp(...).mount(...)`) recognized by
+/// [`is_react_entry_shape`] and [`is_vue_entry_shape`].
+const FRAMEWORK_BOOTSTRAP_ENTRIES: &[(&str, &str)] = &[
+    ("solid-js/web", "render"),
+    ("preact", "render"),
+    ("@angular/platform-browser", "bootstrapApplication"),
+];
+
+/// Local names bound to a framework app-bootstrap import
+/// ([`FRAMEWORK_BOOTSTRAP_ENTRIES`]), resolved through aliases:
+/// `import { render } from "preact"` contributes `render`, and
+/// `import { render as r } from "preact"` contributes `r`.
+fn framework_bootstrap_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = FxHashSet::default();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(import) = stmt else { continue };
+        let source = import.source.value.as_str();
+        let Some((_, bootstrap)) =
+            FRAMEWORK_BOOTSTRAP_ENTRIES.iter().find(|(spec, _)| *spec == source)
+        else {
+            continue;
+        };
+        let Some(specifiers) = &import.specifiers else { continue };
+        for spec in specifiers {
+            if let ImportDeclarationSpecifier::ImportSpecifier(named) = spec
+                && named.imported.name() == *bootstrap
+            {
+                out.insert(named.local.name.to_string());
+            }
         }
-        let Some(specifiers) = &import.specifiers else { return false };
-        specifiers.iter().any(|spec| {
-            matches!(
-                spec,
-                ImportDeclarationSpecifier::ImportSpecifier(named)
-                    if named.imported.name() == "render"
-            )
-        })
-    })
+    }
+    out
 }
 
-/// True when the program is a Solid.js application entry point: it imports the
-/// `render` binding from `"solid-js/web"` and calls it at the top level
-/// (`render(() => <App />, root)`). `render` is Solid.js's app bootstrap
-/// (analogous to React's `createRoot().render()` / Vue's `createApp().mount()`):
-/// mounting the app at module level is the entry file's whole purpose, and entry
-/// points are never imported by other modules, so the top-level call is an
-/// intentional side effect, not tree-shakeable library code. The `solid-js/web`
-/// import is required so an ordinary module that happens to call a local
-/// `render()` is still flagged.
-fn is_solid_entry_shape(program: &Program) -> bool {
-    if !has_solid_render_import(program) {
+/// True when the program is a framework application entry point: it imports a
+/// framework's app-bootstrap function ([`FRAMEWORK_BOOTSTRAP_ENTRIES`]) and
+/// calls it at the top level — Solid's `render(() => <App />, root)`, Preact's
+/// `render(<App />, document.getElementById('app')!)`, Angular's
+/// `bootstrapApplication(AppComponent).catch(err => …)`. Each is that
+/// framework's counterpart of React's `createRoot().render()`: mounting the app
+/// at module level is the entry file's whole purpose, and entry points are never
+/// imported by other modules, so the top-level call is an intentional side
+/// effect, not tree-shakeable library code. A trailing `.catch(...)`/`.then(...)`
+/// continuation on the bootstrap promise counts the same.
+///
+/// The import provenance is required, so an ordinary module calling a local
+/// `render()` — or one imported from elsewhere — is still flagged.
+fn is_framework_bootstrap_entry_shape(program: &Program) -> bool {
+    let bootstraps = framework_bootstrap_bindings(program);
+    if bootstraps.is_empty() {
         return false;
     }
     program.body.iter().any(|stmt| {
         let Statement::ExpressionStatement(es) = stmt else { return false };
         let Expression::CallExpression(call) = &es.expression else { return false };
-        matches!(&call.callee, Expression::Identifier(id) if id.name == "render")
+        call_chain_starts_with(call, &|inner| {
+            matches!(&inner.callee, Expression::Identifier(id) if bootstraps.contains(id.name.as_str()))
+        })
     })
 }
 
@@ -1022,46 +1027,6 @@ fn is_vue_entry_shape(program: &Program, semantic: &oxc_semantic::Semantic) -> b
     has_top_level_mount
         || vue_app_binding_symbol(program)
             .is_some_and(|app| symbol_is_mount_receiver(app, semantic))
-}
-
-/// True when the program imports the `render` binding from `"preact"` at the top
-/// level (`import { render } from "preact"`). The imported symbol name must be
-/// `render`; an alias (`import { render as r }`) still counts.
-fn has_preact_render_import(program: &Program) -> bool {
-    program.body.iter().any(|stmt| {
-        let Statement::ImportDeclaration(import) = stmt else { return false };
-        if import.source.value.as_str() != "preact" {
-            return false;
-        }
-        let Some(specifiers) = &import.specifiers else { return false };
-        specifiers.iter().any(|spec| {
-            matches!(
-                spec,
-                ImportDeclarationSpecifier::ImportSpecifier(named)
-                    if named.imported.name() == "render"
-            )
-        })
-    })
-}
-
-/// True when the program is a Preact application entry point: it imports the
-/// `render` binding from `"preact"` and calls it at the top level
-/// (`render(<App />, document.getElementById('app')!)`). `render` is Preact's app
-/// bootstrap (analogous to React's `createRoot().render()` / Vue's
-/// `createApp().mount()`): mounting the app at module level is the entry file's
-/// whole purpose, and entry points are never imported by other modules, so the
-/// top-level call is an intentional side effect, not tree-shakeable library code.
-/// The `preact` import is required so an ordinary module that happens to call a
-/// local `render()` is still flagged.
-fn is_preact_entry_shape(program: &Program) -> bool {
-    if !has_preact_render_import(program) {
-        return false;
-    }
-    program.body.iter().any(|stmt| {
-        let Statement::ExpressionStatement(es) = stmt else { return false };
-        let Expression::CallExpression(call) = &es.expression else { return false };
-        matches!(&call.callee, Expression::Identifier(id) if id.name == "render")
-    })
 }
 
 const GULP_REGISTRATION_IDENTS: &[&str] = &["task", "series", "parallel", "watch"];
@@ -2603,9 +2568,8 @@ impl OxcCheck for Check {
             || is_server_entry_shape(program)
             || is_cli_main_entry_shape(program)
             || is_react_entry_shape(program)
-            || is_solid_entry_shape(program)
             || is_vue_entry_shape(program, semantic)
-            || is_preact_entry_shape(program)
+            || is_framework_bootstrap_entry_shape(program)
             || is_gulp_task_file(program)
             || is_storybook_addon_file(program)
             || is_mcp_server_file(program)
@@ -6090,6 +6054,72 @@ precacheAndRoute(entries)
             diags.len(),
             1,
             "a non-register top-level side effect must still flag, got {diags:?}"
+        );
+    }
+
+    #[test]
+    fn skips_framework_app_entry_bootstraps() {
+        // Issue #1714 (TanStack/table `examples/*/src/main.ts(x)`): the canonical
+        // Vue, Preact and Angular application entry points mount the app with a
+        // top-level framework bootstrap call. An entry module is never imported
+        // by another module, so its bootstrap cannot block tree-shaking.
+        let vue = "\
+            import { createApp } from 'vue';\n\
+            import App from './App.vue';\n\
+            import './index.css';\n\
+            createApp(App).mount('#app');\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, vue, "src/main.ts").is_empty(),
+            "a Vue createApp().mount() entry must be exempt"
+        );
+
+        let preact = "\
+            import { render } from 'preact';\n\
+            import App from './App';\n\
+            render(<App />, document.getElementById('app')!);\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, preact, "src/main.tsx").is_empty(),
+            "a Preact render() entry must be exempt"
+        );
+
+        let angular = "\
+            import { bootstrapApplication } from '@angular/platform-browser';\n\
+            import { AppComponent } from './app/app.component';\n\
+            bootstrapApplication(AppComponent).catch(err => console.error(err));\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, angular, "src/main.ts").is_empty(),
+            "an Angular bootstrapApplication() entry must be exempt"
+        );
+
+        let angular_bare = "\
+            import { bootstrapApplication } from '@angular/platform-browser';\n\
+            bootstrapApplication(AppComponent, appConfig);\n";
+        assert!(
+            crate::rules::test_helpers::run_rule(&Check, angular_bare, "src/main.ts").is_empty(),
+            "an Angular bootstrap without a .catch continuation must be exempt"
+        );
+    }
+
+    #[test]
+    fn flags_bootstrap_named_call_without_the_framework_import() {
+        // The provenance gate: the bootstrap binding must come from the
+        // framework package. A same-named local helper is an ordinary call.
+        let local_render = "\
+            import { render } from './template';\n\
+            render(page, target);\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, local_render, "src/page.ts").len(),
+            1,
+            "render() imported from a local module must still flag"
+        );
+
+        let local_bootstrap = "\
+            function bootstrapApplication(x) { start(x); }\n\
+            bootstrapApplication(app);\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, local_bootstrap, "src/boot.ts").len(),
+            1,
+            "a locally defined bootstrapApplication() must still flag"
         );
     }
 
