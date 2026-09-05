@@ -5,9 +5,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BinaryOperator, Expression, TSLiteral, TSType, TSTypeName, TSTypeQueryExprName,
+    BinaryOperator, Expression, IdentifierReference, TSLiteral, TSType, TSTypeName,
+    TSTypeQueryExprName,
 };
-use oxc_semantic::{NodeId, Semantic};
+use oxc_semantic::{NodeId, Semantic, SymbolId};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -48,9 +49,9 @@ fn is_type_test_context(ctx: &CheckCtx) -> bool {
 ///  - it is not the *object* of a member access (`Food.Member` / `Food[k]`), which
 ///    reads a single member and is already tracked individually above.
 fn is_whole_enum_value_reference(
-    ident: &oxc_ast::ast::IdentifierReference,
-    ref_node_id: oxc_semantic::NodeId,
-    semantic: &oxc_semantic::Semantic,
+    ident: &IdentifierReference,
+    ref_node_id: NodeId,
+    semantic: &Semantic,
 ) -> bool {
     let Some(ref_id) = ident.reference_id.get() else {
         return false;
@@ -69,23 +70,52 @@ fn is_whole_enum_value_reference(
     )
 }
 
-/// Record every member of `enum_name` as used. Called for constructs that reach
-/// the whole enum at once — they expose every member without naming any of them.
-fn mark_all_members_used(
-    enum_name: &str,
-    members: &[(String, u32)],
-    used: &mut FxHashSet<(String, String)>,
-) {
-    for (member_name, _) in members {
-        used.insert((enum_name.to_string(), member_name.clone()));
+/// A non-exported enum declared in the current file. TypeScript merges
+/// same-named enum declarations into a single symbol, so one entry can carry the
+/// members of several declarations.
+struct TrackedEnum {
+    /// Name as written, for the diagnostic message.
+    name: String,
+    /// `(member name, 1-based declaration line)`, in declaration order.
+    members: Vec<(String, u32)>,
+}
+
+/// Every non-exported enum of the file, addressed by the symbol its name binds
+/// so that a reference is matched by binding rather than by spelling.
+struct TrackedEnums {
+    /// One entry per enum symbol, in declaration order.
+    decls: Vec<TrackedEnum>,
+    /// Enum symbol -> its index in `decls`.
+    by_symbol: FxHashMap<SymbolId, usize>,
+    /// The declaration nodes, whose subtrees are not usage sites.
+    decl_nodes: FxHashSet<NodeId>,
+}
+
+impl TrackedEnums {
+    /// The index of the tracked enum `ident` binds to. `None` when it binds
+    /// something else — a shadowing local, an import, another enum of the same
+    /// name — or when oxc left the reference unresolved, in which case it names
+    /// no tracked enum and so exempts nothing.
+    fn index_of(&self, ident: &IdentifierReference, semantic: &Semantic) -> Option<usize> {
+        let reference_id = ident.reference_id.get()?;
+        let symbol_id = semantic.scoping().get_reference(reference_id).symbol_id()?;
+        self.by_symbol.get(&symbol_id).copied()
+    }
+}
+
+/// Record every member of `decls[index]` as used. Called for constructs that
+/// reach the whole enum at once — they expose every member without naming any.
+fn mark_all_members_used(index: usize, decl: &TrackedEnum, used: &mut FxHashSet<(usize, String)>) {
+    for (member_name, _) in &decl.members {
+        used.insert((index, member_name.clone()));
     }
 }
 
 /// The member names an indexed access selects out of the `typeof Enum`
 /// projection rooted at `query_id`. `None` when the projection is not the object
 /// of an indexed access, or when the index can reach any member (`keyof typeof
-/// Enum`, a generic parameter) — the caller then treats the whole enum as
-/// referenced.
+/// Enum`, a generic parameter, a computed key) — the caller then treats the
+/// whole enum as referenced.
 fn literal_index_of_projection<'a>(
     query_id: NodeId,
     semantic: &Semantic<'a>,
@@ -129,6 +159,66 @@ fn string_literal_type_names<'a>(ty: &TSType<'a>) -> Option<Vec<&'a str>> {
     }
 }
 
+/// Collect the non-exported enums declared in the file. An exported enum is
+/// reachable from other files, so its members are never dead on this evidence.
+fn collect_enums(semantic: &Semantic, ctx: &CheckCtx) -> TrackedEnums {
+    let nodes = semantic.nodes();
+    let mut decls: Vec<TrackedEnum> = Vec::new();
+    let mut by_symbol: FxHashMap<SymbolId, usize> = FxHashMap::default();
+    let mut decl_nodes: FxHashSet<NodeId> = FxHashSet::default();
+
+    for node in nodes.iter() {
+        let AstKind::TSEnumDeclaration(decl) = node.kind() else {
+            continue;
+        };
+
+        let parent_id = nodes.parent_id(node.id());
+        if parent_id != node.id()
+            && matches!(nodes.kind(parent_id), AstKind::ExportNamedDeclaration(_))
+        {
+            continue;
+        }
+        // Also check if the source text starts with "export ".
+        let decl_text = &ctx.source[decl.span.start as usize..decl.span.end as usize];
+        if decl_text.starts_with("export ") {
+            continue;
+        }
+        let Some(symbol_id) = decl.id.symbol_id.get() else {
+            continue;
+        };
+
+        let mut members = Vec::new();
+        for member in &decl.body.members {
+            let member_name =
+                &ctx.source[member.id.span().start as usize..member.id.span().end as usize];
+            if member_name.is_empty() {
+                continue;
+            }
+            let (line, _) = byte_offset_to_line_col(ctx.source, member.span.start as usize);
+            members.push((member_name.to_string(), line as u32));
+        }
+        if members.is_empty() {
+            continue;
+        }
+
+        let index = *by_symbol.entry(symbol_id).or_insert_with(|| {
+            decls.push(TrackedEnum {
+                name: decl.id.name.as_str().to_string(),
+                members: Vec::new(),
+            });
+            decls.len() - 1
+        });
+        decls[index].members.extend(members);
+        decl_nodes.insert(node.id());
+    }
+
+    TrackedEnums {
+        decls,
+        by_symbol,
+        decl_nodes,
+    }
+}
+
 impl OxcCheck for Check {
     fn prefilter(&self) -> Option<&'static [&'static str]> {
         Some(&["enum"])
@@ -143,57 +233,14 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let mut diagnostics = Vec::new();
-        // Map enum_name -> Vec<(member_name, line)>
-        let mut enums: FxHashMap<String, Vec<(String, u32)>> = FxHashMap::default();
-        // Set of (enum_name, member_name) that are referenced.
-        let mut used: FxHashSet<(String, String)> = FxHashSet::default();
-        // Track enum node IDs to skip their subtrees in usage collection.
-        let mut enum_node_ids: FxHashSet<oxc_semantic::NodeId> = FxHashSet::default();
-
         // Pass 1: collect enum declarations (non-exported only).
-        for node in semantic.nodes().iter() {
-            let AstKind::TSEnumDeclaration(decl) = node.kind() else {
-                continue;
-            };
-
-            // Skip exported enums.
-            let nodes = semantic.nodes();
-            let parent_id = nodes.parent_id(node.id());
-            if parent_id != node.id() {
-                let parent = nodes.get_node(parent_id);
-                if matches!(parent.kind(), AstKind::ExportNamedDeclaration(_)) {
-                    continue;
-                }
-            }
-            // Also check if the source text starts with "export ".
-            let decl_text =
-                &ctx.source[decl.span.start as usize..decl.span.end as usize];
-            if decl_text.starts_with("export ") {
-                continue;
-            }
-
-            let enum_name = decl.id.name.as_str().to_string();
-            let mut members = Vec::new();
-            for member in &decl.body.members {
-                let member_name =
-                    &ctx.source[member.id.span().start as usize..member.id.span().end as usize];
-                if member_name.is_empty() {
-                    continue;
-                }
-                let (line, _) =
-                    byte_offset_to_line_col(ctx.source, member.span.start as usize);
-                members.push((member_name.to_string(), line as u32));
-            }
-            if !members.is_empty() {
-                enums.insert(enum_name, members);
-                enum_node_ids.insert(node.id());
-            }
+        let tracked = collect_enums(semantic, ctx);
+        if tracked.decls.is_empty() {
+            return Vec::new();
         }
 
-        if enums.is_empty() {
-            return diagnostics;
-        }
+        // Set of (enum index, member_name) that are referenced.
+        let mut used: FxHashSet<(usize, String)> = FxHashSet::default();
 
         // Pass 2: collect usages (EnumName.MemberName patterns).
         for node in semantic.nodes().iter() {
@@ -202,7 +249,7 @@ impl OxcCheck for Check {
             let nodes = semantic.nodes();
             let mut skip = false;
             loop {
-                if enum_node_ids.contains(&ancestor_id) {
+                if tracked.decl_nodes.contains(&ancestor_id) {
                     skip = true;
                     break;
                 }
@@ -218,28 +265,22 @@ impl OxcCheck for Check {
 
             match node.kind() {
                 AstKind::StaticMemberExpression(member) => {
-                    if let Expression::Identifier(obj) = &member.object {
-                        let obj_name = obj.name.as_str();
-                        if enums.contains_key(obj_name) {
-                            let prop_name = member.property.name.as_str();
-                            used.insert((obj_name.to_string(), prop_name.to_string()));
-                        }
+                    if let Expression::Identifier(obj) = &member.object
+                        && let Some(index) = tracked.index_of(obj, semantic)
+                    {
+                        used.insert((index, member.property.name.as_str().to_string()));
                     }
                 }
                 // A string-literal key names one member; any other key
                 // expression can select any of them, so all are reachable.
                 AstKind::ComputedMemberExpression(member) => {
-                    if let Expression::Identifier(obj) = &member.object {
-                        let obj_name = obj.name.as_str();
-                        if let Some(members) = enums.get(obj_name) {
-                            if let Expression::StringLiteral(s) = &member.expression {
-                                used.insert((
-                                    obj_name.to_string(),
-                                    s.value.as_str().to_string(),
-                                ));
-                            } else {
-                                mark_all_members_used(obj_name, members, &mut used);
-                            }
+                    if let Expression::Identifier(obj) = &member.object
+                        && let Some(index) = tracked.index_of(obj, semantic)
+                    {
+                        if let Expression::StringLiteral(s) = &member.expression {
+                            used.insert((index, s.value.as_str().to_string()));
+                        } else {
+                            mark_all_members_used(index, &tracked.decls[index], &mut used);
                         }
                     }
                 }
@@ -247,12 +288,11 @@ impl OxcCheck for Check {
                 // enum object at runtime, so all members are reachable.
                 AstKind::BinaryExpression(bin) => {
                     if bin.operator == BinaryOperator::In
-                        && let Expression::Identifier(rhs) = &bin.right {
-                            let enum_name = rhs.name.as_str();
-                            if let Some(members) = enums.get(enum_name) {
-                                mark_all_members_used(enum_name, members, &mut used);
-                            }
-                        }
+                        && let Expression::Identifier(rhs) = &bin.right
+                        && let Some(index) = tracked.index_of(rhs, semantic)
+                    {
+                        mark_all_members_used(index, &tracked.decls[index], &mut used);
+                    }
                 }
                 // A value-position reference to the bare enum identifier consumes
                 // the whole enum object at runtime — `Object.values(Food)`,
@@ -260,11 +300,10 @@ impl OxcCheck for Check {
                 // it as an argument, etc. all iterate every member dynamically, so
                 // all members are reachable.
                 AstKind::IdentifierReference(id) => {
-                    let enum_name = id.name.as_str();
-                    if let Some(members) = enums.get(enum_name)
+                    if let Some(index) = tracked.index_of(id, semantic)
                         && is_whole_enum_value_reference(id, node.id(), semantic)
                     {
-                        mark_all_members_used(enum_name, members, &mut used);
+                        mark_all_members_used(index, &tracked.decls[index], &mut used);
                     }
                 }
                 // A qualified name spells out one member, in type space
@@ -273,14 +312,10 @@ impl OxcCheck for Check {
                 // qualification (`NS.Food.Pizza`) has a qualified name on the
                 // left, which names no tracked enum.
                 AstKind::TSQualifiedName(qualified) => {
-                    if let TSTypeName::IdentifierReference(obj) = &qualified.left {
-                        let obj_name = obj.name.as_str();
-                        if enums.contains_key(obj_name) {
-                            used.insert((
-                                obj_name.to_string(),
-                                qualified.right.name.as_str().to_string(),
-                            ));
-                        }
+                    if let TSTypeName::IdentifierReference(obj) = &qualified.left
+                        && let Some(index) = tracked.index_of(obj, semantic)
+                    {
+                        used.insert((index, qualified.right.name.as_str().to_string()));
                     }
                 }
                 // `typeof EnumName` projects the enum object into type space.
@@ -291,16 +326,15 @@ impl OxcCheck for Check {
                 // members those literals spell out. A query naming no local
                 // binding (`typeof import("…")`, `typeof this.x`) exempts nothing.
                 AstKind::TSTypeQuery(query) => {
-                    if let TSTypeQueryExprName::IdentifierReference(id) = &query.expr_name {
-                        let enum_name = id.name.as_str();
-                        if let Some(members) = enums.get(enum_name) {
-                            match literal_index_of_projection(node.id(), semantic) {
-                                Some(names) => used.extend(
-                                    names
-                                        .into_iter()
-                                        .map(|name| (enum_name.to_string(), name.to_string())),
-                                ),
-                                None => mark_all_members_used(enum_name, members, &mut used),
+                    if let TSTypeQueryExprName::IdentifierReference(id) = &query.expr_name
+                        && let Some(index) = tracked.index_of(id, semantic)
+                    {
+                        match literal_index_of_projection(node.id(), semantic) {
+                            Some(names) => {
+                                used.extend(names.into_iter().map(|name| (index, name.to_string())))
+                            }
+                            None => {
+                                mark_all_members_used(index, &tracked.decls[index], &mut used);
                             }
                         }
                     }
@@ -310,9 +344,11 @@ impl OxcCheck for Check {
         }
 
         // Diff: flag unused members.
-        for (enum_name, members) in &enums {
-            for (member_name, line) in members {
-                if !used.contains(&(enum_name.clone(), member_name.clone())) {
+        let mut diagnostics = Vec::new();
+        for (index, decl) in tracked.decls.iter().enumerate() {
+            let enum_name = &decl.name;
+            for (member_name, line) in &decl.members {
+                if !used.contains(&(index, member_name.clone())) {
                     diagnostics.push(Diagnostic {
                         path: Arc::clone(&ctx.path_arc),
                         line: *line as usize,
@@ -821,6 +857,90 @@ export type P = (typeof Food)['Pizza' | 'Taco'];
         let diags = run(source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Fries"));
+    }
+
+    // Regression for #8381 — enums are tracked by the symbol their name binds,
+    // so a same-named enum in an inner scope does not hide the outer one's dead
+    // members.
+    #[test]
+    fn same_named_inner_enum_does_not_hide_outer_dead_members() {
+        let source = r#"
+enum Food {
+    Pizza = 'pizza',
+    Taco = 'taco',
+}
+export function local() {
+    enum Food {
+        Burger = 'burger',
+    }
+    return Food.Burger;
+}
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().any(|d| d.message.contains("Pizza")));
+        assert!(diags.iter().any(|d| d.message.contains("Taco")));
+    }
+
+    // A local binding that shadows the enum name exempts nothing, in type space
+    // as in value space.
+    #[test]
+    fn shadowing_binding_does_not_exempt_the_enum() {
+        let keyof_typeof = r#"
+enum Food {
+    Pizza = 'pizza',
+    Taco = 'taco',
+}
+export function scope() {
+    const Food = { other: 1 };
+    type T = keyof typeof Food;
+    const t: T = 'other';
+    return t;
+}
+"#;
+        assert_eq!(run(keyof_typeof).len(), 2);
+
+        let object_values = r#"
+enum Food {
+    Pizza = 'pizza',
+    Taco = 'taco',
+}
+export function scope(Food: Record<string, number>) {
+    return Object.values(Food);
+}
+"#;
+        assert_eq!(run(object_values).len(), 2);
+
+        let member_access = r#"
+enum Food {
+    Pizza = 'pizza',
+    Taco = 'taco',
+}
+export function scope() {
+    const Food = { Pizza: 1, Taco: 2 };
+    return Food.Pizza + Food.Taco;
+}
+"#;
+        assert_eq!(run(member_access).len(), 2);
+    }
+
+    // TypeScript merges same-named enum declarations in one scope into a single
+    // enum, so their members share one entry and a reference to either
+    // declaration's member counts.
+    #[test]
+    fn merged_enum_declarations_share_one_entry() {
+        let source = r#"
+enum Food {
+    Pizza = 1,
+}
+enum Food {
+    Taco = 2,
+}
+const p = Food.Pizza;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Taco"));
     }
 
     // An ordinary runtime unit test without type assertions still flags a
