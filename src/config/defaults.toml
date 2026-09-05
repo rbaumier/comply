@@ -172,14 +172,16 @@ overlap_threshold = 0.80
 
 # Maximum words in one comment sentence. Sentences are counted over the whole
 # comment block, so wrapping a sentence across lines does not shrink it. Only
-# words count: a punctuation run and a token of markup or code are not words.
-# Only license banners are exempt.
+# prose counts: a punctuation run is not a word, markup and code are not words,
+# and a section banner, a tool directive or a fenced sample is read on its own
+# rather than joined to the prose around it. License banners are exempt.
 [rules.comment-max-words]
 max = 10
 
 # Maximum total words in one comment block. Consecutive `//` lines merge into a
-# single block; each `/* */` stands alone. Doc comments count like any other
-# comment; only license banners are exempt.
+# single block; each `/* */` stands alone. Doc comments and fenced samples count
+# like any other comment; section banners and tool directives are framing and
+# cost nothing. Only license banners are exempt.
 [rules.comment-max-block-words]
 max = 30
 

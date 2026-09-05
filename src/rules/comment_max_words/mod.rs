@@ -61,39 +61,61 @@ pub(crate) fn flagged_sentences(comments: Vec<RawComment>, source: &str, max: us
     flags
 }
 
-/// Walk `block` word by word and flag each sentence past `max`.
-/// Only words spend the budget: a token of pure punctuation still closes the
-/// sentence it ends, but it is not something a reader has to read.
+/// The sentence being read: the row it opened on and its word count.
+#[derive(Clone, Copy)]
+struct Sentence {
+    line: usize,
+    words: usize,
+}
+
+impl Sentence {
+    /// The finished sentence, reported when it ran past `max` words.
+    fn over_budget(self, column: usize, max: usize) -> Option<Flag> {
+        (self.words > max).then_some(Flag {
+            line: self.line,
+            column,
+            words: self.words,
+        })
+    }
+}
+
+/// Walk the prose of `block` word by word and flag each sentence past `max`.
+///
+/// A line that is not prose closes the sentence it interrupts: a banner, a
+/// tool directive and a fenced sample are read on their own, so their words
+/// never spend the budget of the prose next to them.
 fn over_budget_sentences(block: &comment_blocks::CommentBlock, max: usize) -> Vec<Flag> {
     let mut flags = Vec::new();
-    let mut start_line = block.line;
-    let mut words = 0;
-    for (line, token) in block.tokens() {
-        if comment_blocks::is_word(token) {
-            if words == 0 {
-                start_line = line;
-            }
-            words += 1;
-        }
-        if !ends_sentence(token) {
+    let mut sentence = Sentence {
+        line: block.line,
+        words: 0,
+    };
+    for line in &block.lines {
+        if line.kind != comment_blocks::LineKind::Prose {
+            flags.extend(sentence.over_budget(block.column, max));
+            sentence = Sentence {
+                line: line.line,
+                words: 0,
+            };
             continue;
         }
-        if words > max {
-            flags.push(Flag {
-                line: start_line,
-                column: block.column,
-                words,
-            });
+        for token in line.text.split_whitespace() {
+            if comment_blocks::is_word(token) {
+                if sentence.words == 0 {
+                    sentence.line = line.line;
+                }
+                sentence.words += 1;
+            }
+            if ends_sentence(token) {
+                flags.extend(sentence.over_budget(block.column, max));
+                sentence = Sentence {
+                    line: line.line,
+                    words: 0,
+                };
+            }
         }
-        words = 0;
     }
-    if words > max {
-        flags.push(Flag {
-            line: start_line,
-            column: block.column,
-            words,
-        });
-    }
+    flags.extend(sentence.over_budget(block.column, max));
     flags
 }
 

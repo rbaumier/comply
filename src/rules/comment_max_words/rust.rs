@@ -139,13 +139,28 @@ fn walk() {}";
     }
 
     #[test]
-    fn fenced_code_in_a_doc_comment_counts_too() {
+    fn a_fenced_sample_is_not_a_sentence() {
         let src = "\
-/// Builds the client.
+/// Renders a chart.
+///
+/// ```text
+/// x0 y0 x1 y1 x2 y2 x3 y3 x4 y4 x5 y5 x6 y6 x7 y7 x8 y8 x9 y9 xa ya xb yb xc yc xd yd
 /// ```
-/// let client = Client::new(endpoint, key, timeout, retries, headers, proxy, agent, pool, region, tenant, tracing, backoff, jitter, limits);
+fn chart() {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn prose_after_the_closing_fence_still_counts() {
+        let src = "\
+/// Builds it.
 /// ```
+/// let value = 1;
+/// ```
+/// This sentence after the fence runs on and on and on and on and never stops at all.
 fn f() {}";
-        assert_eq!(run(src).len(), 1);
+        let flags = run(src);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].line, 5);
     }
 }

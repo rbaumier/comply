@@ -14,14 +14,27 @@ pub struct RawComment {
     pub is_line: bool,
 }
 
-/// One marker-stripped physical line of prose, with the row it sits on.
+/// What one physical comment line carries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LineKind {
+    /// Written text — the only kind that reads as sentences.
+    Prose,
+    /// A line inside a fenced region: a sample the author transcribed.
+    Code,
+    /// A fence marker, a section banner or a tool directive.
+    /// It frames the prose around it and belongs to no sentence.
+    Structure,
+}
+
+/// One marker-stripped physical line, with the row it sits on and what it holds.
 pub struct BlockLine {
     pub line: usize,
     pub text: String,
+    pub kind: LineKind,
 }
 
 /// The comment a reader sees as one unit, anchored on its first line.
-/// Every line counts, fenced examples and JSDoc tag bodies included.
+/// Every line of the run is kept, each tagged with the `LineKind` it carries.
 pub struct CommentBlock {
     pub line: usize,
     pub column: usize,
@@ -29,8 +42,8 @@ pub struct CommentBlock {
 }
 
 impl CommentBlock {
-    /// Every prose line joined by a space, as one string.
-    pub fn prose(&self) -> String {
+    /// Every non-empty line joined by a space, as one string.
+    pub fn text(&self) -> String {
         let mut out = String::new();
         for line in self.lines.iter().filter(|l| !l.text.is_empty()) {
             if !out.is_empty() {
@@ -41,20 +54,13 @@ impl CommentBlock {
         out
     }
 
-    /// Every word of the block, paired with the line it sits on.
-    pub fn tokens(&self) -> impl Iterator<Item = (usize, &str)> {
-        self.lines.iter().flat_map(|line| {
-            line.text
-                .split_whitespace()
-                .map(move |token| (line.line, token))
-        })
-    }
-
-    /// How many words the block holds.
+    /// How many words the block spends on prose and on transcribed samples.
+    /// Banners and tool directives are framing, so they cost nothing.
     pub fn word_count(&self) -> usize {
         self.lines
             .iter()
-            .map(|l| l.text.split_whitespace().filter(|t| is_word(t)).count())
+            .filter(|line| line.kind != LineKind::Structure)
+            .map(|line| line.text.split_whitespace().filter(|t| is_word(t)).count())
             .sum()
     }
 
@@ -69,7 +75,7 @@ impl CommentBlock {
             "@license",
             "@copyright",
         ];
-        let lower = self.prose().to_lowercase();
+        let lower = self.text().to_lowercase();
         MARKERS.iter().any(|marker| lower.contains(marker))
     }
 }
@@ -282,30 +288,81 @@ fn marker(raw: &str) -> &'static str {
 ///
 /// A blank row inside the run is kept as an empty line, so a rule reading
 /// consecutive lines still sees the paragraph break the author wrote.
+/// Fence state opens and closes within the block, never across two.
 fn build_block(run: &[RawComment]) -> CommentBlock {
     let mut lines: Vec<BlockLine> = Vec::new();
+    let mut in_fence = false;
     for comment in run {
         let gap = lines.last().map_or(0..0, |last| last.line + 1..comment.line);
-        lines.extend(gap.map(|line| BlockLine {
-            line,
-            text: String::new(),
-        }));
-        lines.extend(
-            comment
-                .raw
-                .lines()
-                .enumerate()
-                .map(|(offset, raw_line)| BlockLine {
-                    line: comment.line + offset,
-                    text: strip_markers(raw_line),
-                }),
-        );
+        for line in gap {
+            let kind = classify("", &mut in_fence);
+            lines.push(BlockLine {
+                line,
+                text: String::new(),
+                kind,
+            });
+        }
+        for (offset, raw_line) in comment.raw.lines().enumerate() {
+            let text = strip_markers(raw_line);
+            let kind = classify(&text, &mut in_fence);
+            lines.push(BlockLine {
+                line: comment.line + offset,
+                text,
+                kind,
+            });
+        }
     }
     CommentBlock {
         line: run[0].line,
         column: run[0].column,
         lines,
     }
+}
+
+/// Read what a marker-stripped `text` line holds, advancing `in_fence`.
+fn classify(text: &str, in_fence: &mut bool) -> LineKind {
+    if opens_or_closes_fence(text) {
+        *in_fence = !*in_fence;
+        return LineKind::Structure;
+    }
+    if *in_fence {
+        return LineKind::Code;
+    }
+    if is_tool_directive(text) || is_banner(text) {
+        return LineKind::Structure;
+    }
+    LineKind::Prose
+}
+
+/// True when `text` is a Markdown code fence marker.
+fn opens_or_closes_fence(text: &str) -> bool {
+    text.starts_with("```") || text.starts_with("~~~")
+}
+
+/// How many repeats of one line-drawing character make a rule.
+const RULE_RUN: usize = 3;
+
+/// True when `text` is a section banner rather than a sentence.
+///
+/// A banner is framed by a rule — `RULE_RUN` or more repeats of one
+/// line-drawing character at the start or the end of the line, as in
+/// `─── Section ───`. It divides the comments around it and belongs to neither.
+fn is_banner(text: &str) -> bool {
+    leading_rule_len(text.chars()) >= RULE_RUN || leading_rule_len(text.chars().rev()) >= RULE_RUN
+}
+
+/// The length of the rule `chars` opens with, zero when it opens with none.
+fn leading_rule_len(mut chars: impl Iterator<Item = char>) -> usize {
+    let Some(first) = chars.next().filter(|c| is_rule_char(*c)) else {
+        return 0;
+    };
+    1 + chars.take_while(|c| *c == first).count()
+}
+
+/// True for a character comment banners draw their rule with.
+/// Sentence punctuation is left out, so a trailing `...` stays prose.
+fn is_rule_char(c: char) -> bool {
+    matches!(c, '-' | '=' | '_' | '*' | '#' | '~' | '+' | '\u{2500}'..='\u{259f}')
 }
 
 /// Lay `comments` back out as the file they were read from, gaps left blank.
@@ -366,7 +423,7 @@ mod tests {
             "// one two\n// three four",
         );
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].prose(), "one two three four");
+        assert_eq!(blocks[0].text(), "one two three four");
         assert_eq!(blocks[0].word_count(), 4);
     }
 
@@ -377,7 +434,7 @@ mod tests {
             "// one\n\n\n// two",
         );
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].prose(), "one two");
+        assert_eq!(blocks[0].text(), "one two");
         assert_eq!(blocks[0].word_count(), 2);
     }
 
@@ -426,7 +483,7 @@ mod tests {
             "/// one two\n/// three",
         );
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].prose(), "one two three");
+        assert_eq!(blocks[0].text(), "one two three");
     }
 
     #[test]
@@ -443,11 +500,11 @@ mod tests {
         );
         assert_eq!(blocks[0].lines.len(), 2);
         assert_eq!(blocks[0].lines[1].line, 5);
-        assert_eq!(blocks[0].prose(), "one two");
+        assert_eq!(blocks[0].text(), "one two");
     }
 
     #[test]
-    fn fenced_code_counts_like_prose() {
+    fn fenced_code_stays_in_the_block_and_is_marked_as_code() {
         let blocks = merge(
             vec![
                 line_comment(0, 1, "/// Example follows."),
@@ -457,7 +514,61 @@ mod tests {
             ],
             "/// Example follows.\n/// ```\n/// let value = compute(one, two);\n/// ```",
         );
-        assert_eq!(blocks[0].prose(), "Example follows. ``` let value = compute(one, two); ```");
+        assert_eq!(blocks[0].text(), "Example follows. ``` let value = compute(one, two); ```");
+        let kinds: Vec<LineKind> = blocks[0].lines.iter().map(|line| line.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                LineKind::Prose,
+                LineKind::Structure,
+                LineKind::Code,
+                LineKind::Structure
+            ]
+        );
+    }
+
+    #[test]
+    fn fence_state_does_not_leak_into_the_next_block() {
+        let source = "/// ```\n/// let value = 1;\nfn f() {}\n/// Reads the value.";
+        let blocks = merge(
+            vec![
+                line_comment(0, 1, "/// ```"),
+                line_comment(8, 2, "/// let value = 1;"),
+                line_comment(38, 4, "/// Reads the value."),
+            ],
+            source,
+        );
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].lines[0].kind, LineKind::Prose);
+    }
+
+    #[test]
+    fn a_section_banner_is_structure() {
+        let blocks = merge(
+            vec![line_comment(
+                0,
+                1,
+                "// ─── Attach / Detach gamme-product ──────────────",
+            )],
+            "// ─── Attach / Detach gamme-product ──────────────",
+        );
+        assert_eq!(blocks[0].lines[0].kind, LineKind::Structure);
+        assert_eq!(blocks[0].word_count(), 0);
+    }
+
+    #[test]
+    fn a_tool_directive_line_is_structure() {
+        let raw = "// comply-ignore: no-try-statements — one bad row must not abort the import.";
+        let blocks = merge(vec![line_comment(0, 1, raw)], raw);
+        assert_eq!(blocks[0].lines[0].kind, LineKind::Structure);
+        assert_eq!(blocks[0].word_count(), 0);
+    }
+
+    #[test]
+    fn an_ellipsis_does_not_make_a_banner() {
+        let raw = "// Waits for the pool to drain...";
+        let blocks = merge(vec![line_comment(0, 1, raw)], raw);
+        assert_eq!(blocks[0].lines[0].kind, LineKind::Prose);
     }
 
     #[test]
@@ -473,7 +584,7 @@ mod tests {
             }],
             raw,
         );
-        assert_eq!(blocks[0].prose(), "Summary here. @example doSomething();");
+        assert_eq!(blocks[0].text(), "Summary here. @example doSomething();");
     }
 
     #[test]
@@ -489,7 +600,7 @@ mod tests {
             }],
             raw,
         );
-        assert_eq!(blocks[0].prose(), "the header row and its actions");
+        assert_eq!(blocks[0].text(), "the header row and its actions");
     }
 
     #[test]

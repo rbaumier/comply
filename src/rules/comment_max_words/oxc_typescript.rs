@@ -98,6 +98,27 @@ export function build() {}"#;
     }
 
     #[test]
+    fn a_comply_ignore_directive_is_not_prose() {
+        let src = "// comply-ignore: better-result-no-try-catch, no-try-statements — per-row CSV field access; catching unexpected parse failures prevents one bad row from aborting the whole import.\ntry {\n  read();\n} catch (error: unknown) {\n  report(error);\n}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn a_section_banner_does_not_spend_the_budget_of_the_prose_below() {
+        let banner = "\
+export const a = 1;
+
+// ─── Attach / Detach gamme-product ───────────────────────────────────────────
+
+// No RHF setError is involved on this mutation pair at all here.
+export const b = 2;";
+        let flags = run(banner);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].line, 5);
+        assert!(flags[0].message.contains("12 words"), "{}", flags[0].message);
+    }
+
+    #[test]
     fn jsdoc_example_bodies_count_too() {
         let src = r#"/**
  * Builds the client.
