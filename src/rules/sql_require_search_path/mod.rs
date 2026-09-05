@@ -13,7 +13,9 @@ use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
 use crate::rules::meta::RuleMeta;
 pub(super) use crate::rules::sql_helpers::is_migration_path;
-use crate::rules::sql_helpers::{find_word, strip_leading_word, strip_trailing_word};
+use crate::rules::sql_helpers::{
+    DDL_MODIFIERS, find_word, is_ident_byte, strip_leading_word, strip_trailing_word,
+};
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-require-search-path",
@@ -49,9 +51,70 @@ pub fn register() -> RuleDef {
     }
 }
 
-pub(super) fn sql_creates_or_alters_table(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    upper.contains("CREATE TABLE") || upper.contains("ALTER TABLE")
+/// Keywords Postgres allows between the `TABLE` keyword and the target name —
+/// `CREATE TABLE IF NOT EXISTS t`, `ALTER TABLE IF EXISTS ONLY t`.
+const TABLE_TARGET_PREFIXES: &[&str] = &["if", "not", "exists", "only"];
+
+/// True if `sql` holds `CREATE TABLE` / `ALTER TABLE` DDL whose target name is
+/// not schema-qualified.
+///
+/// An unqualified target is resolved through `search_path`, which is the
+/// exposure this rule exists to close. A qualified one (`public."account"`)
+/// names its schema outright and cannot be hijacked, so it needs no
+/// `search_path` — that is the escape the rule's remediation offers. SQL that
+/// mixes both still counts as exposed.
+pub(super) fn has_search_path_dependent_ddl(sql: &str) -> bool {
+    let lower = sql.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some((start, end)) = find_word(&lower, "table", from) {
+        from = end;
+        if ddl_verb_precedes(&lower[..start]) && !target_is_qualified(&lower[end..]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `before` — the text leading up to a `TABLE` keyword — ends with the
+/// `CREATE`/`ALTER` verb, across the modifier keywords Postgres allows between
+/// verb and object (`CREATE UNLOGGED TABLE`, `CREATE GLOBAL TEMPORARY TABLE`).
+fn ddl_verb_precedes(before: &str) -> bool {
+    let mut before = before;
+    loop {
+        if strip_trailing_word(before, "create").is_some()
+            || strip_trailing_word(before, "alter").is_some()
+        {
+            return true;
+        }
+        let Some(rest) = DDL_MODIFIERS
+            .iter()
+            .find_map(|modifier| strip_trailing_word(before, modifier))
+        else {
+            return false;
+        };
+        before = rest;
+    }
+}
+
+/// True if the target name in `after` — the text following a `TABLE` keyword —
+/// is schema-qualified, i.e. its first identifier is followed by a `.`. Reads
+/// both the bare and the quoted identifier spellings (`public.t`, `"public".t`).
+fn target_is_qualified(after: &str) -> bool {
+    let mut rest = after.trim_start();
+    while let Some(next) = TABLE_TARGET_PREFIXES
+        .iter()
+        .find_map(|keyword| strip_leading_word(rest, keyword))
+    {
+        rest = next.trim_start();
+    }
+    let after_name = match rest.strip_prefix('"') {
+        Some(inner) => inner.split_once('"').map(|(_, tail)| tail),
+        None => {
+            let len = rest.bytes().take_while(|b| is_ident_byte(*b)).count();
+            (len > 0).then(|| &rest[len..])
+        }
+    };
+    after_name.is_some_and(|tail| tail.trim_start().starts_with('.'))
 }
 
 /// True if `sql` assigns `search_path`.
@@ -98,6 +161,52 @@ mod tests {
         // The bare spelling keeps working.
         assert!(sql_sets_search_path("SET search_path = pg_catalog, public;"));
         assert!(sql_sets_search_path("SET search_path TO public;"));
+    }
+
+    #[test]
+    fn schema_qualified_targets_need_no_search_path_issue_8503() {
+        // A qualified target names its schema outright, so nothing resolves
+        // through `search_path` — the escape the remediation advertises.
+        assert!(!has_search_path_dependent_ddl(
+            "ALTER TABLE public.\"objective\" ADD COLUMN \"unit\" text NOT NULL;"
+        ));
+        assert!(!has_search_path_dependent_ddl(
+            "CREATE TABLE \"public\".\"article_group\" (\"id\" uuid PRIMARY KEY);"
+        ));
+        assert!(!has_search_path_dependent_ddl(
+            "CREATE TABLE IF NOT EXISTS public.account (id INT);"
+        ));
+        assert!(!has_search_path_dependent_ddl(
+            "ALTER TABLE ONLY public.account ADD COLUMN name TEXT;"
+        ));
+    }
+
+    #[test]
+    fn unqualified_targets_still_depend_on_search_path() {
+        assert!(has_search_path_dependent_ddl("CREATE TABLE users (id INT);"));
+        assert!(has_search_path_dependent_ddl(
+            "ALTER TABLE \"objective\" ADD COLUMN \"unit\" text;"
+        ));
+        assert!(has_search_path_dependent_ddl(
+            "CREATE UNLOGGED TABLE cache (k TEXT);"
+        ));
+        // Whitespace between verb and object, and the `IF NOT EXISTS` prefix,
+        // must not hide an unqualified target.
+        assert!(has_search_path_dependent_ddl(
+            "CREATE\n  TABLE IF NOT EXISTS users (id INT);"
+        ));
+        // One qualified statement does not cover an unqualified sibling.
+        assert!(has_search_path_dependent_ddl(
+            "CREATE TABLE public.a (id INT);\nCREATE TABLE b (id INT);"
+        ));
+    }
+
+    #[test]
+    fn ignores_statements_that_are_not_create_or_alter_table() {
+        assert!(!has_search_path_dependent_ddl(
+            "CREATE UNIQUE INDEX idx ON account (name);"
+        ));
+        assert!(!has_search_path_dependent_ddl("SELECT * FROM account;"));
     }
 
     #[test]

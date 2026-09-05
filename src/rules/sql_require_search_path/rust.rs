@@ -51,7 +51,7 @@ impl AstCheck for Check {
             state.any_sets_search_path = true;
             return;
         }
-        if state.first_ddl.is_none() && super::sql_creates_or_alters_table(text) {
+        if state.first_ddl.is_none() && super::has_search_path_dependent_ddl(text) {
             let pos = node.start_position();
             let range = node.byte_range();
             state.first_ddl = Some((pos.row + 1, pos.column + 1, range.start, range.len()));
