@@ -288,6 +288,20 @@ mod tests {
     }
 
     #[test]
+    fn ignores_cells_of_a_nested_array_lookup_table() {
+        // A lookup table written as rows: each cell is an element of its row
+        // array, so the region repeats because the data repeats.
+        let src = r#"
+            const TABLE = [
+                ["af", "South Africa"],
+                ["en", "South Africa"],
+                ["zu", "South Africa"],
+            ];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn still_flags_value_duplicated_in_call_arguments() {
         // A genuine duplicate hard-coded across call arguments (not array
         // data) is still extractable.

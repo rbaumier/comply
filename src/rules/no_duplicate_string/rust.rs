@@ -228,21 +228,51 @@ pub(super) fn is_in_macro_rules_body(node: tree_sitter::Node<'_>) -> bool {
     false
 }
 
+/// True when `node` is a cell of a lookup table — a literal whose meaning is
+/// the row it sits in rather than a value some call site could name. Such a
+/// literal recurs because the data recurs, has no call site to be extracted
+/// away from, and hoisting each cell replaces a scannable table with
+/// identifier soup. Two spellings of the same table:
+///
+/// - the keys of a keyword-dispatch `match` (`is_match_arm_pattern`);
+/// - the cells of a `const`/`static` array of rows (`is_const_table_element`).
+pub(super) fn is_lookup_table_cell(node: tree_sitter::Node<'_>) -> bool {
+    is_match_arm_pattern(node) || is_const_table_element(node)
+}
+
 /// True when `node` is a string literal in `match`-arm **pattern** position
 /// (`match name { "is_datetime" => …, "a" | "b" => … }`), reached through a
-/// `match_pattern`/`or_pattern` wrapper. Such a literal is a key in a
-/// categorized keyword-dispatch table: the same canonical function-name key
-/// validly recurs across the parallel `match` blocks of a builtin dispatcher
-/// (function-call vs method-call syntax, sync vs async), so — like an element
-/// of a categorized-lookup array — it is intentional data, not a business
-/// constant worth hoisting to a `const`. Only the pattern side is exempt: a
+/// `match_pattern`/`or_pattern` wrapper. The same canonical key validly recurs
+/// across the parallel `match` blocks of a builtin dispatcher (function-call vs
+/// method-call syntax, sync vs async). Only the pattern side is exempt: a
 /// literal in the arm's value expression or guard is not wrapped in a
 /// `match_pattern`/`or_pattern`, so it stays in ordinary expression position
 /// and still counts.
-pub(super) fn is_match_arm_pattern(node: tree_sitter::Node<'_>) -> bool {
+fn is_match_arm_pattern(node: tree_sitter::Node<'_>) -> bool {
     node.parent()
         .is_some_and(|parent| matches!(parent.kind(), "match_pattern" | "or_pattern"))
         && crate::rules::rust_helpers::match_arm_of_pattern(node).is_some()
+}
+
+/// True when `node` is an element of an array literal that initialises a
+/// `const`/`static` item, reached through any nesting of tuple, array and
+/// reference wrappers (`static TABLE: &[(u16, &str, &str)] = &[(0x0436,
+/// "Afrikaans", "South Africa"), …]`). The container must be a `const`/`static`
+/// item: an array built at runtime inside a function body may well be
+/// copy-paste, so its elements stay counted.
+fn is_const_table_element(node: tree_sitter::Node<'_>) -> bool {
+    let mut current = node;
+    let mut inside_array = false;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "array_expression" => inside_array = true,
+            "tuple_expression" | "reference_expression" => {}
+            "const_item" | "static_item" => return inside_array,
+            _ => return false,
+        }
+        current = parent;
+    }
+    false
 }
 
 #[derive(Debug)]
@@ -899,6 +929,84 @@ mod tests {
             }
         "#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_cells_of_a_static_lookup_table() {
+        // The issue's FP (ttf-parser): a static table mapping Windows LCIDs to
+        // language/region names. `"South Africa"` recurs because five languages
+        // in the table are spoken there — the repetition *is* the mapping, and
+        // each row owns its own datum.
+        let src = r#"
+            #[rustfmt::skip]
+            static TABLE: &[(u16, &str, &str)] = &[
+                (0x0436, "Afrikaans",  "South Africa"),
+                (0x0409, "English",    "South Africa"),
+                (0x0432, "Setswana",   "South Africa"),
+                (0x0434, "Xhosa",      "South Africa"),
+                (0x0435, "Zulu",       "South Africa"),
+                (0x0C07, "German",     "Switzerland"),
+                (0x100C, "French",     "Switzerland"),
+                (0x0810, "Italian",    "Switzerland"),
+                (0x141A, "Bosnian",    "Bosnia and Herzegovina"),
+                (0x101A, "Croatian",   "Bosnia and Herzegovina"),
+                (0x201A, "Serbian",    "Bosnia and Herzegovina"),
+            ];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_cells_of_a_const_array_table() {
+        // The `const` spelling of the same table, without the `&` reference
+        // wrapper, and with a nested array row.
+        let src = r#"
+            const TABLE: [(&str, &str); 3] = [
+                ("af", "South Africa"),
+                ("en", "South Africa"),
+                ("zu", "South Africa"),
+            ];
+            const GROUPS: &[&[&str]] = &[
+                &["Afrikaans", "South Africa"],
+                &["English", "South Africa"],
+            ];
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_repeated_cells_of_a_runtime_array() {
+        // Precision for the `const`/`static` requirement: the same rows built
+        // inside a function body may well be copy-paste, so the cells stay
+        // counted.
+        let src = r#"
+            fn build() -> [(&'static str, &'static str); 3] {
+                [
+                    ("af", "South Africa"),
+                    ("en", "South Africa"),
+                    ("zu", "South Africa"),
+                ]
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn counts_only_the_non_table_occurrences_of_a_table_value() {
+        // Table cells are not counted at all, so a value that also appears in
+        // ordinary expression position is tallied on those occurrences alone.
+        let src = r#"
+            static TABLE: &[(u16, &str)] = &[
+                (0x0436, "South Africa"),
+                (0x0409, "South Africa"),
+            ];
+            fn a() -> &'static str { label("South Africa") }
+            fn b() -> &'static str { label("South Africa") }
+            fn c() -> &'static str { label("South Africa") }
+        "#;
+        let diagnostics = run(src);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("appears 3 times"));
     }
 
     #[test]
