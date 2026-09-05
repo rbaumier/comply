@@ -1,12 +1,23 @@
-//! no-and-in-function-name OXC backend — flag function names containing `And`
-//! on a camelCase boundary.
+//! no-and-in-function-name OXC backend — flag a function whose name glues two
+//! parts together with `And` on a camelCase boundary, unless the function
+//! returns the compound value those parts name.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, type_annotation_is_type_predicate};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use oxc_ast::ast::{
+    ArrayExpressionElement, Expression, FunctionBody, ObjectPropertyKind, PropertyKey, Statement,
+};
 use std::sync::Arc;
 
 pub struct Check;
+
+/// Where the values a function returns live: the statements of a block body, or
+/// the single expression of a concise arrow body.
+enum ReturnSource<'a> {
+    Block(&'a FunctionBody<'a>),
+    Expression(&'a Expression<'a>),
+}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -24,7 +35,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let (name, span_start) = match node.kind() {
+        let (name, span_start, return_source) = match node.kind() {
             AstKind::Function(func) => {
                 let Some(id) = &func.id else { return };
                 // A `x is T` type-predicate return type marks a pure boolean type
@@ -35,7 +46,11 @@ impl OxcCheck for Check {
                 if type_annotation_is_type_predicate(func.return_type.as_deref()) {
                     return;
                 }
-                (id.name.as_str(), id.span.start)
+                (
+                    id.name.as_str(),
+                    id.span.start,
+                    func.body.as_deref().map(ReturnSource::Block),
+                )
             }
             AstKind::MethodDefinition(method) => {
                 // An `override` method's name is dictated by the supertype it
@@ -50,27 +65,35 @@ impl OxcCheck for Check {
                 if type_annotation_is_type_predicate(method.value.return_type.as_deref()) {
                     return;
                 }
-                match &method.key {
-                    oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
-                        (id.name.as_str(), id.span.start)
-                    }
+                let (name, span_start) = match &method.key {
+                    PropertyKey::StaticIdentifier(id) => (id.name.as_str(), id.span.start),
                     // A `#private` method carries an author-chosen name just like
                     // a public one — `id.name` holds it without the `#` sigil.
-                    oxc_ast::ast::PropertyKey::PrivateIdentifier(id) => {
-                        (id.name.as_str(), id.span.start)
-                    }
+                    PropertyKey::PrivateIdentifier(id) => (id.name.as_str(), id.span.start),
                     _ => return,
-                }
+                };
+                (
+                    name,
+                    span_start,
+                    method.value.body.as_deref().map(ReturnSource::Block),
+                )
             }
             AstKind::VariableDeclarator(decl) => {
                 // Only flag when the value is an arrow or function expression.
-                let fn_return_type = match decl.init.as_ref() {
-                    Some(oxc_ast::ast::Expression::ArrowFunctionExpression(arrow)) => {
-                        arrow.return_type.as_deref()
-                    }
-                    Some(oxc_ast::ast::Expression::FunctionExpression(func)) => {
-                        func.return_type.as_deref()
-                    }
+                let (fn_return_type, return_source) = match decl.init.as_ref() {
+                    Some(Expression::ArrowFunctionExpression(arrow)) => (
+                        arrow.return_type.as_deref(),
+                        // A concise body (`() => expr`) returns its expression;
+                        // a block body returns through its `return` statements.
+                        Some(match arrow.get_expression() {
+                            Some(expression) => ReturnSource::Expression(expression),
+                            None => ReturnSource::Block(&arrow.body),
+                        }),
+                    ),
+                    Some(Expression::FunctionExpression(func)) => (
+                        func.return_type.as_deref(),
+                        func.body.as_deref().map(ReturnSource::Block),
+                    ),
                     _ => return,
                 };
                 // A type-guard arrow/function (`const isFooAndBar = (v): v is Foo
@@ -81,12 +104,18 @@ impl OxcCheck for Check {
                 let oxc_ast::ast::BindingPattern::BindingIdentifier(ref id) = decl.id else {
                     return;
                 };
-                (id.name.as_str(), id.span.start)
+                (id.name.as_str(), id.span.start, return_source)
             }
             _ => return,
         };
 
-        if !contains_and_boundary(name) {
+        let segments = and_boundary_segments(name);
+        if segments.is_empty() {
+            return;
+        }
+        // The `And` may join the two nouns of one compound result rather than two
+        // verbs; the returned members say which.
+        if returns_the_named_members(return_source, &segments) {
             return;
         }
 
@@ -108,13 +137,14 @@ impl OxcCheck for Check {
     }
 }
 
-/// True if `name` contains an `And` segment on a camelCase boundary —
-/// i.e. preceded by a lowercase letter and followed by an uppercase letter.
-fn contains_and_boundary(name: &str) -> bool {
+/// The parts an identifier's `And` boundaries split it into —
+/// `getCountryAndCallingCode` yields `["getCountry", "CallingCode"]`. A boundary
+/// is an `And` preceded by a lowercase letter and followed by an uppercase one;
+/// a name with no such boundary yields no segments.
+fn and_boundary_segments(name: &str) -> Vec<&str> {
     let bytes = name.as_bytes();
-    if bytes.len() < 5 {
-        return false;
-    }
+    let mut segments = Vec::new();
+    let mut start = 0;
     let mut i = 1;
     while i + 3 < bytes.len() {
         if bytes[i] == b'A'
@@ -123,11 +153,205 @@ fn contains_and_boundary(name: &str) -> bool {
             && bytes[i - 1].is_ascii_lowercase()
             && bytes[i + 3].is_ascii_uppercase()
         {
-            return true;
+            segments.push(&name[start..i]);
+            start = i + 3;
+            i += 3;
+        } else {
+            i += 1;
         }
-        i += 1;
     }
-    false
+    if !segments.is_empty() {
+        segments.push(&name[start..]);
+    }
+    segments
+}
+
+/// True when every value the function returns is a compound literal whose members
+/// are named after the `And`-joined segments of its name, in order — the "one
+/// query, one compound result" shape (`getCountryAndCallingCode` returning
+/// `[defaultCountry, defaultCallingCode]`), where the `And` joins the two nouns
+/// of the result instead of two actions. Bail-out returns (`return;`,
+/// `return undefined`) carry no result, so a guard clause cannot defeat the
+/// match; a function that returns nothing corroborates nothing.
+fn returns_the_named_members(return_source: Option<ReturnSource>, segments: &[&str]) -> bool {
+    let mut returned = Vec::new();
+    match return_source {
+        None => return false,
+        Some(ReturnSource::Expression(expression)) => returned.push(expression),
+        Some(ReturnSource::Block(body)) => {
+            collect_from_statements(&body.statements, &mut returned);
+        }
+    }
+
+    let mut found_corroboration = false;
+    for expression in returned {
+        if is_undefined(expression) {
+            continue;
+        }
+        if !members_are_named_after(expression, segments) {
+            return false;
+        }
+        found_corroboration = true;
+    }
+    found_corroboration
+}
+
+/// Collects the argument of every `return` a statement can hide, without
+/// descending into nested functions — they carry their own returns.
+fn collect_returned_expressions<'ast, 'a>(
+    statement: &'ast Statement<'a>,
+    returned: &mut Vec<&'ast Expression<'a>>,
+) {
+    match statement {
+        Statement::ReturnStatement(statement) => returned.extend(statement.argument.as_ref()),
+        Statement::BlockStatement(block) => collect_from_statements(&block.body, returned),
+        Statement::IfStatement(branch) => {
+            collect_returned_expressions(&branch.consequent, returned);
+            if let Some(alternate) = &branch.alternate {
+                collect_returned_expressions(alternate, returned);
+            }
+        }
+        Statement::ForStatement(loop_statement) => {
+            collect_returned_expressions(&loop_statement.body, returned);
+        }
+        Statement::ForInStatement(loop_statement) => {
+            collect_returned_expressions(&loop_statement.body, returned);
+        }
+        Statement::ForOfStatement(loop_statement) => {
+            collect_returned_expressions(&loop_statement.body, returned);
+        }
+        Statement::WhileStatement(loop_statement) => {
+            collect_returned_expressions(&loop_statement.body, returned);
+        }
+        Statement::DoWhileStatement(loop_statement) => {
+            collect_returned_expressions(&loop_statement.body, returned);
+        }
+        Statement::LabeledStatement(labeled) => {
+            collect_returned_expressions(&labeled.body, returned);
+        }
+        Statement::SwitchStatement(switch) => {
+            for case in &switch.cases {
+                collect_from_statements(&case.consequent, returned);
+            }
+        }
+        Statement::TryStatement(try_statement) => {
+            collect_from_statements(&try_statement.block.body, returned);
+            if let Some(handler) = &try_statement.handler {
+                collect_from_statements(&handler.body.body, returned);
+            }
+            if let Some(finalizer) = &try_statement.finalizer {
+                collect_from_statements(&finalizer.body, returned);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_from_statements<'ast, 'a>(
+    statements: &'ast [Statement<'a>],
+    returned: &mut Vec<&'ast Expression<'a>>,
+) {
+    for statement in statements {
+        collect_returned_expressions(statement, returned);
+    }
+}
+
+/// True when a returned expression is a compound literal with one named member
+/// per name segment, each named after its segment.
+fn members_are_named_after(expression: &Expression, segments: &[&str]) -> bool {
+    let Some(members) = compound_member_names(expression) else {
+        return false;
+    };
+    members.len() == segments.len()
+        && members
+            .iter()
+            .zip(segments)
+            .all(|(member, segment)| shares_boundary_word(segment, member))
+}
+
+/// The member names of a compound literal — the identifiers of an array literal
+/// or the identifier keys of an object literal. Any other element or property
+/// shape (spread, hole, computed key, expression element) yields `None`: an
+/// unnamed member names nothing.
+fn compound_member_names<'ast, 'a>(expression: &'ast Expression<'a>) -> Option<Vec<&'ast str>> {
+    match expression.get_inner_expression() {
+        Expression::ArrayExpression(array) => array
+            .elements
+            .iter()
+            .map(|element| match element {
+                ArrayExpressionElement::Identifier(id) => Some(id.name.as_str()),
+                _ => None,
+            })
+            .collect(),
+        Expression::ObjectExpression(object) => object
+            .properties
+            .iter()
+            .map(|property| match property {
+                ObjectPropertyKind::ObjectProperty(property) => match &property.key {
+                    PropertyKey::StaticIdentifier(id) => Some(id.name.as_str()),
+                    _ => None,
+                },
+                ObjectPropertyKind::SpreadProperty(_) => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+fn is_undefined(expression: &Expression) -> bool {
+    matches!(
+        expression.get_inner_expression(),
+        Expression::Identifier(id) if id.name == "undefined"
+    )
+}
+
+/// True when a name segment and a returned member name share a leading or a
+/// trailing word, case-insensitively. That identity ties `getCountry` to
+/// `defaultCountry` and `CallingCodeFromOneOfThem` to `callingCode`: the segment
+/// names the member, modulo the verb it leads with or a qualifier phrase on
+/// either side.
+fn shares_boundary_word(segment: &str, member: &str) -> bool {
+    let (segment_first, segment_last) = boundary_words(segment);
+    let (member_first, member_last) = boundary_words(member);
+    [segment_first, segment_last].iter().any(|word| {
+        word.eq_ignore_ascii_case(member_first) || word.eq_ignore_ascii_case(member_last)
+    })
+}
+
+/// The leading and trailing words of an identifier, split on camelCase and `_`
+/// boundaries — `defaultCallingCode` yields `("default", "Code")` and `country`
+/// yields `("country", "country")`.
+fn boundary_words(name: &str) -> (&str, &str) {
+    let name = name.trim_matches('_');
+    let bytes = name.as_bytes();
+    let mut first_end = bytes.len();
+    let mut last_start = 0;
+    for i in 1..bytes.len() {
+        if starts_word(bytes, i) {
+            first_end = first_end.min(i);
+            last_start = i;
+        }
+    }
+    (&name[..first_end], &name[last_start..])
+}
+
+/// True when byte `i` starts a word: the first letter after a `_`, an uppercase
+/// letter following a lowercase one or a digit, or the uppercase letter that
+/// ends an acronym run and starts a lowercase word (`URLParser` → `Parser`).
+fn starts_word(bytes: &[u8], i: usize) -> bool {
+    if bytes[i] == b'_' {
+        return false;
+    }
+    if bytes[i - 1] == b'_' {
+        return true;
+    }
+    if !bytes[i].is_ascii_uppercase() {
+        return false;
+    }
+    bytes[i - 1].is_ascii_lowercase()
+        || bytes[i - 1].is_ascii_digit()
+        || (bytes[i - 1].is_ascii_uppercase()
+            && bytes.get(i + 1).is_some_and(u8::is_ascii_lowercase))
 }
 
 #[cfg(test)]
@@ -255,5 +479,83 @@ mod tests {
         // Negative space for #7508: an arrow with a non-predicate return type
         // stays flagged.
         assert_eq!(run_on("const doFooAndBar = (): void => {};").len(), 1);
+    }
+
+    #[test]
+    fn allows_pair_query_returning_its_two_named_members() {
+        // Regression for rbaumier/comply#8104 — libphonenumber-js
+        // `AsYouType.getCountryAndCallingCode`. The `And` joins the two nouns of
+        // one compound result, not two verbs: the body returns the very pair the
+        // name announces, so there are no two responsibilities to split.
+        let src = "class AsYouType {\n\
+                   getCountryAndCallingCode(options) {\n\
+                     let defaultCountry;\n\
+                     let defaultCallingCode;\n\
+                     if (options) { defaultCountry = options.defaultCountry; }\n\
+                     return [defaultCountry, defaultCallingCode];\n\
+                   }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pair_query_returning_an_object_literal() {
+        // #8104: the object-literal form of the same shape — the keys are the
+        // `And`-joined segments (libphonenumber-js
+        // `getCountryAndCallingCodeFromOneOfThem`, whose trailing qualifier
+        // phrase rides on the second segment).
+        let src = "function getCountryAndCallingCodeFromOneOfThem(input) {\n\
+                   let country;\n\
+                   let callingCode;\n\
+                   return { country, callingCode };\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pair_query_written_as_a_concise_arrow() {
+        // #8104: the exemption reaches the VariableDeclarator arm — a concise
+        // arrow body is the returned value.
+        let src = "const getIdAndName = (row) => ({ id: row.id, name: row.name });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_pair_query_behind_a_bail_out_guard() {
+        // #8104: a guard clause returning nothing is a bail-out, not a result, so
+        // it must not defeat the corroboration.
+        let src = "function getCountryAndCallingCode(o) {\n\
+                   if (!o) return;\n\
+                   return [country, callingCode];\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_two_verbs_returning_a_single_value() {
+        // Negative space for #8104 — libphonenumber-js `parseAndVerify`. Two
+        // verbs, one returned match object: nothing corroborates a compound
+        // result, so the CQS violation stays flagged.
+        assert_eq!(run_on("function parseAndVerify(text) { return match(text); }").len(), 1);
+    }
+
+    #[test]
+    fn still_flags_pair_name_returning_a_single_member() {
+        // Negative space for #8104: the name announces a pair but the body returns
+        // one member, so the compound-result claim is not corroborated.
+        assert_eq!(
+            run_on("function getCountryAndCallingCode(o) { return country; }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_pair_name_returning_unrelated_members() {
+        // Negative space for #8104: a compound return whose members are named
+        // after neither segment corroborates nothing.
+        assert_eq!(
+            run_on("function loadAndParse(input) { return [handle, buffer]; }").len(),
+            1
+        );
     }
 }
