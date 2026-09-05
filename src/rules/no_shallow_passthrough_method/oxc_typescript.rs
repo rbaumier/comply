@@ -12,10 +12,11 @@
 //! separate override point a subclass can specialise without touching the
 //! others. Inlining or removing one would collapse that override granularity.
 //!
-//! Methods that expose fewer parameters than a same-class target on the same
-//! side (static or instance) accepts are exempt: the wrapper fixes a strictly
-//! narrower contract than the method it forwards to, so inlining it would widen
-//! what callers can pass.
+//! Methods whose call contract differs from the target's are exempt: exposing
+//! fewer parameters than a same-class target on the same side (static or
+//! instance) accepts fixes a strictly narrower contract, and defaulting or
+//! marking optional a parameter the target requires accepts calls the target
+//! rejects. Either way the two are not interchangeable.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
@@ -112,38 +113,87 @@ fn accepted_argument_count(params: &FormalParameters) -> usize {
     if params.rest.is_some() { usize::MAX } else { params.items.len() }
 }
 
-/// True when `class` declares `target` on the same side as `method` — static or
-/// instance, the two sides `this` can reach — with a callable signature that
-/// accepts more arguments than `method` exposes. `method` then narrows the
-/// contract: it hides parameters the target accepts — typically an `@internal`
-/// optimisation argument — so its callers cannot reach them. Of an overload set
-/// only the bodyless signatures are callable; the bodied implementation covers
-/// their union and no caller resolves against it.
-fn class_declares_wider_target(
+/// The number of arguments a formal-parameter list requires. A parameter with a
+/// default value or an `?` marker may be omitted, as may every parameter after
+/// it.
+fn required_argument_count(params: &FormalParameters) -> usize {
+    params
+        .items
+        .iter()
+        .take_while(|item| item.initializer.is_none() && !item.optional)
+        .count()
+}
+
+/// The declarations of `target` that `this` reaches from `method`: members of
+/// the same class body on the same side — static or instance, the two sides
+/// `this` can reach.
+fn class_declarations_of<'a>(
+    class: &'a oxc_ast::ast::Class<'a>,
+    method: &'a oxc_ast::ast::MethodDefinition<'a>,
+    target: &'a str,
+) -> impl Iterator<Item = &'a oxc_ast::ast::MethodDefinition<'a>> {
+    class.body.body.iter().filter_map(move |element| {
+        let oxc_ast::ast::ClassElement::MethodDefinition(member) = element else {
+            return None;
+        };
+        (member.r#static == method.r#static && method_key_name(member) == Some(target)).then(|| member.as_ref())
+    })
+}
+
+/// The argument counts a class publishes for a forwarding target.
+#[derive(Clone, Copy)]
+struct TargetArity {
+    /// The fewest arguments a caller must supply.
+    fewest_required: usize,
+    /// The most arguments a caller may supply.
+    most_accepted: usize,
+}
+
+/// The call contract `class` publishes for `target`, or `None` when it declares
+/// no such member. Of an overload set only the bodyless signatures are callable
+/// — the bodied implementation covers their union and no caller resolves against
+/// it — so the signatures win whenever both are present.
+fn class_target_arity(
     class: &oxc_ast::ast::Class,
     method: &oxc_ast::ast::MethodDefinition,
     target: &str,
-) -> bool {
-    let exposed = accepted_argument_count(&method.value.params);
-    let mut widest_overload_signature: Option<usize> = None;
-    let mut widest_implementation: Option<usize> = None;
-    for element in &class.body.body {
-        let oxc_ast::ast::ClassElement::MethodDefinition(member) = element else {
-            continue;
+) -> Option<TargetArity> {
+    let mut overload_signatures: Option<TargetArity> = None;
+    let mut implementation: Option<TargetArity> = None;
+    for member in class_declarations_of(class, method, target) {
+        let declared = TargetArity {
+            fewest_required: required_argument_count(&member.value.params),
+            most_accepted: accepted_argument_count(&member.value.params),
         };
-        if member.r#static != method.r#static || method_key_name(member) != Some(target) {
-            continue;
-        }
-        let accepted = accepted_argument_count(&member.value.params);
-        if member.value.body.is_none() {
-            widest_overload_signature = widest_overload_signature.max(Some(accepted));
-        } else {
-            widest_implementation = widest_implementation.max(Some(accepted));
-        }
+        let widest = if member.value.body.is_none() { &mut overload_signatures } else { &mut implementation };
+        *widest = Some(match *widest {
+            Some(seen) => TargetArity {
+                fewest_required: seen.fewest_required.min(declared.fewest_required),
+                most_accepted: seen.most_accepted.max(declared.most_accepted),
+            },
+            None => declared,
+        });
     }
-    widest_overload_signature
-        .or(widest_implementation)
-        .is_some_and(|accepted| accepted > exposed)
+    overload_signatures.or(implementation)
+}
+
+/// True when the target accepts more arguments than `params` exposes. The
+/// wrapper then fixes a strictly narrower contract: it hides parameters the
+/// target accepts — typically an `@internal` optimisation argument — so its
+/// callers cannot reach them.
+fn narrows_target_contract(params: &FormalParameters, target: Option<TargetArity>) -> bool {
+    target.is_some_and(|arity| arity.most_accepted > accepted_argument_count(params))
+}
+
+/// True when `params` tolerates an omission the target does not: a parameter
+/// carrying a default value or an `?` marker where the target requires an
+/// argument. Materialising the missing value is the wrapper's own behaviour, so
+/// the two are not interchangeable. A target the class does not declare leaves
+/// the comparison unprovable, and the wrapper keeps the credit for the
+/// tolerance it declares.
+fn widens_target_contract(params: &FormalParameters, target: Option<TargetArity>) -> bool {
+    let required = required_argument_count(params);
+    required < params.items.len() && target.is_none_or(|arity| arity.fewest_required > required)
 }
 
 fn argument_names<'a>(args: &'a oxc_allocator::Vec<'a, oxc_ast::ast::Argument<'a>>) -> Option<Vec<&'a str>> {
@@ -245,11 +295,19 @@ impl OxcCheck for Check {
         // exposes (e.g. vite's `ensureEntryFromUrl` forwards to an `@internal`
         // `_ensureEntryFromUrl` that takes an extra optimisation argument). The
         // wrapper fixes a strictly narrower contract, so inlining it would let
-        // callers pass what it deliberately hides. A wrapper whose target
-        // accepts exactly the same arguments adds nothing and keeps flagging.
-        if let Some(class) = enclosing_class
-            && class_declares_wider_target(class, method, target)
-        {
+        // callers pass what it deliberately hides.
+        //
+        // Widening facade: the wrapper defaults or marks optional a parameter
+        // the target requires (e.g. minisearch's `vacuum(options = {})` over a
+        // `conditionalVacuum` that insists on the argument). Callers of the
+        // wrapper may omit what callers of the target may not, so inlining the
+        // call does not compile and deleting the wrapper drops the default.
+        //
+        // A wrapper whose contract matches its target's adds nothing and keeps
+        // flagging.
+        let target_arity = enclosing_class.and_then(|class| class_target_arity(class, method, target));
+        let params = &method.value.params;
+        if narrows_target_contract(params, target_arity) || widens_target_contract(params, target_arity) {
             return;
         }
 
@@ -527,6 +585,37 @@ mod tests {
             static lookup(key) { return this.read(key); }
             static read(key) { return key; }
             read(key, fallback) { return fallback; }
+        }";
+        assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_wrapper_supplying_a_default_the_target_requires() {
+        // Regression for #8130: minisearch's `vacuum(options: VacuumOptions = {})`
+        // forwards to a `conditionalVacuum` whose parameter is required. The
+        // default widens the contract — `flush()` type-checks, `doFlush()` does
+        // not — so the wrapper is not interchangeable with its target.
+        let defaulted = "class Store {
+            flush (options: FlushOptions = {}): number { return this.doFlush(options) }
+            doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert!(run(defaulted).is_empty(), "expected no diagnostics, got: {:?}", run(defaulted));
+
+        let optional = "class Store {
+            flush (options?: FlushOptions): number { return this.doFlush(options) }
+            doFlush (options: FlushOptions | undefined): number { return 0 }
+        }";
+        assert!(run(optional).is_empty(), "expected no diagnostics, got: {:?}", run(optional));
+    }
+
+    #[test]
+    fn flags_wrapper_whose_default_mirrors_the_targets_default() {
+        // The target tolerates exactly the same omission, so the wrapper's
+        // default materialises nothing the target would not. Bounds the
+        // widening-facade exemption.
+        let src = "class Store {
+            flush (options: FlushOptions = {}): number { return this.doFlush(options) }
+            doFlush (options: FlushOptions = {}): number { return options.batch ?? 0 }
         }";
         assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
     }
