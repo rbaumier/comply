@@ -248,8 +248,9 @@ fn is_query_command_stem(stem: &str) -> bool {
 /// That segment intentionally mirrors the exact function/hook/type under test
 /// (e.g. `useInfiniteQuery`, `TRPCError`), so it carries camelCase/PascalCase
 /// that no single case convention can classify. Used by vitest/zod/react-query/
-/// tRPC and others. Gated to test files by the caller so production code keeping
-/// an `issue-NNNN-` prefix is still validated.
+/// tRPC and others. Gated by the caller to test scaffolding
+/// (see [`crate::rules::path_utils::is_test_scaffolding_path`]) so production
+/// code keeping an `issue-NNNN-` prefix is still validated.
 fn is_regression_test_name(stem: &str) -> bool {
     let Some(rest) = stem.strip_prefix("issue-") else {
         return false;
@@ -264,9 +265,9 @@ fn is_regression_test_name(stem: &str) -> bool {
 /// The `=` is the literal CLI assignment operator the test exercises, so a
 /// filename mirroring that grammar cannot adopt plain kebab-case. Each
 /// `=`-separated segment must independently be kebab-case, so a malformed
-/// segment (`Option=value`) still fails. Gated to a test-fixture directory by
-/// the caller (see [`is_in_fixture_dir`]) so a production filename with `=` is
-/// still flagged.
+/// segment (`Option=value`) still fails. Gated by the caller to test scaffolding
+/// (see [`crate::rules::path_utils::is_test_scaffolding_path`]) so a production
+/// filename with `=` is still flagged.
 fn is_cli_notation_test_stem(stem: &str) -> bool {
     let Some((first, rest)) = stem.split_once('=') else {
         return false;
@@ -314,7 +315,7 @@ fn strip_version_discriminator(stem: &str) -> &str {
 /// Unlike the dashed `{subject}-test` form ([`is_test_subject_stem`]), a
 /// lowercase base + `_test` is indistinguishable from an ordinary snake_case
 /// production filename whose last segment is `test`, so the caller gates this on
-/// a test context (`.test.`/`.spec.` file, `regression/`, or a fixture dir).
+/// [`crate::rules::path_utils::is_test_scaffolding_path`].
 fn strip_test_suffix(stem: &str) -> &str {
     let base = stem
         .strip_suffix("_test")
@@ -325,50 +326,11 @@ fn strip_test_suffix(stem: &str) -> &str {
     }
 }
 
-/// Returns `true` when `path` is a test file by path alone: a `.test.`/`.spec.`
-/// filename infix or a `regression/` ancestor directory. The signal the
-/// regression-test-name allowance is gated on, so an `issue-NNNN-` stem in
-/// production code is still validated.
-fn is_test_context_path(path: &std::path::Path) -> bool {
-    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if file_name.contains(".test.") || file_name.contains(".spec.") {
-        return true;
-    }
-    path.components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new("regression"))
-}
-
-/// Test-fixture directory names, matched as whole path segments. A file living
-/// under one of these is test scaffolding, not shipped production source, so it
-/// may mirror the exact camelCase/PascalCase symbol it exercises rather than the
-/// production filename convention.
-const FIXTURE_DIR_SEGMENTS: &[&str] = &[
-    "test",
-    "tests",
-    "__tests__",
-    "fixtures",
-    "__fixtures__",
-    "__mocks__",
-];
-
-/// Returns `true` when any whole path segment of `path` is a test-fixture
-/// directory ([`FIXTURE_DIR_SEGMENTS`]). Segment (not substring) matching keeps
-/// `src/contest/` and `src/latest/` from matching `test`.
-fn is_in_fixture_dir(path: &std::path::Path) -> bool {
-    path.components().any(|c| {
-        matches!(
-            c,
-            std::path::Component::Normal(s)
-                if s.to_str().is_some_and(|seg| FIXTURE_DIR_SEGMENTS.contains(&seg))
-        )
-    })
-}
-
 /// Returns `true` for a test-fixture stem named after the API symbol it
 /// exercises: every dash-separated segment is independently camelCase or
 /// PascalCase (e.g. `shorthand-tickX`, `shorthand-binRectY`). Mirrors the
-/// per-segment casing freedom of [`is_test_subject_stem`], but gated by a
-/// fixture-directory ancestor (see [`is_in_fixture_dir`]) instead of a trailing
+/// per-segment casing freedom of [`is_test_subject_stem`], but gated by
+/// [`crate::rules::path_utils::is_test_scaffolding_path`] instead of a trailing
 /// `-test`/`-spec` suffix, so a fixture file can carry the exact mixed-case
 /// function name without the suffix. A name that is already plain kebab-case is
 /// allowed earlier, so this only widens acceptance to mixed-case segments.
@@ -475,20 +437,17 @@ impl TextCheck for Check {
         // marks a framework-internal/reactive value; validate the convention
         // against the name after the prefix.
         let mut convention_stem = strip_private_prefix(stem);
-        // In a test file, a trailing `_test` / `_spec` is the Go-style test-file
-        // marker (`migrator_test.js`), the underscore sibling of the dotted
-        // `.test.` / `.spec.` infix; strip it so the base name is validated as
-        // usual. Gated to a test context because a lowercase base + `_test` is
-        // otherwise indistinguishable from a snake_case production filename.
-        let in_test_context = is_test_context_path(ctx.path) || is_in_fixture_dir(ctx.path);
-        if in_test_context {
-            convention_stem = strip_test_suffix(convention_stem);
-        }
-        // In test files, `<name>@<version>` names a suite after the dependency
-        // major version it targets (`tailwind@3.test.ts`); strip the recognised
-        // `@<version>` discriminator so the base name is validated as usual.
-        if is_test_context_path(ctx.path) {
-            convention_stem = strip_version_discriminator(convention_stem);
+        // Test scaffolding may carry test-only name markers: a trailing `_test` /
+        // `_spec` Go-style marker (`migrator_test.js`), the underscore sibling of
+        // the dotted `.test.` / `.spec.` infix, and a `<name>@<version>`
+        // discriminator naming a suite after the dependency major it targets
+        // (`tailwind@3.test.ts`). Both are stripped so the base name is validated
+        // as usual, and both are gated on the test-scaffolding path because a
+        // lowercase base + `_test` (or a stray `@`) is otherwise
+        // indistinguishable from a production filename.
+        let is_test_scaffolding = crate::rules::path_utils::is_test_scaffolding_path(ctx.path);
+        if is_test_scaffolding {
+            convention_stem = strip_version_discriminator(strip_test_suffix(convention_stem));
         }
         if is_kebab_case(convention_stem) {
             return Vec::new();
@@ -522,11 +481,9 @@ impl TextCheck for Check {
         if is_snake_case(convention_stem) && self.snake_is_project_dominant(ctx) {
             return Vec::new();
         }
-        if is_test_context_path(ctx.path) && is_regression_test_name(convention_stem) {
-            return Vec::new();
-        }
-        if is_in_fixture_dir(ctx.path)
-            && (is_fixture_subject_stem(convention_stem)
+        if is_test_scaffolding
+            && (is_regression_test_name(convention_stem)
+                || is_fixture_subject_stem(convention_stem)
                 || is_cli_notation_test_stem(convention_stem))
         {
             return Vec::new();
@@ -1759,5 +1716,16 @@ mod tests {
             run("example/src/migrations/2021_09_18_14_05_20_create_user.ts").len(),
             1
         );
+    }
+
+    // Regression for #4757: a co-located `.test.`/`.spec.` file named after the
+    // camelCase API function it exercises is the same test scaffolding as a
+    // suffix-less fixture under `test/`, and gets the same mixed-case freedom —
+    // the shared `is_test_scaffolding_path` answers "is this test scaffolding?"
+    // once for both shapes.
+    #[test]
+    fn allows_mixed_case_subject_in_dotted_test_file_issue_4757() {
+        assert!(run("src/plots/shorthand-tickX.test.ts").is_empty());
+        assert!(run("src/plots/shorthand-binRectY.spec.ts").is_empty());
     }
 }
