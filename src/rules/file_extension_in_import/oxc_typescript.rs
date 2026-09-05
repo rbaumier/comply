@@ -125,10 +125,11 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        // Every probe is directory-invariant (manifest + bundler config +
-        // tsconfig chain), so memoize the combined skip decision per directory:
-        // `has_bundler_config` stat-walks the ancestor tree, which is otherwise
-        // re-run for every file in a deep monorepo.
+        // Every probe reads the manifest + bundler config + tsconfig chain above
+        // the file, so `cached_bundler` shares the combined skip decision across a
+        // directory: `has_bundler_config` stat-walks the ancestor tree, which is
+        // otherwise re-run for every file in a deep monorepo. It hands a file
+        // whose extension pins its module format its own answer.
         let skip_for_bundler = ctx.project.cached_bundler(ctx.path, || {
             project_uses_bundler(ctx)
                 || tsconfig_uses_bundler_resolution(ctx)
@@ -286,6 +287,43 @@ mod tests {
             &project,
             crate::rules::file_ctx::default_static_file_ctx(),
         )
+    }
+
+    /// Build a project rooted at a tempdir containing `files`, load a single
+    /// `ProjectCtx` over all of them, then run the backend on each of `targets`
+    /// in order. Sharing one `ProjectCtx` is what lets a test observe the
+    /// per-directory memoization across sibling files that do not share a
+    /// module format.
+    fn run_each_in_one_project(files: &[(&str, &str)], targets: &[&str]) -> Vec<Vec<Diagnostic>> {
+        let dir = TempDir::new().unwrap();
+        for (rel, contents) in files {
+            let p = dir.path().join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, contents).unwrap();
+        }
+        let source_files: Vec<SourceFile> = files
+            .iter()
+            .filter_map(|(rel, _)| {
+                let path = dir.path().join(rel);
+                Language::from_path(&path).map(|language| SourceFile { path, language })
+            })
+            .collect();
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let project = ProjectCtx::load(&refs, &Config::default());
+        targets
+            .iter()
+            .map(|rel| {
+                let canon = fs::canonicalize(dir.path().join(rel)).unwrap();
+                let source = fs::read_to_string(&canon).unwrap();
+                crate::rules::test_helpers::run_rule_with_ctx(
+                    &Check,
+                    &source,
+                    &canon,
+                    &project,
+                    crate::rules::file_ctx::default_static_file_ctx(),
+                )
+            })
+            .collect()
     }
 
     // Regression for #1307: a `tests/` subtree with its own tsconfig selecting
@@ -646,6 +684,84 @@ mod tests {
             1,
             "type:module on node18 is ESM — extensions still required: {diags:?}"
         );
+    }
+
+    // Regression for #7587: Node's `ESM_FILE_FORMAT` reads a file's own extension
+    // before its package scope, so under `nodenext` an `.mts` file is ESM even in
+    // a package without `"type":"module"` — its extensionless relative imports do
+    // need extensions.
+    #[test]
+    fn flags_mts_file_in_commonjs_package_scope_issue_7587() {
+        let diags = run_with_files(
+            &[
+                ("package.json", r#"{"name":"pkg","main":"dist/index.js"}"#),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"module":"nodenext"}}"#,
+                ),
+            ],
+            "src/app.mts",
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "an .mts file is ESM whatever the package scope says: {diags:?}"
+        );
+    }
+
+    // Regression for #7587: the extension override belongs to the Node-format
+    // decision only. A bundler project resolves extensionless specifiers for
+    // every file it builds, `.mts` included, so the rule must stay silent there.
+    #[test]
+    fn skips_mts_file_in_bundler_project_issue_7587() {
+        let diags = run_with_files(
+            &[
+                (
+                    "package.json",
+                    r#"{"name":"pkg","devDependencies":{"vite":"^5"}}"#,
+                ),
+                (
+                    "tsconfig.json",
+                    r#"{"compilerOptions":{"module":"nodenext"}}"#,
+                ),
+            ],
+            "src/app.mts",
+            "import { x } from './util';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "a bundler resolves extensionless specifiers in .mts files too: {diags:?}"
+        );
+    }
+
+    // Regression for #7587: a directory mixing a CommonJS-scoped `.ts` file with
+    // an explicitly-ESM `.mts` file must get one verdict per file, not one per
+    // directory — asserted in both visit orders so the answer cannot depend on
+    // which sibling primed the per-directory bundler memo.
+    #[test]
+    fn per_file_format_survives_directory_memo_issue_7587() {
+        let files = &[
+            ("package.json", r#"{"name":"pkg","main":"dist/index.js"}"#),
+            (
+                "tsconfig.json",
+                r#"{"compilerOptions":{"module":"nodenext"}}"#,
+            ),
+            ("src/cjs.ts", "import { x } from './util';\n"),
+            ("src/esm.mts", "import { x } from './util';\n"),
+        ];
+        for targets in [["src/cjs.ts", "src/esm.mts"], ["src/esm.mts", "src/cjs.ts"]] {
+            let by_target: Vec<usize> = run_each_in_one_project(files, &targets)
+                .iter()
+                .map(Vec::len)
+                .collect();
+            let counts: Vec<(&str, usize)> =
+                targets.iter().copied().zip(by_target).collect();
+            assert!(
+                counts.contains(&("src/cjs.ts", 0)) && counts.contains(&("src/esm.mts", 1)),
+                "per-file module format must not depend on visit order: {counts:?}"
+            );
+        }
     }
 
     // Regression for #7781: a CommonJS package whose tsconfig delegates
