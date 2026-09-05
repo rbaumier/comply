@@ -697,10 +697,15 @@ mod tests {
 
     #[test]
     fn allows_get_and_reset_compound_operation_issue_5002() {
-        // `get_and_reset_*` is a compound read-modify-write op (read AND reset),
-        // not a pure accessor — `get` is part of the compound verb.
+        // tokio-metrics' `get_and_reset_*`: the atomic `swap(0, SeqCst)` reads the
+        // value AND resets it. `get` is the first half of a conjunction, so the
+        // remainder is not a noun — `and_reset_local_max_idle_duration` is not a
+        // method name. The write goes through interior mutability behind `&self`,
+        // so no assignment is visible in the AST; the name guard is what carries it.
         let src = "impl RawMetrics {\n\
-            fn get_and_reset_local_max_idle_duration(&self) -> Duration { todo!() }\n\
+            fn get_and_reset_local_max_idle_duration(&self) -> Duration {\n\
+                Duration::from_nanos(self.local_max_idle_duration_ns.swap(0, SeqCst))\n\
+            }\n\
         }";
         assert!(run(src).is_empty(), "{:?}", run(src));
     }
