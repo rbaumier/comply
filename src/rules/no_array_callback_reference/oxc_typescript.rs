@@ -5,7 +5,10 @@
 //! (data-first functional APIs like fp-ts `Module.map(value, fn)`, or an
 //! explicit `thisArg`) are exempt. Calls whose receiver is a namespace-import
 //! binding (`import * as O from 'fp-ts/Option'; O.some(n)`) are also exempt:
-//! those are data-library combinators, never `Array.prototype.<method>`.
+//! those are data-library combinators, never `Array.prototype.<method>`. So is a
+//! call whose receiver's declared type spells out the called method as its own
+//! member (`options.map(row)` on `options: { map: (row) => R }`): an array's
+//! iterator methods are inherited, never written into a user's object type.
 //! How many parameters a callee may declare before `index` reaches one depends
 //! on the method: a `map`-family callback is `(element, index, array)`, a
 //! `reduce`/`reduceRight` callback is `(accumulator, currentValue, index,
@@ -95,33 +98,44 @@ fn members_declare_low_arity(
 }
 
 /// Returns `true` when a named type reference (`Params` in `{ scale }: Params`)
-/// resolves to a `type`/`interface` declaration whose `binding_name` member
-/// ignores the extra iterator arguments (see [`callee_ignores_extra_args`]). The
-/// declaration is matched by name across the module — the established resolution
-/// shape in this codebase (see `ts_no_enum_object_literal_pattern`). Generic type
-/// references carrying their own arguments are skipped: the member type may
-/// depend on a type parameter whose arity is not statically visible here.
+/// resolves to a `type`/`interface` declaration whose member list satisfies
+/// `members_hold`. The declaration is matched by name across the module — the
+/// established resolution shape in this codebase (see
+/// `ts_no_enum_object_literal_pattern`).
+fn named_type_members<'a>(
+    type_ref: &oxc_ast::ast::TSTypeReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+    members_hold: impl Fn(&[TSSignature<'a>]) -> bool,
+) -> bool {
+    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else { return false };
+    let type_name = id.name.as_str();
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
+            matches!(&alias.type_annotation, TSType::TSTypeLiteral(lit)
+                if members_hold(&lit.members))
+        }
+        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
+            members_hold(&iface.body.body)
+        }
+        _ => false,
+    })
+}
+
+/// Returns `true` when a named type reference resolves to a declaration whose
+/// `binding_name` member ignores the extra iterator arguments (see
+/// [`callee_ignores_extra_args`]). Generic type references carrying their own
+/// arguments are skipped: the member type may depend on a type parameter whose
+/// arity is not statically visible here.
 fn named_type_member_is_low_arity<'a>(
     type_ref: &oxc_ast::ast::TSTypeReference<'a>,
     binding_name: &str,
     value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
-    if type_ref.type_arguments.is_some() {
-        return false;
-    }
-    let TSTypeName::IdentifierReference(id) = &type_ref.type_name else { return false };
-    let type_name = id.name.as_str();
-    semantic.nodes().iter().any(|node| match node.kind() {
-        AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
-            matches!(&alias.type_annotation, TSType::TSTypeLiteral(lit)
-                if members_declare_low_arity(&lit.members, binding_name, value_params))
-        }
-        AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
-            members_declare_low_arity(&iface.body.body, binding_name, value_params)
-        }
-        _ => false,
-    })
+    type_ref.type_arguments.is_none()
+        && named_type_members(type_ref, semantic, |members| {
+            members_declare_low_arity(members, binding_name, value_params)
+        })
 }
 
 /// Returns `true` when a parameter's type annotation declares `binding_name` as
@@ -145,6 +159,67 @@ fn param_binding_is_low_arity<'a>(
             named_type_member_is_low_arity(type_ref, binding_name, value_params, semantic)
         }
         ty => is_low_arity_function_type(ty, value_params),
+    }
+}
+
+/// Returns `true` when an object-type member list declares `member_name`,
+/// whatever its type — as a property signature (`{ map: (row) => R }`) or as a
+/// method signature (`{ map(row): R }`).
+fn members_declare(members: &[TSSignature], member_name: &str) -> bool {
+    members.iter().any(|member| match member {
+        TSSignature::TSPropertySignature(prop) => {
+            prop.key.static_name().as_deref() == Some(member_name)
+        }
+        TSSignature::TSMethodSignature(method) => {
+            method.key.static_name().as_deref() == Some(member_name)
+        }
+        _ => false,
+    })
+}
+
+/// The type annotation a binding is declared with — on a variable
+/// (`const options: Options = …`) or on the formal parameter that introduces it
+/// (`(options: Options) => …`). `None` for an untyped or destructured binding.
+fn binding_type_annotation<'a>(
+    ident: &oxc_ast::ast::IdentifierReference<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSTypeAnnotation<'a>> {
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    if let AstKind::VariableDeclarator(decl) = nodes.kind(decl_node_id) {
+        return decl.type_annotation.as_deref();
+    }
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::FormalParameter(param) => param.type_annotation.as_deref(),
+            _ => None,
+        })
+}
+
+/// Returns `true` when the receiver of a `<receiver>.<method_name>(…)` call
+/// resolves to a binding whose declared type declares `method_name` as its own
+/// member — an inline object type (`options: { map: (row) => R }`) or a named
+/// `type`/`interface` (`options: Options`). `Array.prototype`'s iterator methods
+/// are inherited, never members a user-written object type spells out, so such a
+/// call invokes the receiver's own function-typed property and its argument is a
+/// data value, not a per-element callback.
+fn receiver_declares_method<'a>(
+    receiver: &'a Expression<'a>,
+    method_name: &str,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let Expression::Identifier(ident) = receiver else { return false };
+    let Some(ann) = binding_type_annotation(ident, semantic) else { return false };
+    match &ann.type_annotation {
+        TSType::TSTypeLiteral(lit) => members_declare(&lit.members, method_name),
+        TSType::TSTypeReference(type_ref) => named_type_members(type_ref, semantic, |members| {
+            members_declare(members, method_name)
+        }),
+        _ => false,
     }
 }
 
@@ -446,6 +521,14 @@ impl OxcCheck for Check {
         if let Expression::Identifier(obj) = &member.object
             && is_namespace_import_binding(obj, semantic)
         {
+            return;
+        }
+
+        // A receiver whose declared type spells out `<method>` as its own member
+        // is a user-defined object, not an array: `options.map(row)` on
+        // `options: { map: (row: TRow) => TResponse }` calls the config's
+        // mapper, so `row` is its data argument, not a callback.
+        if receiver_declares_method(&member.object, method_name, semantic) {
             return;
         }
 
@@ -1369,6 +1452,61 @@ mod tests {
             ),
         ];
         assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #7545 repro (saurenya `lifecycle-handlers.ts`): `options.map` is a
+    // response-mapping closure declared by the config type, not
+    // `Array.prototype.map`, so `row` is its data argument. Must not flag.
+    #[test]
+    fn allows_call_on_receiver_whose_type_declares_the_method() {
+        assert!(run_on(
+            "type Options<TRow, TResponse> = { map: (row: TRow) => TResponse };\nfunction run<TRow, TResponse>(options: Options<TRow, TResponse>, row: TRow): TResponse { return options.map(row); }"
+        )
+        .is_empty());
+    }
+
+    // #7545: an inline object type on the receiver declares the member just as
+    // explicitly as a named one.
+    #[test]
+    fn allows_call_on_inline_typed_receiver_declaring_the_method() {
+        assert!(run_on(
+            "function run(options: { map: (row: string) => number }, row: string): number { return options.map(row); }"
+        )
+        .is_empty());
+    }
+
+    // #7545: an interface receiver resolves the same way, method-shorthand
+    // members included.
+    #[test]
+    fn allows_call_on_interface_typed_receiver_declaring_the_method() {
+        assert!(run_on(
+            "interface Options { filter(row: string): boolean }\nfunction run(options: Options, row: string): boolean { return options.filter(row); }"
+        )
+        .is_empty());
+    }
+
+    // #7545 negative space: a receiver whose declared type does not spell out the
+    // method inherits it from `Array.prototype`, so the callback footgun applies.
+    #[test]
+    fn flags_call_on_typed_receiver_without_the_method() {
+        assert_eq!(
+            run_on(
+                "type Options = { limit: number };\nfunction run(options: Options, cb: unknown): unknown { return options.map(cb); }"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // #7545 negative space: an array-typed receiver is the rule's core target —
+    // an array type declares no members of its own.
+    #[test]
+    fn flags_array_typed_receiver() {
+        assert_eq!(
+            run_on("function run(xs: string[], cb: unknown): unknown[] { return xs.map(cb); }")
+                .len(),
+            1
+        );
     }
 
     // #8137 negative space: …and an imported *three*-parameter reducer is not.
