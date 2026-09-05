@@ -1946,17 +1946,33 @@ pub fn has_outer_attribute(item: Node, source: &[u8], attr_path: &str) -> bool {
 }
 
 /// True if `item` carries a symbol-export outer attribute — `#[no_mangle]`,
-/// `#[export_name = "…"]`, or `#[link_section = "…"]`, in either the bare form or
-/// the edition-2024 `#[unsafe(…)]` wrapper. Each of these pins a real,
-/// uniquely-addressed symbol for the linker / FFI, which a `const` (inlined at
-/// every use site, with no address and no symbol) cannot provide, so an item
-/// carrying one cannot be rewritten as a `const`.
-///
-/// Reads the attribute path from the `attribute_item` text — tolerating the
-/// `= "…"` value form and seeing through the `unsafe(…)` wrapper — so an
-/// unrelated attribute (`#[allow(…)]`, `#[cfg(…)]`) does not match.
+/// `#[export_name = "…"]`, or `#[link_section = "…"]`. Each of these pins a real,
+/// uniquely-addressed symbol for the linker / FFI.
 pub fn has_symbol_export_attribute(item: Node, source: &[u8]) -> bool {
-    any_preceding_attribute_text(item, source, attr_path_is_symbol_export)
+    has_declared_attribute_segment(item, source, SYMBOL_EXPORT_ATTRS)
+}
+
+/// True if `item` carries an outer attribute a `const` item cannot: a
+/// [symbol-export](has_symbol_export_attribute) attribute, or a
+/// [`SYMBOL_RETENTION_ATTRS`] one. Each demands an item that owns an address and
+/// a symbol, which a `const` — inlined at every use site — has neither of, so
+/// rustc rejects the attribute on a `const` and rewriting the item as one does
+/// not compile.
+pub fn has_const_incompatible_attribute(item: Node, source: &[u8]) -> bool {
+    has_symbol_export_attribute(item, source)
+        || has_declared_attribute_segment(item, source, SYMBOL_RETENTION_ATTRS)
+}
+
+/// True if any attribute `item` [declares](any_declared_attribute) has one of
+/// `segments` as the last `::` segment of its path — so a path-qualified
+/// `#[core::no_mangle]` matches `no_mangle`, while an unrelated attribute naming
+/// one as an *argument* (`#[allow(no_mangle)]`) does not.
+fn has_declared_attribute_segment(item: Node, source: &[u8], segments: &[&str]) -> bool {
+    any_preceding_attribute_item(item, |attribute_item| {
+        any_declared_attribute(attribute_item, source, &|path, _arguments| {
+            segments.contains(&path.rsplit("::").next().unwrap_or(path))
+        })
+    })
 }
 
 /// True if an `attribute_item`'s source text names `attr_path` as its last path
@@ -1968,39 +1984,13 @@ fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
         || attr_text.contains(&format!("::{attr_path}]"))
 }
 
-/// Outer-attribute path identifiers that require a uniquely-addressed `static`
-/// symbol and are therefore invalid on a `const` item.
+/// Outer-attribute path identifiers that publish an item under a linker symbol
+/// of the author's choosing.
 const SYMBOL_EXPORT_ATTRS: &[&str] = &["no_mangle", "export_name", "link_section"];
 
-/// True if an outer attribute's source text names a [`SYMBOL_EXPORT_ATTRS`]
-/// attribute as its path. Strips the `#[ … ]` framing, sees through an
-/// `unsafe( … )` wrapper, then reads the leading path identifier (before any
-/// `= value` or `( … )` arguments) and matches its last `::` segment — so
-/// `#[core::no_mangle]` counts while `#[allow(no_mangle)]` (a different path) and
-/// a hypothetical `#[no_mangle_x]` do not.
-fn attr_path_is_symbol_export(attr_text: &str) -> bool {
-    let inner = attr_text
-        .trim()
-        .trim_start_matches('#')
-        .trim()
-        .strip_prefix('[')
-        .and_then(|s| s.trim_end().strip_suffix(']'))
-        .map(str::trim)
-        .unwrap_or("");
-    let inner = inner
-        .strip_prefix("unsafe")
-        .map(str::trim_start)
-        .and_then(|s| s.strip_prefix('('))
-        .and_then(|s| s.trim_end().strip_suffix(')'))
-        .map(str::trim)
-        .unwrap_or(inner);
-    let path = inner
-        .split(|c: char| c == '=' || c == '(' || c.is_whitespace())
-        .next()
-        .unwrap_or("");
-    let segment = path.rsplit("::").next().unwrap_or(path);
-    SYMBOL_EXPORT_ATTRS.contains(&segment)
-}
+/// Outer-attribute path identifiers that order the linker to keep an item's
+/// symbol even when nothing in the crate references it.
+const SYMBOL_RETENTION_ATTRS: &[&str] = &["used"];
 
 /// True if any of `item`'s [preceding attributes](preceding_attribute_items) has
 /// source text satisfying `matches`. Shared by the attribute-presence predicates
@@ -2388,18 +2378,18 @@ fn derive_list_names(token_tree: Node, source: &[u8], traits: &[&str]) -> bool {
 }
 
 /// Answer `applies` for each attribute an `attribute_item` declares: the
-/// attribute written on the item, plus every attribute a
-/// `#[cfg_attr(<predicate>, …)]` conditionally applies. `applies` receives the
-/// attribute's path text and its argument `token_tree` when it has one.
+/// attribute written on the item, plus every attribute an
+/// [`AttributeWrapper`] around it applies. `applies` receives the attribute's
+/// path text and its argument `token_tree` when it has one.
 ///
 /// **The `cfg_attr` policy, shared by every presence check in this module.** A
 /// `cfg_attr`-applied attribute counts as declared: the author did write it, and
 /// which build configurations enable a feature is not decidable from the crate's
 /// own source — any consumer can pass `--no-default-features`. The
 /// conditionally-applied attribute must still name the queried path, so a
-/// `cfg_attr` applying *another* crate's attribute does not match. Only
-/// `cfg_attr` arguments are traversed this way, and a `cfg_attr` nested in a
-/// `cfg_attr` is followed.
+/// `cfg_attr` applying *another* crate's attribute does not match. Only wrapper
+/// arguments are traversed this way, and a wrapper nested in a wrapper is
+/// followed.
 fn any_declared_attribute<'tree>(
     attribute_item: Node<'tree>,
     source: &[u8],
@@ -2419,28 +2409,71 @@ fn any_declared_attribute<'tree>(
         return false;
     };
     let arguments = attribute.child_by_field_name("arguments");
-    applies(path_text, arguments)
-        || (path_text == "cfg_attr"
-            && arguments.is_some_and(|list| any_cfg_attr_applied(list, source, applies)))
+    applies(path_text, arguments) || wrapper_applies(path_text, arguments, source, applies)
 }
 
-/// Answer `applies` for each attribute a `cfg_attr` argument list applies.
-///
-/// Inside a `cfg_attr` the applied attributes are plain tokens rather than
-/// `attribute` nodes, so they are read positionally: the argument list is a
-/// comma-separated sequence whose first group is the `cfg` predicate and whose
-/// remaining groups are the attributes to apply. Within a group the path is the
-/// run of tokens before an optional argument `token_tree` — commas nested inside
-/// a group's own `token_tree` are not direct children here, so `all(a, b)` stays
-/// one group.
-fn any_cfg_attr_applied<'tree>(
-    token_tree: Node<'tree>,
+/// An attribute whose own argument list carries the attributes it applies to the
+/// item, written there as plain tokens rather than `attribute` nodes.
+#[derive(Clone, Copy)]
+enum AttributeWrapper {
+    /// `#[cfg_attr(<predicate>, <attr>, …)]`: argument group 0 is the `cfg`
+    /// predicate, the groups after it are the attributes applied when it holds.
+    CfgAttr,
+    /// `#[unsafe(<attr>)]`: the edition-2024 wrapper the attributes whose
+    /// soundness is the author's responsibility (`no_mangle`, `export_name`,
+    /// `link_section`, `used`) must carry. It applies its argument outright.
+    Unsafe,
+}
+
+impl AttributeWrapper {
+    /// The wrapper `path` names, or `None` for an ordinary attribute path.
+    fn from_path(path: &str) -> Option<Self> {
+        match path {
+            "cfg_attr" => Some(Self::CfgAttr),
+            "unsafe" => Some(Self::Unsafe),
+            _ => None,
+        }
+    }
+
+    /// Index of the first argument group that names an applied attribute:
+    /// `#[cfg_attr(nightly, must_use)]` declares `must_use`, not `nightly`.
+    fn first_attribute_group(self) -> usize {
+        match self {
+            Self::CfgAttr => 1,
+            Self::Unsafe => 0,
+        }
+    }
+}
+
+/// Answer `applies` for each attribute the wrapper named by `path` applies
+/// through its `arguments`, or `false` when `path` names no wrapper.
+fn wrapper_applies<'tree>(
+    path: &str,
+    arguments: Option<Node<'tree>>,
     source: &[u8],
     applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
 ) -> bool {
+    AttributeWrapper::from_path(path).is_some_and(|wrapper| {
+        arguments.is_some_and(|list| any_wrapped_attribute(list, source, wrapper, applies))
+    })
+}
+
+/// Answer `applies` for each attribute a wrapper's argument list applies.
+///
+/// The applied attributes are plain tokens there, so they are read positionally:
+/// the argument list is a comma-separated sequence of groups, and the groups
+/// from [`AttributeWrapper::first_attribute_group`] on name attributes. Within a
+/// group the path is the run of tokens before an optional argument `token_tree`
+/// — commas nested inside a group's own `token_tree` are not direct children
+/// here, so `all(a, b)` stays one group.
+fn any_wrapped_attribute<'tree>(
+    token_tree: Node<'tree>,
+    source: &[u8],
+    wrapper: AttributeWrapper,
+    applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
+) -> bool {
+    let first_attribute_group = wrapper.first_attribute_group();
     let mut cursor = token_tree.walk();
-    // The predicate is group 0 and names no attribute: `#[cfg_attr(nightly,
-    // must_use)]` declares `must_use`, not `nightly`.
     let mut group = 0usize;
     let mut path = String::new();
     let mut arguments: Option<Node<'tree>> = None;
@@ -2455,7 +2488,9 @@ fn any_cfg_attr_applied<'tree>(
         match text {
             "(" | ")" => {}
             "," => {
-                if group > 0 && cfg_attr_group_applies(&path, arguments, source, applies) {
+                if group >= first_attribute_group
+                    && wrapped_group_applies(&path, arguments, source, applies)
+                {
                     return true;
                 }
                 group += 1;
@@ -2465,25 +2500,26 @@ fn any_cfg_attr_applied<'tree>(
             segment => path.push_str(segment),
         }
     }
-    group > 0 && cfg_attr_group_applies(&path, arguments, source, applies)
+    group >= first_attribute_group && wrapped_group_applies(&path, arguments, source, applies)
 }
 
-/// Answer `applies` for one comma-separated group of a `cfg_attr` argument list,
-/// read as an attribute: its accumulated path and its optional arguments. A
-/// nested `cfg_attr` group is traversed the same way, which is what resolves
-/// `#[cfg_attr(a, cfg_attr(b, must_use))]`.
-fn cfg_attr_group_applies<'tree>(
+/// Answer `applies` for one comma-separated group of a wrapper's argument list,
+/// read as an attribute: its accumulated path and its optional arguments. The
+/// path stops at a `= value`, so `#[cfg_attr(unix, export_name = "f")]` answers
+/// for `export_name`. A group naming another wrapper is traversed the same way,
+/// which is what resolves `#[cfg_attr(a, cfg_attr(b, must_use))]` and
+/// `#[cfg_attr(unix, unsafe(no_mangle))]`.
+fn wrapped_group_applies<'tree>(
     path: &str,
     arguments: Option<Node<'tree>>,
     source: &[u8],
     applies: &dyn Fn(&str, Option<Node<'tree>>) -> bool,
 ) -> bool {
+    let path = path.split('=').next().unwrap_or(path);
     if path.is_empty() {
         return false;
     }
-    applies(path, arguments)
-        || (path == "cfg_attr"
-            && arguments.is_some_and(|list| any_cfg_attr_applied(list, source, applies)))
+    applies(path, arguments) || wrapper_applies(path, arguments, source, applies)
 }
 
 /// True if `item` carries an outer attribute `#[<attr_path>(… <option> …)]`,
@@ -12041,6 +12077,49 @@ mod tests {
                 has_outer_attribute_path(item, src.as_bytes(), &["must_use"]),
                 expected,
                 "has_outer_attribute_path mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_const_incompatible_attribute_sees_through_the_unsafe_and_cfg_attr_wrappers() {
+        let cases = [
+            ("#[no_mangle]\nstatic X: u8 = 1;", true),
+            ("#[export_name = \"y\"]\nstatic X: u8 = 1;", true),
+            ("#[link_section = \".z\"]\nstatic X: u8 = 1;", true),
+            // `#[used]` demands a retained symbol, which a `const` has none of.
+            ("#[used]\nstatic X: u8 = 1;", true),
+            // The edition-2024 wrapper applies its argument outright.
+            ("#[unsafe(no_mangle)]\nstatic X: u8 = 1;", true),
+            ("#[unsafe(export_name = \"y\")]\nstatic X: u8 = 1;", true),
+            // A path-qualified attribute matches on its last segment.
+            ("#[core::no_mangle]\nstatic X: u8 = 1;", true),
+            // Issue #7822: applied through a `cfg_attr`, in every nesting.
+            ("#[cfg_attr(unix, no_mangle)]\nstatic X: u8 = 1;", true),
+            (
+                "#[cfg_attr(feature = \"ffi\", export_name = \"y\")]\nstatic X: u8 = 1;",
+                true,
+            ),
+            (
+                "#[cfg_attr(unix, unsafe(link_section = \".z\"))]\nstatic X: u8 = 1;",
+                true,
+            ),
+            // Negative space: the word as another attribute's argument, as the
+            // `cfg_attr` predicate, or inside a doc string is not a path.
+            ("#[allow(no_mangle)]\nstatic X: u8 = 1;", false),
+            ("#[cfg_attr(no_mangle, allow(dead_code))]\nstatic X: u8 = 1;", false),
+            ("#[doc = \"no_mangle\"]\nstatic X: u8 = 1;", false),
+            ("#[allow(dead_code)]\nstatic X: u8 = 1;", false),
+            ("static X: u8 = 1;", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let item = first_of_kind(tree.root_node(), "static_item")
+                .expect("snippet should contain a static_item");
+            assert_eq!(
+                has_const_incompatible_attribute(item, src.as_bytes()),
+                expected,
+                "has_const_incompatible_attribute mismatch for `{src}`"
             );
         }
     }

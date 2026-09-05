@@ -17,11 +17,12 @@
 //! - skip if the static's address is taken (`&NAME`) in scope — a stable,
 //!   unique address is being relied upon (e.g. an FFI pointer handed to C),
 //!   which a `const` inlined at each use site would not provide.
-//! - skip if the static carries a symbol-export attribute (`#[no_mangle]`,
-//!   `#[export_name = "…"]`, `#[link_section = "…"]`, including the edition-2024
-//!   `#[unsafe(…)]` wrapper): each pins a real, uniquely-addressed linker/FFI
-//!   symbol, which a `const` (inlined, with no address and no symbol) cannot
-//!   carry, so the transformation is invalid.
+//! - skip if the static carries an attribute a `const` cannot (`#[no_mangle]`,
+//!   `#[export_name = "…"]`, `#[link_section = "…"]`, `#[used]`, including
+//!   through the edition-2024 `#[unsafe(…)]` wrapper and a `#[cfg_attr(…)]`):
+//!   each pins a real, uniquely-addressed linker/FFI symbol, which a `const`
+//!   (inlined, with no address and no symbol) cannot carry, so the
+//!   transformation is invalid.
 //!
 //! A function-local `static` stays in scope. Its address is reserved in the
 //! same rodata section as a module-level one, so `const` removes the same
@@ -31,7 +32,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cfg_test_gates_compilation, has_symbol_export_attribute, is_in_test_macro_fn,
+    cfg_test_gates_compilation, has_const_incompatible_attribute, is_in_test_macro_fn,
     is_test_only_rust_file,
 };
 
@@ -92,12 +93,12 @@ impl AstCheck for Check {
         if is_test_only(node, ctx) {
             return;
         }
-        // A static carrying a symbol-export attribute defines a real,
-        // uniquely-addressed linker/FFI symbol (jemalloc `malloc_conf`, a CRT
-        // init pointer, a `#[no_mangle]` C entry point). A `const` is inlined at
-        // each use site with no address and no symbol, so the compiler rejects
-        // these attributes on it — the suggested rewrite is invalid.
-        if has_symbol_export_attribute(node, source) {
+        // A static carrying a symbol-export or symbol-retention attribute owns a
+        // real, uniquely-addressed linker/FFI symbol (jemalloc `malloc_conf`, a
+        // CRT init pointer, a `#[used]` linker-section entry). A `const` is
+        // inlined at each use site with no address and no symbol, so the
+        // compiler rejects these attributes on it — the rewrite is invalid.
+        if has_const_incompatible_attribute(node, source) {
             return;
         }
         let name = node
@@ -523,6 +524,39 @@ mod tests {
         // at build time with a real address for its statics.
         assert_eq!(run_on_crate_file("src/test/mod.rs").len(), 1);
         assert_eq!(run_on_crate_file("build.rs").len(), 1);
+    }
+
+    #[test]
+    fn allows_static_carrying_the_used_attribute() {
+        // `#[used]` orders the linker to retain the symbol, so it demands a real
+        // static; rustc rejects it on a `const` and the suggested rewrite would
+        // not compile.
+        assert!(run_on("#[used] static FOO: u8 = 1;").is_empty());
+        assert!(run_on("#[unsafe(used)] static BAR: u8 = 1;").is_empty());
+    }
+
+    #[test]
+    fn allows_static_whose_export_attribute_is_applied_through_cfg_attr() {
+        // The attribute applies in some build configuration, where the `const`
+        // rewrite does not compile — which configurations are active is not
+        // decidable from the crate's own source.
+        for attribute in [
+            "#[cfg_attr(unix, no_mangle)]",
+            r#"#[cfg_attr(feature = "ffi", export_name = "y")]"#,
+            r#"#[cfg_attr(unix, unsafe(link_section = ".z"))]"#,
+            "#[cfg_attr(unix, used)]",
+        ] {
+            let src = format!("{attribute} static X: u8 = 1;");
+            assert!(run_on(&src).is_empty(), "{attribute} must exempt the static");
+        }
+    }
+
+    #[test]
+    fn flags_static_whose_cfg_attr_applies_an_unrelated_attribute() {
+        // `cfg_attr` is read for the attribute it applies, not as a blanket
+        // exemption: `allow(dead_code)` leaves `const` a valid rewrite.
+        let src = "#[cfg_attr(unix, allow(dead_code))] static X: u8 = 1;";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
