@@ -2,7 +2,13 @@ use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_string_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{CallExpression, Expression};
+use oxc_span::GetSpan;
 use std::sync::Arc;
+
+/// Matchers that compare their two operands structurally. Sorting both operands
+/// canonicalises them for that comparison; `toBe` (reference identity) and the
+/// snapshot matchers make no such use of an ordering.
+const DEEP_EQUALITY_MATCHERS: &[&str] = &["toEqual", "toStrictEqual", "toMatchObject"];
 
 /// Whether `call` is a `.sort()` invoked with no comparator.
 fn is_comparator_less_sort(call: &CallExpression) -> bool {
@@ -11,6 +17,103 @@ fn is_comparator_less_sort(call: &CallExpression) -> bool {
             &call.callee,
             Expression::StaticMemberExpression(member) if member.property.name.as_str() == "sort"
         )
+}
+
+/// Whether computing `expr` runs a comparator-less `.sort()`: the expression
+/// itself, or one anywhere in the receiver chain or arguments it is built from
+/// (`a.map(f).sort()`, `a.sort().join('')`).
+fn computes_comparator_less_sort(expr: &Expression) -> bool {
+    match expr {
+        Expression::CallExpression(call) => {
+            is_comparator_less_sort(call)
+                || match &call.callee {
+                    Expression::StaticMemberExpression(member) => {
+                        computes_comparator_less_sort(&member.object)
+                    }
+                    Expression::ComputedMemberExpression(member) => {
+                        computes_comparator_less_sort(&member.object)
+                    }
+                    _ => false,
+                }
+                || call
+                    .arguments
+                    .iter()
+                    .filter_map(|arg| arg.as_expression())
+                    .any(computes_comparator_less_sort)
+        }
+        Expression::StaticMemberExpression(member) => {
+            computes_comparator_less_sort(&member.object)
+        }
+        Expression::ComputedMemberExpression(member) => {
+            computes_comparator_less_sort(&member.object)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            computes_comparator_less_sort(&paren.expression)
+        }
+        Expression::AwaitExpression(await_expr) => {
+            computes_comparator_less_sort(&await_expr.argument)
+        }
+        Expression::TSAsExpression(as_expr) => computes_comparator_less_sort(&as_expr.expression),
+        Expression::TSSatisfiesExpression(sat) => computes_comparator_less_sort(&sat.expression),
+        Expression::TSNonNullExpression(nn) => computes_comparator_less_sort(&nn.expression),
+        _ => false,
+    }
+}
+
+/// The value handed to `expect(…)` at the root of a matcher chain, whatever
+/// modifiers (`.not`, `.resolves`, `.rejects`) sit between it and the matcher.
+fn expect_operand<'a>(callee_object: &'a Expression<'a>) -> Option<&'a Expression<'a>> {
+    match callee_object {
+        Expression::CallExpression(call)
+            if matches!(&call.callee, Expression::Identifier(id) if id.name.as_str() == "expect") =>
+        {
+            call.arguments.first().and_then(|arg| arg.as_expression())
+        }
+        Expression::StaticMemberExpression(member) => expect_operand(&member.object),
+        _ => None,
+    }
+}
+
+/// Whether the comparator-less `.sort()` at `call` faces another comparator-less
+/// `.sort()` across a deep-equality assertion.
+///
+/// Both operands then go through the *same* default comparator, so whatever
+/// order it produces it produces identically on both sides: the sort is a
+/// canonical form for a structural comparison of two collections whose order is
+/// unspecified, not a claim about ordering, and the lexicographic surprise this
+/// rule warns about cannot change the assertion's outcome. The pairing itself is
+/// the evidence, so no test-path heuristic is involved, and it holds for both
+/// operands — each one sees the other.
+fn paired_across_equality_assertion<'a>(
+    call: &CallExpression<'a>,
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    semantic.nodes().ancestors(node.id()).any(|ancestor| {
+        let AstKind::CallExpression(matcher) = ancestor.kind() else {
+            return false;
+        };
+        let Expression::StaticMemberExpression(callee) = &matcher.callee else {
+            return false;
+        };
+        if !DEEP_EQUALITY_MATCHERS.contains(&callee.property.name.as_str()) {
+            return false;
+        }
+        let (Some(actual), Some(expected)) = (
+            expect_operand(&callee.object),
+            matcher.arguments.first().and_then(|arg| arg.as_expression()),
+        ) else {
+            return false;
+        };
+        let opposite = if actual.span().contains_inclusive(call.span) {
+            expected
+        } else if expected.span().contains_inclusive(call.span) {
+            actual
+        } else {
+            return false;
+        };
+        computes_comparator_less_sort(opposite)
+    })
 }
 
 pub struct Check;
@@ -45,6 +148,9 @@ impl OxcCheck for Check {
         // rule targets cannot occur, and the remediation it advises (`(a, b) =>
         // a - b`) does not apply.
         if expression_is_string_array(&member.object, semantic) {
+            return;
+        }
+        if paired_across_equality_assertion(call, node, semantic) {
             return;
         }
         // `<expr>.searchParams` is the spec-defined `URL.prototype.searchParams`
@@ -153,6 +259,58 @@ mod tests {
         // A `.<prop>.sort()` receiver whose property isn't `searchParams` is still
         // an unknown (likely array) receiver — the footgun applies.
         assert_eq!(run_on("foo.bar.sort();").len(), 1);
+    }
+
+    // --- Both operands of a deep-equality assertion sorted (#8138) ---
+
+    #[test]
+    fn allows_both_operands_sorted_in_to_equal() {
+        let src = "expect(entries.sort()).toEqual(keyValues.sort());";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_both_operands_sorted_through_transforms() {
+        let src = "expect(entries.map(([k, [v, d]]) => [k, d]).sort()).toEqual(terms.map(t => [t, dist(t)]).filter(([, d]) => d <= max).sort());";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_both_operands_sorted_in_to_strict_equal() {
+        let src = "expect(a.sort()).toStrictEqual(b.sort());";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_both_operands_sorted_through_not_modifier() {
+        let src = "expect(a.sort()).not.toEqual(b.sort());";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A literal expected value encodes an ordering claim, so the single sorted
+    // operand is still asserting the order the default comparator produced.
+    #[test]
+    fn flags_sort_against_literal_expectation() {
+        assert_eq!(run_on("expect(a.sort()).toEqual([1, 2, 10]);").len(), 1);
+    }
+
+    // The opposite operand carries a comparator, so it is not the same
+    // canonicalisation applied twice.
+    #[test]
+    fn flags_bare_sort_facing_compared_sort() {
+        let src = "expect(a.sort((x, y) => x - y)).toEqual(b.sort());";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // `toBe` compares references, so sorting proves nothing about the outcome.
+    #[test]
+    fn flags_both_operands_sorted_in_to_be() {
+        assert_eq!(run_on("expect(a.sort()).toBe(b.sort());").len(), 2);
+    }
+
+    #[test]
+    fn flags_sort_outside_any_assertion() {
+        assert_eq!(run_on("const out = items.sort(); use(out);").len(), 1);
     }
 
     // --- Receiver proven `string[]` (#6356) ---
