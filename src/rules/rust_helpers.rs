@@ -1176,8 +1176,266 @@ pub fn file_references_db_crate(node: Node, source: &[u8]) -> bool {
 }
 
 /// True if `name` is one of [`DB_CRATES`].
-fn is_db_crate(name: &str) -> bool {
+pub fn is_db_crate(name: &str) -> bool {
     DB_CRATES.contains(&name)
+}
+
+/// Where the crate that declares a type sits, relative to the crate being
+/// linted. Read off the file's `use` graph, its generic bounds and its own type
+/// declarations — never off a user-chosen binding name, since `reqwest::Client`
+/// and `tokio_postgres::Client` share a type name and differ only by the crate
+/// they hang off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeOrigin {
+    /// A crate other than the one being linted, spelled as Rust paths spell it
+    /// (`tokio_postgres`, never `tokio-postgres`).
+    ExternalCrate(String),
+    /// The crate being linted: a `crate::`/`self::`/`super::` binding, or a type
+    /// the file declares itself. Carries the local type name, the key that
+    /// reaches the declaring module through the crate's import graph.
+    CrateLocal(String),
+    /// Nothing in the file resolves the name — a prelude type, a type behind an
+    /// unresolvable glob import, or a macro-generated one.
+    Unresolved,
+}
+
+/// The origin of every type name the declared type of `receiver` mentions —
+/// the type itself and its generic arguments, so an `Arc<PgPool>` answers for
+/// `PgPool` as much as for `Arc`.
+///
+/// Empty when the file declares no type for the receiver: the answer is then
+/// unknown, which is not the same as [`TypeOrigin::Unresolved`] (a named type
+/// nothing in the file binds).
+pub fn receiver_type_origins(receiver: Node, source: &[u8]) -> Vec<TypeOrigin> {
+    let Some(declared) = receiver_declared_type(receiver, source) else {
+        return Vec::new();
+    };
+    let mut leaves = Vec::new();
+    collect_use_leaves(root_node(receiver), source, &mut leaves);
+    type_path_tokens(&declared)
+        .into_iter()
+        .flat_map(|path| type_path_origins(receiver, source, &leaves, path, 0))
+        .collect()
+}
+
+/// How many generic-parameter bounds deep the origin walk goes. Two parameters
+/// can bound each other (`T: Into<U>, U: Into<T>`), so the walk needs a stop.
+const TYPE_PARAMETER_BOUND_MAX_DEPTH: usize = 4;
+
+/// Rust keywords a type can contain that name no type.
+const TYPE_KEYWORDS: &[&str] = &["dyn", "impl", "mut", "as", "for", "where"];
+
+/// The declared type of the place `receiver` names, as the file writes it
+/// (`&Arc<PgPool>`), or `None` when the file declares none.
+///
+/// - `self` is the enclosing `impl` block's target type;
+/// - an identifier resolves through [`find_identifier_type`] — a parameter or an
+///   annotated `let`;
+/// - a field access resolves its base first, then reads the field off the
+///   `struct_item` of that type when the file declares it;
+/// - a method call answers with the declared type of the chain's own receiver: a
+///   value derived from a database handle is one, a value derived from an HTTP
+///   client is not.
+fn receiver_declared_type(receiver: Node, source: &[u8]) -> Option<String> {
+    match receiver.kind() {
+        "self" => enclosing_impl_self_type(receiver, source),
+        "identifier" => {
+            let name = receiver.utf8_text(source).ok()?;
+            find_identifier_type(receiver, name, source)
+        }
+        "field_expression" => {
+            let field = receiver
+                .child_by_field_name("field")?
+                .utf8_text(source)
+                .ok()?;
+            let base = receiver.child_by_field_name("value")?;
+            let base_type = receiver_declared_type(base, source)?;
+            let struct_name = base_type_name(strip_reference_prefix(&base_type));
+            let struct_item = find_struct_item(receiver, struct_name, source)?;
+            let declared = struct_field_type_node(struct_item, field, source)?;
+            declared.utf8_text(source).ok().map(str::to_string)
+        }
+        "call_expression" => {
+            let function = receiver.child_by_field_name("function")?;
+            if function.kind() != "field_expression" {
+                return None;
+            }
+            receiver_declared_type(function.child_by_field_name("value")?, source)
+        }
+        "try_expression"
+        | "await_expression"
+        | "parenthesized_expression"
+        | "reference_expression" => receiver_declared_type(receiver.named_child(0)?, source),
+        _ => None,
+    }
+}
+
+/// The type paths a declared type mentions, outermost first: the type itself and
+/// every generic argument (`&'a Arc<sqlx::PgPool>` → `["Arc", "sqlx::PgPool"]`).
+/// Lifetimes name no type and are skipped, as are the keywords a type may carry
+/// (`&dyn Executor` → `["Executor"]`).
+fn type_path_tokens(type_text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut in_lifetime = false;
+    let mut chars = type_text.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if in_lifetime {
+            if is_type_path_char(ch) {
+                continue;
+            }
+            in_lifetime = false;
+        }
+        if ch == '\'' {
+            push_type_path_token(&mut tokens, type_text, &mut start, idx);
+            in_lifetime = true;
+        } else if is_type_path_char(ch) {
+            start.get_or_insert(idx);
+        } else if ch == ':' && start.is_some() && chars.peek().is_some_and(|&(_, c)| c == ':') {
+            // `::` continues the path token it separates.
+            chars.next();
+        } else {
+            push_type_path_token(&mut tokens, type_text, &mut start, idx);
+        }
+    }
+    push_type_path_token(&mut tokens, type_text, &mut start, type_text.len());
+    tokens
+}
+
+fn is_type_path_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// Close the token started at `*start` and push it, unless it names no type.
+fn push_type_path_token<'a>(
+    tokens: &mut Vec<&'a str>,
+    text: &'a str,
+    start: &mut Option<usize>,
+    end: usize,
+) {
+    let Some(begin) = start.take() else {
+        return;
+    };
+    let token = text[begin..end].trim_end_matches(':');
+    if !token.is_empty() && !TYPE_KEYWORDS.contains(&token) {
+        tokens.push(token);
+    }
+}
+
+/// The origins the type path `path` resolves to in the file containing `node`.
+///
+/// A qualified path answers on its own — `tonic::transport::Channel` hangs off
+/// `tonic`. A bare name is resolved through the file's `use` leaves, then as a
+/// generic type parameter (whose trait bounds carry the provenance the parameter
+/// hides, `db: &C where C: ConnectionTrait`), then as a type the file declares
+/// itself, and finally through a glob import. Several origins come back when
+/// several `use` leaves bind the name.
+fn type_path_origins(
+    node: Node,
+    source: &[u8],
+    leaves: &[UsePathLeaf],
+    path: &str,
+    depth: usize,
+) -> Vec<TypeOrigin> {
+    if let Some((root, _)) = path.split_once("::") {
+        return vec![path_root_origin(root, base_type_name(path))];
+    }
+
+    let explicit: Vec<TypeOrigin> = leaves
+        .iter()
+        .filter(|leaf| leaf.local == path)
+        .map(|leaf| path_root_origin(leaf.module.first().map_or(path, String::as_str), path))
+        .collect();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+
+    if depth < TYPE_PARAMETER_BOUND_MAX_DEPTH {
+        let bounds = type_parameter_bound_paths(node, source, path);
+        if !bounds.is_empty() {
+            return bounds
+                .iter()
+                .flat_map(|bound| type_path_origins(node, source, leaves, bound, depth + 1))
+                .collect();
+        }
+    }
+
+    if find_named_type_item(node, path, source).is_some() {
+        return vec![TypeOrigin::CrateLocal(path.to_string())];
+    }
+
+    let globs: Vec<TypeOrigin> = leaves
+        .iter()
+        .filter(|leaf| leaf.local == "*")
+        .map(|leaf| path_root_origin(leaf.module.first().map_or(path, String::as_str), path))
+        .collect();
+    if !globs.is_empty() {
+        return globs;
+    }
+
+    vec![TypeOrigin::Unresolved]
+}
+
+/// The origin a path's leftmost segment names: the three module keywords stay
+/// inside the crate being linted, anything else is a crate of its own.
+fn path_root_origin(root: &str, name: &str) -> TypeOrigin {
+    if matches!(root, "crate" | "self" | "super" | "Self") {
+        TypeOrigin::CrateLocal(name.to_string())
+    } else {
+        TypeOrigin::ExternalCrate(root.to_string())
+    }
+}
+
+/// The type paths bounding the generic parameter `name`, taken from every
+/// enclosing `impl`/`fn` — both the inline form (`<C: ConnectionTrait>`) and the
+/// `where` clause. Empty when no enclosing item declares such a parameter.
+fn type_parameter_bound_paths(node: Node, source: &[u8], name: &str) -> Vec<String> {
+    let mut bounds = Vec::new();
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if matches!(ancestor.kind(), "function_item" | "impl_item") {
+            collect_type_parameter_bounds(ancestor, source, name, &mut bounds);
+        }
+        current = ancestor.parent();
+    }
+    bounds
+}
+
+/// Append the bound type paths `item` declares for the generic parameter `name`.
+fn collect_type_parameter_bounds(item: Node, source: &[u8], name: &str, out: &mut Vec<String>) {
+    let mut params_cursor = item.walk();
+    if let Some(params) = item.child_by_field_name("type_parameters") {
+        for param in params.named_children(&mut params_cursor) {
+            if param.kind() == "type_parameter"
+                && named_child_text(param, "name", source) == Some(name)
+                && let Some(bounds) = param.child_by_field_name("bounds")
+                && let Ok(text) = bounds.utf8_text(source)
+            {
+                out.extend(type_path_tokens(text).into_iter().map(str::to_string));
+            }
+        }
+    }
+    let mut item_cursor = item.walk();
+    let mut predicate_cursor = item.walk();
+    for child in item.named_children(&mut item_cursor) {
+        if child.kind() != "where_clause" {
+            continue;
+        }
+        for predicate in child.named_children(&mut predicate_cursor) {
+            if predicate.kind() == "where_predicate"
+                && named_child_text(predicate, "left", source) == Some(name)
+                && let Some(bounds) = predicate.child_by_field_name("bounds")
+                && let Ok(text) = bounds.utf8_text(source)
+            {
+                out.extend(type_path_tokens(text).into_iter().map(str::to_string));
+            }
+        }
+    }
+}
+
+/// The text of `node`'s `field` child, when it has one.
+fn named_child_text<'a>(node: Node, field: &str, source: &'a [u8]) -> Option<&'a str> {
+    node.child_by_field_name(field)?.utf8_text(source).ok()
 }
 
 /// The leftmost segment of a plain `::`-separated path — the crate or root module
@@ -8686,16 +8944,28 @@ fn strip_reference_prefix(type_text: &str) -> &str {
     }
 }
 
-/// The first `struct_item` named `name` in the file containing `node`, or `None`.
-fn find_struct_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
+/// Item kinds that declare a named type.
+const TYPE_ITEM_KINDS: &[&str] = &[
+    "struct_item",
+    "enum_item",
+    "union_item",
+    "type_item",
+    "trait_item",
+];
+
+/// The first item of one of `kinds` named `name` in the file containing `node`,
+/// or `None`.
+fn find_named_item<'a>(
+    node: Node<'a>,
+    name: &str,
+    source: &[u8],
+    kinds: &[&str],
+) -> Option<Node<'a>> {
+    let root = root_node(node);
     let mut cursor = root.walk();
     let mut stack = vec![root];
     while let Some(current) = stack.pop() {
-        if current.kind() == "struct_item"
+        if kinds.contains(&current.kind())
             && current
                 .child_by_field_name("name")
                 .and_then(|name_node| name_node.utf8_text(source).ok())
@@ -8710,9 +8980,24 @@ fn find_struct_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Nod
     None
 }
 
-/// The declared type-name text of the field `field` in `struct_item`, when that
-/// field's type is a plain `type_identifier`, or `None`.
-fn struct_field_type(struct_item: Node, field: &str, source: &[u8]) -> Option<String> {
+/// The first item declaring a type named `name` — struct, enum, union, alias or
+/// trait — in the file containing `node`, or `None`.
+fn find_named_type_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
+    find_named_item(node, name, source, TYPE_ITEM_KINDS)
+}
+
+/// The first `struct_item` named `name` in the file containing `node`, or `None`.
+fn find_struct_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
+    find_named_item(node, name, source, &["struct_item"])
+}
+
+/// The declared type node of the field `field` in `struct_item`, or `None` when
+/// the struct declares no such field.
+fn struct_field_type_node<'a>(
+    struct_item: Node<'a>,
+    field: &str,
+    source: &[u8],
+) -> Option<Node<'a>> {
     let body = struct_item.child_by_field_name("body")?;
     let mut cursor = body.walk();
     for decl in body.named_children(&mut cursor) {
@@ -8726,13 +9011,19 @@ fn struct_field_type(struct_item: Node, field: &str, source: &[u8]) -> Option<St
         {
             continue;
         }
-        let type_node = decl.child_by_field_name("type")?;
-        if type_node.kind() != "type_identifier" {
-            return None;
-        }
-        return type_node.utf8_text(source).ok().map(str::to_string);
+        return decl.child_by_field_name("type");
     }
     None
+}
+
+/// The declared type-name text of the field `field` in `struct_item`, when that
+/// field's type is a plain `type_identifier`, or `None`.
+fn struct_field_type(struct_item: Node, field: &str, source: &[u8]) -> Option<String> {
+    let type_node = struct_field_type_node(struct_item, field, source)?;
+    if type_node.kind() != "type_identifier" {
+        return None;
+    }
+    type_node.utf8_text(source).ok().map(str::to_string)
 }
 
 /// True when `impl_item`'s `Drop` target struct, defined in the same file,
@@ -8971,26 +9262,7 @@ fn self_enum_is_fieldless(node: Node, source: &[u8]) -> bool {
 
 /// The first `enum_item` named `name` in the file containing `node`, or `None`.
 fn find_enum_item<'a>(node: Node<'a>, name: &str, source: &[u8]) -> Option<Node<'a>> {
-    let mut root = node;
-    while let Some(parent) = root.parent() {
-        root = parent;
-    }
-    let mut cursor = root.walk();
-    let mut stack = vec![root];
-    while let Some(current) = stack.pop() {
-        if current.kind() == "enum_item"
-            && current
-                .child_by_field_name("name")
-                .and_then(|name_node| name_node.utf8_text(source).ok())
-                == Some(name)
-        {
-            return Some(current);
-        }
-        for child in current.children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-    None
+    find_named_item(node, name, source, &["enum_item"])
 }
 
 /// True if `enum_item` is fieldless — no variant carries a payload. A payload is
@@ -13861,6 +14133,139 @@ mod tests {
                 file_references_db_crate(function, src.as_bytes()),
                 *expected,
                 "file_references_db_crate mismatch for `{src}`"
+            );
+        }
+    }
+
+    /// The receiver of the `probe()` call — the expression whose declared type
+    /// each [`receiver_type_origins`] case exercises.
+    fn probe_receiver<'a>(root: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
+        let mut cursor = root.walk();
+        let mut stack = vec![root];
+        while let Some(current) = stack.pop() {
+            if current.kind() == "call_expression"
+                && let Some(function) = current.child_by_field_name("function")
+                && function.kind() == "field_expression"
+                && named_child_text(function, "field", source) == Some("probe")
+            {
+                return function.child_by_field_name("value");
+            }
+            stack.extend(current.named_children(&mut cursor));
+        }
+        None
+    }
+
+    #[test]
+    fn receiver_type_origins_resolves_the_declaring_crate_per_receiver() {
+        fn external(name: &str) -> TypeOrigin {
+            TypeOrigin::ExternalCrate(name.to_string())
+        }
+        fn local(name: &str) -> TypeOrigin {
+            TypeOrigin::CrateLocal(name.to_string())
+        }
+
+        let cases: &[(&str, Vec<TypeOrigin>)] = &[
+            // Parameter declarations: imported, qualified, aliased, glob.
+            (
+                "use sqlx::PgPool;\nasync fn f(pool: &PgPool) { pool.probe().await; }",
+                vec![external("sqlx")],
+            ),
+            (
+                "use tonic::transport::Channel;\nasync fn f(client: &Channel) { client.probe().await; }",
+                vec![external("tonic")],
+            ),
+            (
+                "async fn f(client: &tokio_postgres::Client) { client.probe().await; }",
+                vec![external("tokio_postgres")],
+            ),
+            (
+                "use sqlx::PgPool as Db;\nasync fn f(pool: &Db) { pool.probe().await; }",
+                vec![external("sqlx")],
+            ),
+            (
+                "use sqlx::prelude::*;\nasync fn f(pool: &PgPool) { pool.probe().await; }",
+                vec![external("sqlx")],
+            ),
+            // A generic argument answers beside the type that carries it, so a
+            // handle behind `Arc`/`State` is still resolved.
+            (
+                "use std::sync::Arc;\nuse sqlx::PgPool;\nasync fn f(pool: Arc<PgPool>) { pool.probe().await; }",
+                vec![external("std"), external("sqlx")],
+            ),
+            // An annotated `let` declares the type as plainly as a parameter.
+            (
+                "use sqlx::PgPool;\nasync fn f() { let pool: PgPool = make(); pool.probe().await; }",
+                vec![external("sqlx")],
+            ),
+            // Field declarations, reached through the enclosing `impl` target.
+            (
+                "use tonic::transport::Channel;\nstruct G { client: Channel }\nimpl G { async fn f(&self) { self.client.probe().await; } }",
+                vec![external("tonic")],
+            ),
+            (
+                "use sqlx::PgPool;\nstruct G { pool: PgPool }\nimpl G { async fn f(&self) { self.pool.probe().await; } }",
+                vec![external("sqlx")],
+            ),
+            // A method chain answers with its own receiver's type.
+            (
+                "use tonic::transport::Channel;\nasync fn f(client: &Channel) { client.ready().probe().await; }",
+                vec![external("tonic")],
+            ),
+            // The linted crate's own types, imported or declared in the file.
+            (
+                "use crate::db::DbPool;\nasync fn f(pool: &DbPool) { pool.probe().await; }",
+                vec![local("DbPool")],
+            ),
+            (
+                "struct DbPool;\nasync fn f(pool: &DbPool) { pool.probe().await; }",
+                vec![local("DbPool")],
+            ),
+            // A generic parameter has no type of its own; its bounds carry the
+            // provenance, inline or in a `where` clause.
+            (
+                "use crate::ConnectionTrait;\nasync fn f<C: ConnectionTrait>(db: &C) { db.probe().await; }",
+                vec![local("ConnectionTrait")],
+            ),
+            (
+                "use sea_orm::ConnectionTrait;\nasync fn f<C>(db: &C) where C: ConnectionTrait { db.probe().await; }",
+                vec![external("sea_orm")],
+            ),
+            // A named type nothing in the file binds stays unresolved…
+            (
+                "async fn f(pool: &Whatever) { pool.probe().await; }",
+                vec![TypeOrigin::Unresolved],
+            ),
+            // …which is not the same as a receiver the file declares no type for.
+            ("async fn f() { pool.probe().await; }", vec![]),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let receiver = probe_receiver(tree.root_node(), src.as_bytes())
+                .expect("snippet should contain a `probe()` call");
+            assert_eq!(
+                receiver_type_origins(receiver, src.as_bytes()),
+                *expected,
+                "receiver_type_origins mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn type_path_tokens_reads_type_names_only() {
+        let cases: &[(&str, &[&str])] = &[
+            ("&PgPool", &["PgPool"]),
+            ("&'a mut PgPool", &["PgPool"]),
+            ("Arc<sqlx::PgPool>", &["Arc", "sqlx::PgPool"]),
+            ("&dyn Executor", &["Executor"]),
+            ("impl Iterator<Item = Row>", &["Iterator", "Item", "Row"]),
+            ("Vec::<PgRow>", &["Vec", "PgRow"]),
+            (": ConnectionTrait + Send", &["ConnectionTrait", "Send"]),
+        ];
+        for (type_text, expected) in cases {
+            assert_eq!(
+                type_path_tokens(type_text),
+                *expected,
+                "type_path_tokens mismatch for `{type_text}`"
             );
         }
     }
