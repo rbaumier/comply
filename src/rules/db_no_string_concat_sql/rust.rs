@@ -405,4 +405,27 @@ fn t() { let q = format!("SELECT id FROM t WHERE file_id = '{file_id}'"); }"#;
         let src = r#"fn q(file_id: &str) -> String { format!("SELECT id FROM t WHERE file_id = '{file_id}'") }"#;
         assert_eq!(run_on(src).len(), 1);
     }
+
+    // Issue #8088 (risingwave src/frontend/src/expr/type_inference/func.rs:667) —
+    // a `BindError` message where `delete` and `from` are ordinary words. The
+    // verb sits mid-sentence, so the message is not a statement.
+    #[test]
+    fn repro_8088_delete_from_prose_in_error_message_not_flagged() {
+        let src = r#"fn f(inputs: &[Ty]) -> Result<Ty, ErrorCode> {
+    Err(ErrorCode::BindError(format!(
+        "Cannot delete {} from {}",
+        inputs[1].return_type(),
+        inputs[0].return_type(),
+    )))
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    // Negative space: a real statement-opening DELETE with a
+    // value-position interpolation keeps firing.
+    #[test]
+    fn flags_value_in_delete_where_clause() {
+        let src = r#"fn f(id: i32) { let q = format!("DELETE FROM logs WHERE id = {}", id); }"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
 }

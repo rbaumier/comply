@@ -30,6 +30,12 @@
 //! update X from Y" (`update` with no `SET`) or Prisma JSDoc
 //! containing `update`/`where`/`create` API method names.
 //!
+//! The verb must also *open a statement*: a query starts with its verb,
+//! so the verb match has to sit at the head of the string or right after
+//! a statement boundary, never mid-sentence. This rejects prose that
+//! mentions a verb in passing — "Cannot delete {} from {}", "present in
+//! both removal set and update set".
+//!
 //! The text *between* the verb and its clause must also be shaped like
 //! a SQL projection/target rather than English prose: a column list,
 //! qualified name, function call or single column reference — never a
@@ -92,15 +98,52 @@ const DML_STATEMENT_SHAPES: &[(&str, &str)] = &[
 /// of these is still one projection item, not free-form prose.
 const PROJECTION_KEYWORDS: &[&str] = &["distinct", "all", "as"];
 
-/// Returns true if `text` looks like a SQL query. Requires a DML verb
-/// followed (in token order) by its mandatory companion clause keyword
-/// — `SELECT … FROM`, `DELETE … FROM`, `INSERT … INTO`, `UPDATE … SET`
-/// — with the text between them shaped like a SQL projection/target
-/// rather than English prose. Word-boundary matching means identifiers
-/// containing the keywords don't trigger, the ordering requirement
-/// rejects prose that mentions the keywords out of clause structure,
-/// and the projection-shape requirement rejects sentences whose words
-/// happen to span `select … from`.
+/// Characters that close a statement boundary, so a DML verb right after one
+/// still opens a statement:
+/// - `"`, `'`, `` ` `` — the literal's own delimiter, since the AST backends
+///   hand over the quoted source text of a string node (`"SELECT …"`,
+///   `r#"DELETE …"#`)
+/// - a line break and `;` — statement separators
+/// - `(` and `)` — around a subquery (`… IN (SELECT …`) or a CTE list
+///   (`WITH t AS (…) SELECT …`)
+const STATEMENT_BOUNDARY_CHARS: &[u8] = b"\"'`\r\n;()";
+
+/// SQL keywords that may sit immediately before a DML verb, because the verb
+/// still opens a statement or sub-statement after them:
+/// - `AS` — `CREATE VIEW v AS SELECT …`, `CREATE TABLE t AS SELECT …`,
+///   `PREPARE p AS SELECT …`
+/// - `UNION` / `ALL` / `INTERSECT` / `EXCEPT` / `MINUS` — set operators
+///   joining two branches (`… UNION ALL SELECT …`)
+/// - `EXPLAIN` / `ANALYZE` / `VERBOSE` — statement prefixes
+/// - `LATERAL` — `… JOIN LATERAL SELECT …`
+/// - `THEN` — `MERGE … WHEN MATCHED THEN UPDATE SET …`
+/// - `DO` — `INSERT … ON CONFLICT DO UPDATE SET …`
+const STATEMENT_PREFIX_KEYWORDS: &[&str] = &[
+    "as",
+    "union",
+    "all",
+    "intersect",
+    "except",
+    "minus",
+    "explain",
+    "analyze",
+    "verbose",
+    "lateral",
+    "then",
+    "do",
+];
+
+/// Returns true if `text` looks like a SQL query. Requires a
+/// statement-opening DML verb followed (in token order) by its mandatory
+/// companion clause keyword — `SELECT … FROM`, `DELETE … FROM`,
+/// `INSERT … INTO`, `UPDATE … SET` — with the text between them shaped
+/// like a SQL projection/target rather than English prose.
+/// Word-boundary matching means identifiers containing the keywords
+/// don't trigger, the ordering requirement rejects prose that mentions
+/// the keywords out of clause structure, the statement-opening
+/// requirement rejects a verb used mid-sentence, and the
+/// projection-shape requirement rejects sentences whose words happen to
+/// span `select … from`.
 pub fn is_sql_string(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     DML_STATEMENT_SHAPES
@@ -109,26 +152,68 @@ pub fn is_sql_string(text: &str) -> bool {
 }
 
 /// Whether `lower` (already lowercase) contains the `verb … clause` DML shape:
-/// a whole-word `verb` followed by a whole-word `clause`, with the text between
-/// them shaped like a SQL projection/target rather than English prose.
+/// a whole-word `verb` that opens a statement, followed by a whole-word
+/// `clause`, with the text between them shaped like a SQL projection/target
+/// rather than English prose.
+///
+/// Every occurrence of the verb is a candidate, so a prose mention earlier in
+/// the string ("Cannot delete X from Y; ") cannot mask a real statement that
+/// follows it.
 fn dml_shape_matches(lower: &str, verb: &str, clause: &str) -> bool {
-    let Some((_, verb_end)) = find_word(lower, verb, 0) else {
-        return false;
-    };
-    let Some((clause_start, _)) = find_word(lower, clause, verb_end) else {
-        return false;
-    };
-    let mut projection = &lower[verb_end..clause_start];
-    // A `SELECT <cols> INTO <target> FROM …` — PL/pgSQL variable assignment or
-    // `SELECT INTO` table creation — carries an INTO clause between the columns
-    // and FROM. Only the column list before INTO is a projection; the target
-    // after it is a table/variable name and must not be shape-checked as prose.
-    if verb == "select"
-        && let Some((into_start, _)) = find_word(projection, "into", 0)
-    {
-        projection = &projection[..into_start];
+    let mut search_from = 0;
+    while let Some((verb_start, verb_end)) = find_word(lower, verb, search_from) {
+        search_from = verb_end;
+        if !verb_opens_statement(lower, verb_start) {
+            continue;
+        }
+        // No companion clause after this verb means none after any later one
+        // either, since every later occurrence starts past `verb_end`.
+        let Some((clause_start, _)) = find_word(lower, clause, verb_end) else {
+            return false;
+        };
+        let mut projection = &lower[verb_end..clause_start];
+        // A `SELECT <cols> INTO <target> FROM …` — PL/pgSQL variable assignment
+        // or `SELECT INTO` table creation — carries an INTO clause between the
+        // columns and FROM. Only the column list before INTO is a projection;
+        // the target after it is a table/variable name and must not be
+        // shape-checked as prose.
+        if verb == "select"
+            && let Some((into_start, _)) = find_word(projection, "into", 0)
+        {
+            projection = &projection[..into_start];
+        }
+        if span_is_projection_shaped(projection) {
+            return true;
+        }
     }
-    span_is_projection_shaped(projection)
+    false
+}
+
+/// Whether the DML verb at byte offset `verb_start` in `lower` opens a
+/// statement — a query starts with its verb, whereas prose reaches the verb
+/// after ordinary words ("Cannot delete …", "… and update set").
+///
+/// The verb opens a statement when nothing but spaces precedes it, when the
+/// preceding non-space character closes a statement boundary
+/// (`STATEMENT_BOUNDARY_CHARS`), or when the preceding word is a SQL keyword
+/// that a statement may follow (`STATEMENT_PREFIX_KEYWORDS`).
+fn verb_opens_statement(lower: &str, verb_start: usize) -> bool {
+    let head = lower[..verb_start].trim_end_matches([' ', '\t']);
+    let Some(last) = head.as_bytes().last() else {
+        return true;
+    };
+    if STATEMENT_BOUNDARY_CHARS.contains(last) {
+        return true;
+    }
+    if !is_ident_byte(*last) {
+        return false;
+    }
+    let word_start = head
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    STATEMENT_PREFIX_KEYWORDS.contains(&&head[word_start..])
 }
 
 /// `text` without a leading whole word `word`, or `None` when `text` does not
@@ -564,6 +649,62 @@ mod tests {
         // separates `read`/`only`, but `only fields` are whitespace-adjacent
         // plain words.
         assert!(!is_sql_string("Select read-only fields from the model"));
+    }
+
+    #[test]
+    fn rejects_dml_verb_used_mid_sentence_issue_8088() {
+        // risingwave func.rs BindError: "Cannot delete {} from {}" reads
+        // `delete`/`from` as ordinary words — the verb never opens a statement.
+        assert!(!is_sql_string("Cannot delete {} from {}"));
+        assert!(!is_sql_string("Cannot delete a field from a struct"));
+        assert!(!is_sql_string("we insert the value into the map"));
+    }
+
+    #[test]
+    fn accepts_quoted_literal_text_from_ast_backends() {
+        // The Rust and tree-sitter backends hand over the *quoted* source text
+        // of a string node, so the verb's statement boundary is the literal's
+        // own delimiter.
+        assert!(is_sql_string("\"SELECT * FROM users WHERE id = {}\""));
+        assert!(is_sql_string("r#\"DELETE FROM {table} WHERE id = $1\"#"));
+        assert!(is_sql_string("`UPDATE users SET name = ${name}`"));
+    }
+
+    #[test]
+    fn accepts_projection_reduced_to_an_interpolation_slot() {
+        // The oxc backends assemble a template literal's static text by joining
+        // the quasis with a space, so `` `SELECT ${cols} FROM users` `` reaches
+        // this predicate as `SELECT   FROM users`. A whitespace-only span
+        // between the keywords is an interpolation slot, not prose — treating
+        // it as prose would silence a real injection.
+        assert!(is_sql_string("SELECT   FROM users WHERE id =  "));
+        assert!(is_sql_string("UPDATE   SET name =  "));
+    }
+
+    #[test]
+    fn accepts_verb_after_statement_boundary_or_prefix_keyword() {
+        // Subquery / CTE parentheses, statement separators, line breaks and the
+        // keywords a statement may follow all leave the verb statement-opening.
+        assert!(is_sql_string(
+            "WITH d AS (DELETE FROM logs RETURNING id) SELECT id FROM d"
+        ));
+        assert!(is_sql_string("CREATE VIEW v AS SELECT id, name FROM users"));
+        assert!(is_sql_string("EXPLAIN ANALYZE SELECT id FROM users"));
+        assert!(is_sql_string("SELECT 1; UPDATE users SET active = false"));
+        assert!(is_sql_string("-- fetch the user\nSELECT id FROM users"));
+        assert!(is_sql_string(
+            "SELECT id FROM a UNION ALL SELECT id FROM b WHERE x = 1"
+        ));
+    }
+
+    #[test]
+    fn accepts_statement_that_follows_a_prose_mention_of_the_verb() {
+        // Every verb occurrence is a candidate, so a leading prose mention does
+        // not hide the real statement behind it — the dangerous direction of
+        // error for an injection rule.
+        assert!(is_sql_string(
+            "Cannot delete row from cache; DELETE FROM rows WHERE id = 1"
+        ));
     }
 
     #[test]
