@@ -69,7 +69,8 @@ impl OxcCheck for Check {
         // Operands that are not reproducible (e.g. `probe.entry(p)`, `f()`, `cache.get(k)`)
         // can return a different value on each of the two evaluations, so `.toBe`/`.toEqual`
         // on them is a meaningful identity/memoization assertion, not an always-true
-        // self-compare.
+        // self-compare. A call reaching no binding — `'a'.at(0)` — cannot vary, so it
+        // stays an always-true self-compare and is reported.
         let (Some(actual_expr), Some(expected_expr)) = (
             expect_call.arguments[0].as_expression(),
             call.arguments[0].as_expression(),
@@ -172,6 +173,13 @@ mod tests {
     #[test]
     fn allows_object_literals_holding_a_call() {
         assert!(run_test_file("  expect({ a: f() }).toEqual({ a: f() });").is_empty());
+    }
+
+    // A call whose callee and arguments reach no binding returns the same value
+    // twice, so asserting one against the other tests nothing (issue #8241).
+    #[test]
+    fn flags_identical_literal_rooted_call_operands() {
+        assert_eq!(run_test_file("  expect('a'.at(0)).toBe('a'.at(0));").len(), 1);
     }
 
     // Spreading an iterable drains it, so the two arrays hold different elements.

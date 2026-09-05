@@ -5,6 +5,12 @@
 //! [`oxc_helpers::expression_is_reproducible`](crate::oxc_helpers::expression_is_reproducible).
 //! `it.next().value && it.next().value` reads two different elements: the calls
 //! advance the iterator between the two reads.
+//!
+//! An operand may hold a call when that call is literal-rooted — its callee and
+//! its arguments reach no binding — as in `chCode !== " ".charCodeAt(0)`. That
+//! test is a conservative proxy for "this call cannot vary", so it answers
+//! asymmetrically on expressions that are equally reproducible: `xs[i] - xs[i]`
+//! is reported while `xs.at(i) - xs.at(i)` is not.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_reproducible};
@@ -217,5 +223,49 @@ mod tests {
     fn allows_spread_array_operands() {
         let src = r#"const ok = [...gen].length && [...gen].length;"#;
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Issue #8241 (rust-lang/rust-analyzer editors/code/src/snippets.ts): both
+    // literals are U+0020, the second should be a tab. Nothing in
+    // `" ".charCodeAt(0)` reaches a binding, so the two evaluations agree.
+    #[test]
+    fn flags_operands_holding_a_literal_rooted_call() {
+        let src = r#"const ws = chCode !== " ".charCodeAt(0) && chCode !== " ".charCodeAt(0);"#;
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // A non-primitive literal receiver is literal-rooted too: an implementation
+    // restricted to string/number/boolean receivers passes the test above and
+    // silently misses this one.
+    #[test]
+    fn flags_literal_rooted_call_on_an_array_literal() {
+        assert_eq!(run(r#"const ok = [1, 2].at(0) && [1, 2].at(0);"#).len(), 1);
+    }
+
+    #[test]
+    fn flags_literal_rooted_call_on_a_template_literal() {
+        assert_eq!(run(r#"const s = `ab`.slice(1) && `ab`.slice(1);"#).len(), 1);
+    }
+
+    // A regex literal builds a fresh object per evaluation, so `lastIndex`
+    // restarts at 0 and both calls match at the same place.
+    #[test]
+    fn flags_literal_rooted_regex_exec() {
+        assert_eq!(run(r#"const m = /a/g.exec("aa") && /a/g.exec("aa");"#).len(), 1);
+    }
+
+    // Issue #6853 regression guards: each of these calls reaches a binding, so
+    // the two evaluations can disagree.
+    #[test]
+    fn allows_calls_rooted_at_a_binding() {
+        for src in [
+            r#"const jitter = Math.random() - Math.random();"#,
+            r#"const drift = xs.at(i) - xs.at(i);"#,
+            r#"const same = Date.now() - Date.now();"#,
+            r#"const hit = cache.get(k) && cache.get(k);"#,
+            r#"const c = " ".charCodeAt(i) && " ".charCodeAt(i);"#,
+        ] {
+            assert!(run(src).is_empty(), "{src}: {:?}", run(src));
+        }
     }
 }

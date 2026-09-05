@@ -4638,16 +4638,31 @@ fn is_primitive_literal(expr: &oxc_ast::ast::Expression) -> bool {
     )
 }
 
+/// Whether a subtree may read a binding — an identifier, `this`, `super` or
+/// `import.meta` — and still count as reproducible.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingReads {
+    /// Reading a binding twice within one expression reads one value twice:
+    /// `chCode !== x && chCode !== x` compares the same `chCode` both times.
+    Allowed,
+    /// Inside a call's callee and arguments, where a binding is the channel
+    /// through which the first evaluation can change the second (`chars.next()`).
+    Denied,
+}
+
 /// True when `expr` reads the same value each time it is evaluated.
 ///
 /// Accepts literals, identifiers, meta properties, `this`, member access, array
 /// and object literals whose parts are themselves accepted, `await` on an
-/// accepted operand, and the operators over those; every other variant — a call, `new`,
-/// `yield`, `i++`, an assignment, a tagged template, a function or class
-/// expression — answers `false`, because its evaluation runs user code or moves
-/// state forward. The motivating case is `it.next().value && it.next().value`:
-/// the two calls read two different elements even though the source text
-/// matches.
+/// accepted operand, the operators over those, and a *literal-rooted* call —
+/// one whose callee and arguments reach no binding at all, so nothing can carry
+/// state from the first evaluation to the second (`" ".charCodeAt(0)`,
+/// `[1, 2].at(0)`, `` `ab`.slice(1) ``, `/a/g.exec("aa")`). Every other variant
+/// — a call reaching a binding, `new`, `yield`, `i++`, an assignment, a tagged
+/// template, a function or class expression — answers `false`, because its
+/// evaluation runs user code or moves state forward. The motivating case is
+/// `it.next().value && it.next().value`: the two calls read two different
+/// elements even though the source text matches.
 ///
 /// The answer is a syntactic approximation, on both sides:
 ///
@@ -4660,86 +4675,124 @@ fn is_primitive_literal(expr: &oxc_ast::ast::Expression) -> bool {
 /// - Array spread (`[...it]`) answers `false`: it drives the iterator protocol,
 ///   which is the very state advance this predicate exists to catch. Object
 ///   spread copies own properties, so it follows the getter line above.
+/// - Literal-rooted is a conservative proxy for "this call cannot vary", so it
+///   answers asymmetrically on expressions that are equally reproducible:
+///   `xs[i]` is accepted while `xs.at(i)` is not. It also assumes the builtins
+///   are the standard ones — patching a prototype
+///   (`String.prototype.charCodeAt = counter`) makes a literal-rooted call vary,
+///   which no syntactic linter can see.
 ///
 /// See [`rust_helpers::expression_is_reproducible`](crate::rules::rust_helpers::expression_is_reproducible)
 /// for why the whitelist direction is the sound one.
 #[must_use]
 pub fn expression_is_reproducible(expr: &oxc_ast::ast::Expression) -> bool {
+    expression_reads_one_value(expr, BindingReads::Allowed)
+}
+
+/// [`expression_is_reproducible`] over one accepted-form list, read under either
+/// binding policy: `BindingReads::Denied` turns the same recursion into the
+/// literal-rooted test a call has to pass.
+fn expression_reads_one_value(
+    expr: &oxc_ast::ast::Expression,
+    binding_reads: BindingReads,
+) -> bool {
     use oxc_ast::ast::{ArrayExpressionElement, ChainElement, Expression, ObjectPropertyKind};
+
+    let accepts = |inner: &Expression| expression_reads_one_value(inner, binding_reads);
 
     match expr {
         Expression::BigIntLiteral(_)
         | Expression::BooleanLiteral(_)
-        | Expression::Identifier(_)
-        | Expression::MetaProperty(_)
         | Expression::NullLiteral(_)
         | Expression::NumericLiteral(_)
         | Expression::RegExpLiteral(_)
-        | Expression::StringLiteral(_)
-        | Expression::Super(_)
-        | Expression::ThisExpression(_) => true,
+        | Expression::StringLiteral(_) => true,
 
-        Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(expression_is_reproducible),
-        Expression::SequenceExpression(seq) => seq.expressions.iter().all(expression_is_reproducible),
+        Expression::Identifier(_)
+        | Expression::MetaProperty(_)
+        | Expression::Super(_)
+        | Expression::ThisExpression(_) => binding_reads == BindingReads::Allowed,
+
+        Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(accepts),
+        Expression::SequenceExpression(seq) => seq.expressions.iter().all(accepts),
         Expression::ArrayExpression(array) => array.elements.iter().all(|element| match element {
             ArrayExpressionElement::SpreadElement(_) => false,
             ArrayExpressionElement::Elision(_) => true,
-            _ => element.as_expression().is_some_and(expression_is_reproducible),
+            _ => element.as_expression().is_some_and(accepts),
         }),
         Expression::ObjectExpression(object) => {
             object.properties.iter().all(|property| match property {
                 ObjectPropertyKind::ObjectProperty(entry) => {
-                    property_key_is_reproducible(&entry.key) && expression_is_reproducible(&entry.value)
+                    property_key_reads_one_value(&entry.key, binding_reads)
+                        && accepts(&entry.value)
                 }
-                ObjectPropertyKind::SpreadProperty(spread) => expression_is_reproducible(&spread.argument),
+                ObjectPropertyKind::SpreadProperty(spread) => accepts(&spread.argument),
             })
         }
-        Expression::ParenthesizedExpression(paren) => expression_is_reproducible(&paren.expression),
-        Expression::AwaitExpression(inner) => expression_is_reproducible(&inner.argument),
-        Expression::UnaryExpression(unary) => expression_is_reproducible(&unary.argument),
-        Expression::BinaryExpression(bin) => {
-            expression_is_reproducible(&bin.left) && expression_is_reproducible(&bin.right)
-        }
+        Expression::ParenthesizedExpression(paren) => accepts(&paren.expression),
+        Expression::AwaitExpression(inner) => accepts(&inner.argument),
+        Expression::UnaryExpression(unary) => accepts(&unary.argument),
+        Expression::BinaryExpression(bin) => accepts(&bin.left) && accepts(&bin.right),
         Expression::LogicalExpression(logical) => {
-            expression_is_reproducible(&logical.left) && expression_is_reproducible(&logical.right)
+            accepts(&logical.left) && accepts(&logical.right)
         }
         Expression::ConditionalExpression(cond) => {
-            expression_is_reproducible(&cond.test)
-                && expression_is_reproducible(&cond.consequent)
-                && expression_is_reproducible(&cond.alternate)
+            accepts(&cond.test) && accepts(&cond.consequent) && accepts(&cond.alternate)
         }
-        Expression::StaticMemberExpression(member) => expression_is_reproducible(&member.object),
-        Expression::PrivateFieldExpression(member) => expression_is_reproducible(&member.object),
+        Expression::StaticMemberExpression(member) => accepts(&member.object),
+        Expression::PrivateFieldExpression(member) => accepts(&member.object),
         Expression::ComputedMemberExpression(member) => {
-            expression_is_reproducible(&member.object) && expression_is_reproducible(&member.expression)
+            accepts(&member.object) && accepts(&member.expression)
         }
+        Expression::CallExpression(call) => call_is_literal_rooted(call),
         Expression::ChainExpression(chain) => match &chain.expression {
-            ChainElement::StaticMemberExpression(member) => expression_is_reproducible(&member.object),
-            ChainElement::PrivateFieldExpression(member) => expression_is_reproducible(&member.object),
+            ChainElement::StaticMemberExpression(member) => accepts(&member.object),
+            ChainElement::PrivateFieldExpression(member) => accepts(&member.object),
             ChainElement::ComputedMemberExpression(member) => {
-                expression_is_reproducible(&member.object) && expression_is_reproducible(&member.expression)
+                accepts(&member.object) && accepts(&member.expression)
             }
-            ChainElement::TSNonNullExpression(inner) => expression_is_reproducible(&inner.expression),
-            ChainElement::CallExpression(_) => false,
+            ChainElement::TSNonNullExpression(inner) => accepts(&inner.expression),
+            ChainElement::CallExpression(call) => call_is_literal_rooted(call),
         },
-        Expression::TSAsExpression(cast) => expression_is_reproducible(&cast.expression),
-        Expression::TSSatisfiesExpression(cast) => expression_is_reproducible(&cast.expression),
-        Expression::TSTypeAssertion(cast) => expression_is_reproducible(&cast.expression),
-        Expression::TSNonNullExpression(inner) => expression_is_reproducible(&inner.expression),
-        Expression::TSInstantiationExpression(inst) => expression_is_reproducible(&inst.expression),
+        Expression::TSAsExpression(cast) => accepts(&cast.expression),
+        Expression::TSSatisfiesExpression(cast) => accepts(&cast.expression),
+        Expression::TSTypeAssertion(cast) => accepts(&cast.expression),
+        Expression::TSNonNullExpression(inner) => accepts(&inner.expression),
+        Expression::TSInstantiationExpression(inst) => accepts(&inst.expression),
 
         _ => false,
     }
 }
 
+/// True when neither the callee of `call` nor any of its arguments reaches a
+/// binding, so the call has no channel through which one evaluation could change
+/// the next: `" ".charCodeAt(0)` reads the same code unit every time, while
+/// `chars.next()` and `xs.at(i)` both reach one.
+///
+/// A spread argument (`f(...it)`) drives the iterator protocol and is rejected,
+/// like array spread.
+fn call_is_literal_rooted(call: &oxc_ast::ast::CallExpression) -> bool {
+    expression_reads_one_value(&call.callee, BindingReads::Denied)
+        && call.arguments.iter().all(|argument| {
+            argument
+                .as_expression()
+                .is_some_and(|expr| expression_reads_one_value(expr, BindingReads::Denied))
+        })
+}
+
 /// True when reading `key` yields the same name each time: a static name, a
-/// private name, or a computed key that is itself reproducible.
-fn property_key_is_reproducible(key: &oxc_ast::ast::PropertyKey) -> bool {
+/// private name, or a computed key that is itself accepted under `binding_reads`.
+fn property_key_reads_one_value(
+    key: &oxc_ast::ast::PropertyKey,
+    binding_reads: BindingReads,
+) -> bool {
     use oxc_ast::ast::PropertyKey;
 
     match key {
         PropertyKey::StaticIdentifier(_) | PropertyKey::PrivateIdentifier(_) => true,
-        _ => key.as_expression().is_some_and(expression_is_reproducible),
+        _ => key
+            .as_expression()
+            .is_some_and(|expr| expression_reads_one_value(expr, binding_reads)),
     }
 }
 
