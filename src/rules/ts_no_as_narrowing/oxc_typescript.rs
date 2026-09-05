@@ -6,7 +6,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
     byte_offset_to_line_col, is_inside_type_predicate_fn, is_outer_as_unknown_double_cast,
     name_is_generic_type_param_in_scope, operand_is_typed_as_generic_param,
-    resolves_to_branded_primitive,
+    resolves_to_branded_primitive, resolves_to_inferred_type_alias,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSType, TSTypeName};
@@ -105,14 +105,16 @@ fn is_dom_interface_type(name: &str) -> bool {
 
 /// Whether the cast operand is a freshly-constructed value: an object literal
 /// (`{} as RouteModules`), an array literal (`[1, 2] as ReadonlyArray<number>`),
-/// a primitive literal (`"idle" as RevalidationState`), or a `new` expression
-/// (`new String(value) as SafeHtml`). Casting such an operand is a
+/// a primitive literal (`"idle" as RevalidationState`), a `new` expression
+/// (`new String(value) as SafeHtml`), or a function or class defined inline
+/// (`(<T>(make) => …) as Create`). Casting such an operand is a
 /// construction-time type ascription, not a narrowing of a pre-existing binding
 /// — there is no variable to refine with a type predicate or `in`/`typeof`
-/// check, so the rule's remediation does not apply.
+/// check, so the rule's remediation does not apply. Parentheses are peeled, so
+/// `({ … }) as T` is treated identically to `{ … } as T`.
 fn operand_is_constructed_value(expr: &Expression) -> bool {
     matches!(
-        expr,
+        expr.without_parentheses(),
         Expression::ObjectExpression(_)
             | Expression::ArrayExpression(_)
             | Expression::StringLiteral(_)
@@ -123,6 +125,9 @@ fn operand_is_constructed_value(expr: &Expression) -> bool {
             | Expression::BigIntLiteral(_)
             | Expression::RegExpLiteral(_)
             | Expression::NewExpression(_)
+            | Expression::ArrowFunctionExpression(_)
+            | Expression::FunctionExpression(_)
+            | Expression::ClassExpression(_)
     )
 }
 
@@ -259,16 +264,20 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Skip `as TParam` when `TParam` is a generic type parameter on an
-        // enclosing function/method/class/interface/type alias. These are
-        // structural type-bridge casts (e.g. TanStack Router's
-        // `useSearch() as TSearch`), not narrowings.
+        // Skip casts to a type with no written shape: a generic type parameter on
+        // an enclosing function/method/class/interface/type alias (e.g. TanStack
+        // Router's `useSearch() as TSearch`), or a local alias standing in for one
+        // (`type TState = ReturnType<typeof createState>`). Both name a type the
+        // checker infers per instantiation, so these are structural type bridges,
+        // not narrowings.
         if let TSType::TSTypeReference(r) = &as_expr.type_annotation
             && r.type_arguments.is_none()
         {
             let TSTypeName::IdentifierReference(id) = &r.type_name else { return };
             let name = id.name.as_str();
-            if name_is_generic_type_param_in_scope(name, node.id(), semantic) {
+            if name_is_generic_type_param_in_scope(name, node.id(), semantic)
+                || resolves_to_inferred_type_alias(id, semantic)
+            {
                 return;
             }
         }
@@ -818,6 +827,107 @@ mod tests {
         let src = "interface Config { a: number }\n\
                    function f(x: unknown) { return x as Config; }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_cast_to_alias_derived_from_a_typeof_query() {
+        // Regression for #8263: zustand's store implementation names the state
+        // type with `type TState = ReturnType<typeof createState>`, an alias for
+        // a type the checker infers per instantiation. It is the same
+        // unnameable type the bare-generic-parameter exemption already covers,
+        // and the `typeof partial === 'function'` check the message asks for is
+        // already there and known not to narrow (microsoft/TypeScript#37663).
+        let src = "type Impl = <T>(make: () => T) => { set: (p: T | ((s: T) => T)) => void };\n\
+                   const impl: Impl = (make) => {\n\
+                   type TState = ReturnType<typeof make>;\n\
+                   let state: TState = make() as TState;\n\
+                   const set = (partial: TState | ((s: TState) => TState)) => {\n\
+                   const next = typeof partial === 'function' ? (partial as (s: TState) => TState)(state) : partial;\n\
+                   state = next as TState;\n\
+                   };\n\
+                   return { set };\n\
+                   };";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_cast_to_alias_derived_through_an_indexed_type_query() {
+        // #8263: `Parameters<typeof f>[0]` reaches the `typeof` query through an
+        // indexed access — still a name for an inferred type.
+        let src = "function outer(f: (n: number) => string, value: unknown) {\n\
+                   type Arg = Parameters<typeof f>[0];\n\
+                   return value as Arg;\n\
+                   }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_cast_to_alias_referencing_a_type_parameter() {
+        // #8263: an alias whose body mentions an enclosing generic parameter is
+        // as instantiation-dependent as the parameter itself.
+        let src = "function f<T>(value: unknown) {\n\
+                   type Wrapped = Array<T>;\n\
+                   return value as Wrapped;\n\
+                   }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_cast_to_concrete_local_alias() {
+        // Control for #8263: an alias with a written shape names a type a runtime
+        // check can test for, so casting to it is a genuine narrowing.
+        let src = "function f(value: unknown) {\n\
+                   type C = { id: string };\n\
+                   return value as C;\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_inline_function_expression_ascription() {
+        // Regression for #8263: zustand publishes its factory by casting a
+        // freshly-written arrow to the exported overload set
+        // (`export const create = (<T>(…) => …) as Create`). The function is
+        // constructed in place, so there is no binding to refine — and no runtime
+        // predicate can select one call signature of an overload set anyway.
+        let src = "type Create = {\n\
+                   <T>(make: () => T): { set: (p: T) => void };\n\
+                   <T>(): (make: () => T) => { set: (p: T) => void };\n\
+                   };\n\
+                   export const create = (<T>(make?: () => T) => (make ? impl(make) : impl)) as Create;";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_inline_function_and_class_expression_ascriptions() {
+        // #8263: the `function` and `class` expression forms of the same
+        // inline construction.
+        assert!(run_on("const f = (function () { return 1; }) as Factory;").is_empty());
+        assert!(run_on("const c = (class { x = 1; }) as Ctor;").is_empty());
+    }
+
+    #[test]
+    fn still_flags_cast_of_existing_function_binding() {
+        // Control for #8263: a function referenced through a binding is a
+        // pre-existing value; only the inline construction is exempt.
+        let diags = run_on("const c = createImpl as Create;");
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_narrowing_to_named_union_member_alongside_alias_fix() {
+        // Control for #8263: the issue's own D2/E controls — refining a declared
+        // union to one of its members is what the rule exists to catch.
+        let src = "type Circle = { kind: 'circle'; r: number };\n\
+                   type Square = { kind: 'square'; side: number };\n\
+                   export const radius = (s: Circle | Square): number => (s as Circle).r;";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 
     #[test]
