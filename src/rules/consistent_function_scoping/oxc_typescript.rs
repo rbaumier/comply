@@ -95,15 +95,41 @@ impl OxcCheck for Check {
     }
 }
 
+/// A function is nested when an enclosing function could host it one level up.
+///
+/// An immediately invoked enclosing function is not such a host: an IIFE exists
+/// to keep its contents out of the surrounding scope — in a classic browser
+/// script that scope is the global object — so lifting a helper out of it
+/// publishes the helper instead of tidying it. Its body counts as the top level
+/// the author asked for.
 fn is_nested(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
-    for kind in nodes.ancestor_kinds(node_id).skip(1) {
-        match kind {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return true,
+    for (ancestor_id, ancestor) in nodes.ancestors_enumerated(node_id).skip(1) {
+        match ancestor.kind() {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
+                return !is_immediately_invoked(nodes, ancestor_id);
+            }
             AstKind::Program(_) => return false,
             _ => {}
         }
     }
     false
+}
+
+/// Whether `node_id` sits in the callee slot of a call, through any number of
+/// wrapping parentheses — `(function () {}())` and `(() => {})()` alike.
+fn is_immediately_invoked(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
+    let mut callee_id = node_id;
+    let mut parent_id = nodes.parent_id(callee_id);
+    while parent_id != callee_id
+        && matches!(nodes.kind(parent_id), AstKind::ParenthesizedExpression(_))
+    {
+        callee_id = parent_id;
+        parent_id = nodes.parent_id(callee_id);
+    }
+    matches!(
+        nodes.kind(parent_id),
+        AstKind::CallExpression(call) if call.callee.span() == nodes.kind(callee_id).span()
+    )
 }
 
 fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
@@ -118,6 +144,12 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
         | AstKind::PropertyDefinition(_)
         | AstKind::ObjectProperty(_)
         | AstKind::AccessorProperty(_) => true,
+        // An element of an array literal is a value in a data position, the
+        // same construct as an object-property value above: a lookup table
+        // pairing keys with handlers reads as a table, and each row's meaning
+        // is its place in it. There is no nearby call site to hoist it away
+        // from, so the two spellings of the same table agree.
+        AstKind::ArrayExpression(_) => true,
         // JSX prop callbacks — render-prop helpers (Base UI Combobox,
         // RHF Controller render, etc.) stay co-located with the JSX
         // they produce even when they don't close over any local.
@@ -537,6 +569,118 @@ mod tests {
             };
         "#;
         assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_arrows_as_array_literal_elements() {
+        // Regression for rbaumier/comply#8172 — a lookup table written as an
+        // array of pairs (moment/luxon src/impl/diff.js) is the same construct
+        // as the object spelling below, which was already exempt. Both
+        // spellings must agree.
+        let src = r#"
+            export function highOrderDiffs() {
+                const differs = [
+                    ["years", (a, b) => b.year - a.year],
+                    ["quarters", (a, b) => b.quarter - a.quarter + (b.year - a.year) * 4],
+                    ["months", (a, b) => b.month - a.month + (b.year - a.year) * 12],
+                ];
+                return differs;
+            }
+
+            export function withObjectProperty() {
+                const differs = { years: (a, b) => b.year - a.year };
+                return differs;
+            }
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_helper_declared_inside_array_element_arrow_body() {
+        // Negative-space guard: the array-element exemption covers the element
+        // itself and nothing below it. A helper declared inside that element's
+        // body is still hoistable.
+        let src = r#"
+            function outer() {
+                const handlers = [
+                    (a) => {
+                        function double(x) { return x * 2; }
+                        return double(a);
+                    },
+                ];
+                return handlers;
+            }
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected only `double` to flag: {diags:?}");
+        assert!(diags[0].message.contains("`double`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_helper_inside_arrow_iife_body() {
+        // Regression for rbaumier/comply#8172 — a docsify plugin script wraps
+        // its contents in an IIFE precisely to keep them out of the global
+        // scope, so "hoisting" the plugin would publish it as a global.
+        let src = r#"
+            (() => {
+                const darkThemeTogglePlugin = (hook, vm) => {
+                    const TOGGLE_ID = "toggle";
+                    hook.mounted(() => {
+                        document.body.setAttribute("id", TOGGLE_ID);
+                    });
+                };
+
+                window.$docsify = window.$docsify || {};
+                window.$docsify.plugins = [darkThemeTogglePlugin];
+            })();
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn ignores_helper_inside_function_expression_iife_body() {
+        // The IIFE exemption keys on the callee slot, so it holds for the
+        // `(function () {}())` spelling where the parentheses wrap the call
+        // rather than the callee.
+        let src = r#"
+            (function () {
+                function eq(v1, v2) { return v1 === v2; }
+                window.eq = eq;
+            }());
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_helper_inside_uninvoked_function_expression() {
+        // Negative-space guard: a function *expression* is not an IIFE. Only
+        // an immediately invoked one opens a module-private scope.
+        let src = r#"
+            const setup = function () {
+                function eq(v1, v2) { return v1 === v2; }
+                return eq;
+            };
+        "#;
+        assert!(!run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_helper_nested_two_levels_inside_iife() {
+        // Negative-space guard: the IIFE exemption applies to the IIFE's own
+        // body only. A helper inside an ordinary function declared in that
+        // body is still hoistable to the IIFE scope.
+        let src = r#"
+            (() => {
+                function outer() {
+                    function inner() { return 1; }
+                    return inner();
+                }
+                window.outer = outer;
+            })();
+        "#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected only `inner` to flag: {diags:?}");
+        assert!(diags[0].message.contains("`inner`"), "{diags:?}");
     }
 
     #[test]
