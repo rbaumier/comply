@@ -101,8 +101,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_fn, file_has_local_result_alias, is_expression_turbofish, is_in_test_context,
-    is_in_trait_definition, is_in_trait_impl, is_suppressed_by_clippy_allow, result_error_type,
+    enclosing_fn, file_has_local_result_alias, is_expression_turbofish, is_in_trait_definition,
+    is_in_trait_impl, is_suppressed_by_clippy_allow, is_test_code, result_error_type,
     result_ok_type, trait_impl_mandating_return_type,
 };
 use tree_sitter::Node;
@@ -131,7 +131,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if is_private_type_alias_rhs(node) {
         return;
     }
-    if is_in_test_context(node, source) {
+    if is_test_code(node, source, ctx) {
         return;
     }
     if is_suppressed_by_clippy_allow(node, &["result_unit_err"], source) {

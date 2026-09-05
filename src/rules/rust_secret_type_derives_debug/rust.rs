@@ -42,7 +42,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    collect_top_level_derives, file_impls_trait_for_type, has_attribute_option, is_in_test_context,
+    collect_top_level_derives, file_impls_trait_for_type, has_attribute_option, is_test_code,
     last_type_argument, strip_type_borrows,
 };
 
@@ -156,7 +156,7 @@ const SERDE_PROTECTIONS: &[&str] = &["skip", "skip_serializing", "serialize_with
 
 crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let Ok(name) = name_node.utf8_text(source) else { return; };

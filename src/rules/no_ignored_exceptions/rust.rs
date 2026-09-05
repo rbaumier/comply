@@ -4,13 +4,13 @@
 //! Tests, Kani harnesses, and benchmarks are exempted: a `let _ =
 //! fn_under_test()` pattern is the idiomatic way to assert "this call doesn't
 //! panic" without caring about the return value. Exempt when in a test context
-//! — a `#[test]`/`#[cfg(test)]` attribute walk via
-//! `rust_helpers::is_in_test_context` — when inside a Kani verification harness
-//! (an enclosing fn carrying `#[kani::proof]`/`#[kani::proof_for_contract(...)]`,
-//! via `rust_helpers::is_in_kani_proof`), where `let _ = f(kani::any())` is the
-//! conventional way to exercise a call for its safety property — or when the file
-//! lives under a `tests/` directory (`rust_helpers::is_under_tests_dir`), since
-//! plain helper fns there are integration-test infrastructure. Benchmark files
+//! — a `#[test]`/`#[cfg(test)]` attribute walk, or a file under a `tests/`
+//! directory whose plain helper fns are integration-test infrastructure, both
+//! via `rust_helpers::is_test_code` — and when inside a Kani verification
+//! harness (an enclosing fn carrying `#[kani::proof]`/
+//! `#[kani::proof_for_contract(...)]`, via `rust_helpers::is_in_kani_proof`),
+//! where `let _ = f(kani::any())` is the conventional way to exercise a call for
+//! its safety property. Benchmark files
 //! (`FileCtx::in_benchmark_dir`) are exempt too: in a Criterion `b.iter(|| { let
 //! _ = f(black_box(..)) })` closure the discard is the idiomatic way to run a
 //! call for its timing without consuming the result, and benchmark code never
@@ -184,9 +184,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    expression_yields_buffer, find_identifier_type, is_in_kani_proof, is_in_never_fn,
-    is_in_test_context, is_under_tests_dir, local_binding_init_expression, macro_last_name_segment,
-    macro_token_tree, macro_writer_identifier, trait_base_name, type_text_is_buffer,
+    expression_yields_buffer, find_identifier_type, is_in_kani_proof, is_in_never_fn, is_test_code,
+    local_binding_init_expression, macro_last_name_segment, macro_token_tree,
+    macro_writer_identifier, trait_base_name, type_text_is_buffer,
 };
 use tree_sitter::Node;
 
@@ -233,9 +233,8 @@ crate::ast_check! { on ["let_declaration"] => |node, source, ctx, diagnostics|
     // compiled by `cargo build --examples`, never linked into the library, and
     // its `fn main() -> ()` has no error channel to propagate into — the same
     // argument that already exempts `benches/` and the fuzz harnesses.
-    if is_in_test_context(node, source)
+    if is_test_code(node, source, ctx)
         || is_in_kani_proof(node, source)
-        || is_under_tests_dir(ctx.path)
         || ctx.file.in_benchmark_dir()
         || ctx.file.path_segments.is_relaxed_dir
         || ctx.project.in_fuzz_crate(ctx.path)

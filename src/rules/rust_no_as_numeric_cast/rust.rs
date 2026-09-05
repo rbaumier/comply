@@ -7,7 +7,9 @@
 //! source type is locally obvious.
 //!
 //! Tests are exempted — fuzz / numeric scaffolding inside `#[test]`
-//! functions or `#[cfg(test)]` modules doesn't need this discipline.
+//! functions, `#[cfg(test)]` modules, or a file Cargo compiles only for
+//! `cargo test` (a `tests/` integration file, an inline-test-module file)
+//! doesn't need this discipline.
 //!
 //! `proc-macro = true` crates are exempted wholesale: their `as` casts operate on
 //! compile-time AST/codegen quantities (token indices, field counts) that are
@@ -102,17 +104,16 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
     cast_in_const_context, cast_is_simd_result, cast_operand_bit_count_max, cast_operand_bit_width,
-    cast_operand_indexed_element_type,
-    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_float_rounding,
-    cast_operand_is_for_range_bounded,
-    cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
-    cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
+    cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
+    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
+    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_float_rounding, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
+    cast_operand_is_modulo_bounded, cast_operand_is_modulo_bounded_via_binding,
+    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
+    cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
-    is_suppressed_by_clippy_allow,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant,
+    is_suppressed_by_clippy_allow, is_test_code,
 };
 
 const KINDS: &[&str] = &["type_cast_expression"];
@@ -176,7 +177,7 @@ impl AstCheck for Check {
         {
             return;
         }
-        if !fires_on_cast(node, source_bytes) {
+        if !fires_on_cast(node, source_bytes, ctx) {
             return;
         }
         let target = node
@@ -209,7 +210,7 @@ impl AstCheck for Check {
 ///
 /// `rust-no-lossy-as-cast` calls this to suppress its own diagnostic on casts
 /// this rule already owns, so the pair emits one diagnostic per cast span.
-pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> bool {
+pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8], ctx: &CheckCtx) -> bool {
     let Some(type_node) = node.child_by_field_name("type") else {
         return false;
     };
@@ -235,7 +236,7 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8]) -> boo
     if cast_operand_is_raw_pointer(node, source_bytes) {
         return false;
     }
-    if is_in_test_context(node, source_bytes) {
+    if is_test_code(node, source_bytes, ctx) {
         return false;
     }
     if is_in_enum_discriminant(node) {
@@ -876,6 +877,12 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Run on a file at `path` so the path-based test-context detection
+    /// (Cargo's `tests/` integration directory) resolves.
+    fn run_on_path(path: &str, source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     /// Run on a file next to the given `Cargo.toml` so the manifest
@@ -2907,5 +2914,24 @@ name = "normal_lib"
         let src = "#[allow(clippy::needless_return)]\n\
                    pub fn d(mask: i32) -> u16 { mask as u16 }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_8146_cargo_integration_test_helper_not_flagged() {
+        // rbaumier/comply#8146 — harfbuzz/ttf-parser `tests/tables/cff1.rs`: a
+        // helper in a Cargo integration test carries no `#[test]`/`#[cfg(test)]`
+        // (Cargo gates the whole `tests/` tree), so the attribute walk alone
+        // misses it while the identical `#[cfg(test)] mod tests` form is exempt.
+        let src = "fn encode(n: i32) -> u8 { (n + 139) as u8 }\n\
+                   #[test]\nfn round_trips() { assert_eq!(encode(0), 139); }";
+        assert!(run_on_path("tests/integration.rs", src).is_empty());
+    }
+
+    #[test]
+    fn repro_8146_same_helper_in_src_still_flagged() {
+        // The exemption is path-scoped: the same helper shipping from `src/`
+        // keeps its diagnostic.
+        let src = "fn encode(n: i32) -> u8 { (n + 139) as u8 }";
+        assert_eq!(run_on_path("src/lib.rs", src).len(), 1);
     }
 }

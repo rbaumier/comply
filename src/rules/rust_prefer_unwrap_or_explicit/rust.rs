@@ -25,7 +25,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -137,7 +137,7 @@ impl AstCheck for Check {
         if field_text != "unwrap_or_default" {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // `.map(|x| x.is_*()).unwrap_or_default()` maps to a `bool`; its

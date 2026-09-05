@@ -27,7 +27,7 @@
 //! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{file_references_db_crate, is_in_test_context};
+use crate::rules::rust_helpers::{file_references_db_crate, is_test_code};
 use crate::rules::sql_helpers::contains_word;
 
 /// Method names that are unambiguously sqlx/ORM driver calls — DB-specific by
@@ -226,7 +226,7 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
-    if is_in_test_context(node, source) {
+    if is_test_code(node, source, ctx) {
         return;
     }
 

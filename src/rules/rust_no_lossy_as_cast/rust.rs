@@ -93,17 +93,16 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cast_feeds_from_bits, cast_feeds_simd_intrinsic, cast_feeds_sized_pointer_write,
     cast_in_const_context, cast_is_int_to_float, cast_operand_bit_count_max,
-    cast_operand_bit_width, cast_operand_indexed_element_type,
-    cast_operand_is_ascii_guarded, cast_operand_is_assert_bounded, cast_operand_is_bitwise,
-    cast_operand_is_bool, cast_operand_is_char, cast_operand_is_collection_size,
-    cast_operand_is_enum_discriminant, cast_operand_is_float_rounding,
-    cast_operand_is_for_range_bounded,
-    cast_operand_is_min_clamped, cast_operand_is_modulo_bounded,
-    cast_operand_is_modulo_bounded_via_binding, cast_operand_is_non_negative_guarded,
-    cast_operand_is_range_guarded, cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
+    cast_operand_bit_width, cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
+    cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
+    cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
+    cast_operand_is_float_rounding, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
+    cast_operand_is_modulo_bounded, cast_operand_is_modulo_bounded_via_binding,
+    cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
+    cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
     cast_operand_is_sibling_arm_bounded, cast_operand_is_to_digit_bounded,
-    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant, is_in_test_context,
-    is_suppressed_by_clippy_allow,
+    cast_operand_literal_value, find_identifier_type, is_in_enum_discriminant,
+    is_suppressed_by_clippy_allow, is_test_code,
 };
 use crate::rules::rust_no_as_numeric_cast::rust::fires_on_cast;
 
@@ -176,7 +175,7 @@ impl AstCheck for Check {
         }
         // Test scaffolding casts bounded fixtures, not runtime data; the
         // companion `rust-no-as-numeric-cast` exempts the same scope (#6130).
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         if cast_in_const_context(node, source_bytes) {
@@ -323,7 +322,7 @@ impl AstCheck for Check {
         // De-duplicate: when `rust-no-as-numeric-cast` owns this cast, let it
         // be the single diagnostic for the span. This rule keeps firing only
         // where that one does not (e.g. `f64 as f32` float narrowing).
-        if fires_on_cast(node, source_bytes) {
+        if fires_on_cast(node, source_bytes, ctx) {
             return;
         }
         let pos = node.start_position();

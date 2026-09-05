@@ -23,7 +23,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::is_test_code;
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -59,7 +59,7 @@ impl AstCheck for Check {
         if !is_unbounded {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // mpsc::channel — only flag if it's `std::sync::mpsc` (which is

@@ -8,7 +8,7 @@
 //! signals rather than user-facing errors.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, trait_base_name};
+use crate::rules::rust_helpers::{is_test_code, trait_base_name};
 use tree_sitter::Node;
 
 const VERBS: &[&str] = &[
@@ -130,7 +130,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     // Panics inside inline `#[test]` functions / `#[cfg(test)]` modules signal
     // a test failure, not a user-facing error — they need not read as
     // remediation.
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     // A `panic!` that is the body of `fn default()` inside an `impl Default for T`
     // block is an unreachable trait-satisfaction stub (the `Default` supertrait is

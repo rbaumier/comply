@@ -71,7 +71,7 @@ use rustc_hash::FxHashSet;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    crate_has_external_consumers, has_clippy_allow, is_effectively_pub, is_in_test_context,
+    crate_has_external_consumers, has_clippy_allow, is_effectively_pub, is_test_code,
 };
 
 const KINDS: &[&str] = &["struct_item", "enum_item"];
@@ -106,7 +106,7 @@ impl AstCheck for Check {
         // A `#[cfg(test)]`-gated type is a throwaway fixture that derives
         // `PartialEq` only for `assert_eq!`; it never ships, so its lack of
         // `Eq` (no `HashSet` / `BTreeSet` use) is not a defect.
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // The author opted out of the clippy lint this rule mirrors

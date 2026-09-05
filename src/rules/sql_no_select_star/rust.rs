@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ impl AstCheck for Check {
         // `SELECT *` inside a `#[cfg(test)]` module or `#[test]` fn is a query
         // fixture fed to the code under test, never run against a database, so
         // the bandwidth/covering-index rationale does not apply.
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(

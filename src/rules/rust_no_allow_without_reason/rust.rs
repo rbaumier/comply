@@ -12,7 +12,7 @@ use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_fn, has_outer_attribute, has_test_attribute, is_in_test_context,
+    enclosing_fn, has_outer_attribute, has_test_attribute, is_test_code,
 };
 
 /// Deprecated methods of the `std::error::Error` trait. Implementing one of
@@ -60,7 +60,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     if (allow_list_contains(text, "unused")
         || allow_list_contains(text, "deprecated")
         || allow_list_has_clippy_lint(text))
-        && is_test_scoped(node, source)
+        && is_test_scoped(node, source, ctx)
     {
         return;
     }
@@ -82,10 +82,7 @@ crate::ast_check! { on ["attribute_item"] => |node, source, ctx, diagnostics|
     // `tests/` file, a `#[test]` fn, or a `#[cfg(test)]` module — is contextually
     // self-evident, mirroring the `unused`/`deprecated`/clippy test-scoped
     // exemption above.
-    if allow_list_contains(text, "dead_code")
-        && (ctx.path.components().any(|c| c.as_os_str() == "tests")
-            || is_test_scoped(node, source))
-    {
+    if allow_list_contains(text, "dead_code") && is_test_scoped(node, source, ctx) {
         return;
     }
 
@@ -246,8 +243,8 @@ fn allow_list_has_clippy_lint(attribute: &str) -> bool {
 /// ([`decorates_test_item`]). The latter covers an `#[allow]` stacked alongside
 /// `#[test]` on the same function — there the `#[test]` is a sibling attribute,
 /// not an ancestor, so the ancestor walk alone misses it.
-fn is_test_scoped(node: Node, source: &[u8]) -> bool {
-    is_in_test_context(node, source) || decorates_test_item(node, source)
+fn is_test_scoped(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
+    is_test_code(node, source, ctx) || decorates_test_item(node, source)
 }
 
 /// True when this `attribute_item` decorates an item that itself carries a

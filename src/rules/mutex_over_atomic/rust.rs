@@ -1,7 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{
-    is_async_mutex_type, is_in_test_context, is_suppressed_by_clippy_allow, is_under_tests_dir,
-};
+use crate::rules::rust_helpers::{is_async_mutex_type, is_suppressed_by_clippy_allow, is_test_code};
 
 const ATOMIC_TYPES: &[(&str, &str)] = &[
     ("bool", "AtomicBool"),
@@ -24,7 +22,7 @@ crate::ast_check! { on ["type_identifier"] prefilter = ["Mutex"] => |node, sourc
     // in-file `#[cfg(test)]` module and a standalone integration-test support
     // module under `tests/` (which carries no `#[cfg(test)]` attribute) are
     // test-only and exempt.
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    if is_test_code(node, source, ctx) {
         return;
     }
 

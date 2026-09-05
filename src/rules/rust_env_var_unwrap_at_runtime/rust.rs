@@ -11,7 +11,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_fn_main, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_in_fn_main, is_test_code};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -52,9 +52,8 @@ impl AstCheck for Check {
         if !is_env_var_call(receiver, source) {
             return;
         }
-        if is_in_test_context(node, source)
+        if is_test_code(node, source, ctx)
             || is_in_fn_main(node, source)
-            || is_under_tests_dir(ctx.path)
             || crate::rules::path_utils::is_rust_build_script(ctx.path)
         {
             return;

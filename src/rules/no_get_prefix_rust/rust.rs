@@ -1,7 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_inherent_impl_type, has_outer_attribute_path, is_comment_node, is_in_test_context,
-    is_in_trait_definition, is_in_trait_impl, type_has_inherent_method,
+    enclosing_inherent_impl_type, has_outer_attribute_path, is_comment_node,
+    is_in_trait_definition, is_in_trait_impl, is_test_code, type_has_inherent_method,
 };
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
@@ -15,7 +15,7 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // C-GETTER (RFC 344) contract with external callers. This mirrors the
     // path-based `skip_in_test_dir` exemption for Cargo integration tests under
     // `tests/`, extending it to inline test modules declared inside src files.
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     // A `#[deprecated]` method's name is a frozen public-API commitment: the
     // attribute keeps the old name working during a migration window, and its

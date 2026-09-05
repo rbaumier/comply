@@ -26,7 +26,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    enclosing_fn, is_in_test_context, last_type_argument, strip_type_borrows,
+    enclosing_fn, is_test_code, last_type_argument, strip_type_borrows,
 };
 
 /// Method-call surgery, matched on the text that immediately follows an
@@ -52,7 +52,7 @@ const MAX_FORMAT_SCAN: usize = 2_000;
 
 crate::ast_check! { on ["parameter", "field_declaration"] prefilter = ["url", "uri", "endpoint", "webhook"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let name_field = if node.kind() == "parameter" { "pattern" } else { "name" };
     let Some(name_node) = node.child_by_field_name(name_field) else { return; };

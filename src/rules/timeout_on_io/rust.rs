@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 /// Method-name suffixes that indicate I/O.
 const IO_METHODS: &[&str] = &[
@@ -51,7 +51,7 @@ impl AstCheck for Check {
             return;
         }
         let source_bytes = ctx.source.as_bytes();
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // In tree-sitter-rust, `await` is a postfix unary: the AST node

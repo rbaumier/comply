@@ -12,9 +12,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::call_expression::call_function_name;
-use crate::rules::rust_helpers::{
-    is_in_test_context, is_inside_async_fn, is_under_tests_dir, spawn_closure_hosts_runtime,
-};
+use crate::rules::rust_helpers::{is_inside_async_fn, is_test_code, spawn_closure_hosts_runtime};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -43,7 +41,7 @@ impl AstCheck for Check {
         if !is_inside_async_fn(node, source_bytes) {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         if spawn_closure_hosts_runtime(node, source_bytes) {

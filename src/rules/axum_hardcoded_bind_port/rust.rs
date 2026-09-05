@@ -59,7 +59,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["TcpListener::bind"] => 
     let Some(argument) = sole_argument(node) else { return };
     let Some(address) = socket_address(argument, source) else { return };
     if !is_fixed_port_on_every_interface(address) { return; }
-    if rust_helpers::is_in_test_context(node, source) { return; }
+    if rust_helpers::is_test_code(node, source, ctx) { return; }
     if binds_the_environment_fallback(node, source) { return; }
     if !is_axum_crate(ctx) { return; }
 

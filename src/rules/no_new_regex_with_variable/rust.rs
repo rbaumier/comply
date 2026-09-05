@@ -29,7 +29,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::is_test_code;
 
 #[derive(Debug)]
 pub struct Check;
@@ -68,7 +68,7 @@ impl AstCheck for Check {
         }
         // Test code has no external attack surface: the developer controls
         // both the program and the pattern, so ReDoS does not apply.
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         let ctor_type = fn_text.strip_suffix("::new").map(base_segment).unwrap_or("");

@@ -454,7 +454,7 @@ fn subtree_declares_result_alias(node: Node, source: &[u8]) -> bool {
         .any(|child| subtree_declares_result_alias(child, source))
 }
 
-/// True if `node` is inside any form of Rust test context:
+/// True if the gates written INSIDE the file put `node` in a test context:
 ///
 /// - inside a `#[test]` function
 /// - inside a function, module, or impl block whose `cfg` predicate activates
@@ -465,9 +465,12 @@ fn subtree_declares_result_alias(node: Node, source: &[u8]) -> bool {
 /// A negated predicate such as `#[cfg(not(test))]` is production-only and does
 /// not count as a test context.
 ///
-/// Rules that want to relax their discipline for test code (allow
-/// `unwrap`, `panic!`, `let _ = fallible()`, etc.) call this helper
-/// to decide whether a candidate should be skipped.
+/// This is only half of "am I looking at test code?": a Cargo integration test
+/// and a `#[cfg(test)] mod …;`-gated module carry no in-file gate at all, so
+/// this walk cannot see them. Rules relaxing their discipline for test code
+/// (allow `unwrap`, `panic!`, `let _ = fallible()`, …) call [`is_test_code`],
+/// which answers both halves; reach for this one only where no `CheckCtx` is
+/// available.
 pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
     file_has_inner_attribute(node, source, cfg_predicate_activates_test)
         || enclosing_item_has_attribute(node, source, attr_marks_test)
@@ -3124,20 +3127,30 @@ pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
         .is_none_or(|manifest| !manifest.is_binary_only() && !manifest.is_proc_macro())
 }
 
-/// True when `node` is test code, by either of the two ways Rust marks it:
+/// True when `node` is test code, by any of the ways Rust marks it:
 ///
 /// - the ATTRIBUTES on `node` or an enclosing scope — `#[test]`, `#[cfg(test)]`,
 ///   `#[cfg_attr(test, …)]` — per [`is_in_test_context`];
-/// - the PATH of the file it lives in — a Cargo `tests/` integration directory,
-///   an inline-test-module file — per [`is_under_tests_dir`].
+/// - the PATH and NAME of the file — Cargo's `tests/` integration directory,
+///   where the gating is Cargo's job so no attribute is written, and the
+///   cross-crate test-helper modules (`test_utils.rs`, `property_tests/`, …)
+///   that cannot be `#[cfg(test)]`-gated without hiding them from the
+///   integration tests that consume them — per [`is_under_tests_dir`].
 ///
-/// Neither half sees the other, and a rule that consults only one exempts half
+/// Neither half sees the other, and a rule that consults only one exempts part
 /// of its authors' test code: a helper in `tests/common/mod.rs` carries no test
 /// attribute, and a `#[cfg(test)] mod tests` inside `src/` sits under no test
-/// directory. Twenty rules already spell this disjunction out by hand; this is
-/// the one place to spell it (issue #8146).
+/// directory. This is the one place to spell the disjunction (issue #8146);
+/// rules relaxing their discipline for test code call this, not a hand-written
+/// combination.
+///
+/// Both halves are node- and path-local on purpose: this runs on every node a
+/// rule visits, so it must not reach for [`is_test_only_rust_file`], whose
+/// manifest and module-graph lookups take a process-wide lock. A rule that
+/// needs the `#[cfg(test)] mod …;` chain pairs the two behind its own cheap
+/// filter, as `no-timing-attack` does.
 pub fn is_test_code(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
-    is_in_test_context(node, source) || is_under_tests_dir(ctx.path)
+    is_under_tests_dir(ctx.path) || is_in_test_context(node, source)
 }
 
 /// True when `node` sits in code compiled into a Rust library target that some
@@ -10614,9 +10627,10 @@ mod tests {
             // Attribute half: an inline test module inside `src/`, under no
             // test directory.
             ("src/lib.rs", "#[cfg(test)]\nmod tests { fn helper() {} }", true),
-            // Path half: a fixture helper in an integration test carries no
-            // test attribute of its own.
+            // Path half: a fixture helper in a Cargo integration test carries
+            // no test attribute of its own — Cargo gates the whole tree.
             ("tests/common/mod.rs", "fn helper() {}", true),
+            ("tests/integration.rs", "fn encode(n: i32) -> u8 { n as u8 }", true),
             // Neither: ordinary production code.
             ("src/lib.rs", "fn helper() {}", false),
         ];

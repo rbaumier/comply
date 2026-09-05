@@ -21,8 +21,7 @@ impl AstCheck for Check {
     ) {
         let source_bytes = ctx.source.as_bytes();
         if ctx.file.path_segments.in_test_dir
-            || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
-            || crate::rules::rust_helpers::is_in_test_context(node, source_bytes)
+            || crate::rules::rust_helpers::is_test_code(node, source_bytes, ctx)
             || crate::rules::rust_helpers::is_in_doc_attribute(node, source_bytes)
         {
             return;

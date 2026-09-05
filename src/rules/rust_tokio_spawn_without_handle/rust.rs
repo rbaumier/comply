@@ -28,7 +28,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_loop_body, is_in_test_context};
+use crate::rules::rust_helpers::{is_in_loop_body, is_test_code};
 
 const KINDS: &[&str] = &["expression_statement"];
 
@@ -65,7 +65,7 @@ impl AstCheck for Check {
         if !is_tokio_spawn(text, node, source_bytes) {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // Spawn inside a loop body (the per-connection accept-loop idiom):

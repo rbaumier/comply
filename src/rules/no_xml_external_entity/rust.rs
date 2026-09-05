@@ -54,8 +54,7 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     // Dual-read: the unit-test harness injects an empty default FileCtx, so the
     // `path_segments` flags are false in tests — fall back to the pure path
     // predicates, which read `ctx.path` directly.
-    if crate::rules::rust_helpers::is_in_test_context(node, source)
-        || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx)
         || ctx.file.path_segments.in_test_dir
         || ctx.file.path_segments.in_fuzz_targets
         || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)

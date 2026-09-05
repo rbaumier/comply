@@ -31,7 +31,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    has_clippy_allow, is_in_test_context, is_in_trait_impl, is_pub, trait_base_name,
+    has_clippy_allow, is_in_trait_impl, is_pub, is_test_code, trait_base_name,
 };
 
 #[derive(Debug)]
@@ -76,7 +76,7 @@ impl AstCheck for Check {
         if has_clippy_allow(node, source_bytes, "type_complexity") {
             return;
         }
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         let name = node

@@ -433,7 +433,7 @@ impl AstCheck for Check {
         // production binaries. Test fixtures routinely `unwrap`/`panic!` in
         // `Drop` to assert teardown state; the harness handles those panics and
         // there is no production unwinding to abort, so the rule does not apply.
-        if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
+        if crate::rules::rust_helpers::is_test_code(node, source_bytes, ctx) {
             return;
         }
         // A `Drop` impl nested inside a diverging function (`fn … -> !`) is the

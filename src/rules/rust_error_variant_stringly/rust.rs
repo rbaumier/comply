@@ -35,7 +35,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     any_outer_attribute, collect_top_level_derives, file_impls_trait_for_type, has_test_attribute,
-    is_in_test_context,
+    is_test_code,
 };
 
 /// Variant names that promise nothing about the failure they carry. Any payload
@@ -52,7 +52,7 @@ crate::ast_check! { on ["enum_item"] prefilter = ["enum"] => |node, source, ctx,
     if ctx.file.path_segments.in_test_dir { return; }
     // `is_in_test_context` reads the ANCESTORS' attributes, so a `#[cfg(test)]`
     // written on this very enum needs its own check.
-    if is_in_test_context(node, source) || has_test_attribute(node, source) { return; }
+    if is_test_code(node, source, ctx) || has_test_attribute(node, source) { return; }
 
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let Ok(enum_name) = name_node.utf8_text(source) else { return; };

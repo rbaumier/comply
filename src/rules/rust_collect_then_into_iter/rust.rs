@@ -131,7 +131,7 @@ impl AstCheck for Check {
         }
         // In a test context the concrete `Vec::IntoIter` type is load-bearing
         // (see module docs): the round-trip selects a type, not an allocation.
-        if crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
+        if crate::rules::rust_helpers::is_test_code(node, source_bytes, ctx) {
             return;
         }
         // The owned iterator is load-bearing when it escapes its scope, and so

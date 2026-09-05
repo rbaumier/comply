@@ -30,7 +30,7 @@
 //! - test code, where a lock around a counter is scaffolding, not a hot path.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 /// Scalars that have a drop-in atomic in `std::sync::atomic`. `u128`, `i128`,
 /// `f32`, `f64` and `char` are absent on purpose: no atomic exists for them, so
@@ -62,7 +62,7 @@ crate::ast_check! { on ["generic_type"] prefilter = ["Mutex<", "RwLock<"] => |no
 
     if file_uses_condvar(source) { return; }
     if is_atomic_polyfill(node, source) { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,

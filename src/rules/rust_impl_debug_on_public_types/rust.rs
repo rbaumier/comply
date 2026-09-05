@@ -65,7 +65,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     crate_has_external_consumers, has_clippy_allow, has_doc_hidden, has_test_attribute,
-    is_effectively_pub, is_in_test_context, macro_body, split_top_level_args,
+    is_effectively_pub, is_test_code, macro_body, split_top_level_args,
 };
 
 /// Outer attributes that are language/std built-ins or a well-known derive-helper
@@ -144,7 +144,7 @@ impl AstCheck for Check {
         }) {
             return;
         }
-        if is_in_test_context(node, source_bytes)
+        if is_test_code(node, source_bytes, ctx)
             || has_test_attribute(node, source_bytes)
             || has_cfg_doctest_attr(node, source_bytes)
         {

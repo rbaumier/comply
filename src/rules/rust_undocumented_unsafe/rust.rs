@@ -18,7 +18,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_safety_marker};
+use crate::rules::rust_helpers::{is_safety_marker, is_test_code};
 
 const KINDS: &[&str] = &["unsafe_block"];
 
@@ -40,7 +40,7 @@ impl AstCheck for Check {
         if inside_unsafe_fn(node, ctx.source.as_bytes()) {
             return;
         }
-        if is_in_test_context(node, ctx.source.as_bytes()) {
+        if is_test_code(node, ctx.source.as_bytes(), ctx) {
             return;
         }
         if has_safety_comment_above(node, ctx.source)

@@ -93,7 +93,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    arm_body_is_diverging, enum_has_cfg_gated_variant, has_clippy_allow, is_in_test_context,
+    arm_body_is_diverging, enum_has_cfg_gated_variant, has_clippy_allow, is_test_code,
 };
 
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // The author opted out of the clippy lint this rule mirrors

@@ -1,23 +1,26 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 #[derive(Debug)]
 pub struct Check;
 
-/// True when the IPv4 literal at byte offset `ip_offset` in a Rust `source`
-/// sits inside a `#[cfg(test)]` context (an inline `#[cfg(test)] mod tests`,
-/// a `#[test]` function, a `#![cfg(test)]` file, etc.). Such IPs are test
-/// fixtures, not deployment config, so they must not flag — the same way
-/// `skip_in_test_dir` exempts IPs under `tests/` directories.
+/// True when the IPv4 literal at byte offset `ip_offset` in the Rust file
+/// `ctx` describes sits in test code (an inline `#[cfg(test)] mod tests`, a `#[test]`
+/// function, a `#![cfg(test)]` file, a Cargo `tests/` integration file, …).
+/// Such IPs are test fixtures, not deployment config, so they must not flag.
 ///
 /// Resolves the AST node at the literal's offset and defers to the shared
-/// `is_in_test_context` predicate, which walks the enclosing item ancestry.
-fn rust_offset_in_test_context(tree: &tree_sitter::Tree, source: &str, ip_offset: usize) -> bool {
+/// `is_in_test_context` predicate.
+fn rust_offset_in_test_context(
+    tree: &tree_sitter::Tree,
+    ctx: &CheckCtx,
+    ip_offset: usize,
+) -> bool {
     tree.root_node()
         .descendant_for_byte_range(ip_offset, ip_offset)
-        .is_some_and(|node| is_in_test_context(node, source.as_bytes()))
+        .is_some_and(|node| is_test_code(node, ctx.source.as_bytes(), ctx))
 }
 
 /// Match a dotted-quad IPv4 pattern starting at `start` in `s`.
@@ -285,7 +288,7 @@ impl TextCheck for Check {
                 // literal itself starts `ip.len()` bytes earlier.
                 let ip_offset = line_start + (next - ip.len());
                 if let Some(Some(tree)) = rust_tree.as_ref()
-                    && rust_offset_in_test_context(tree, ctx.source, ip_offset)
+                    && rust_offset_in_test_context(tree, ctx, ip_offset)
                 {
                     continue;
                 }

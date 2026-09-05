@@ -59,7 +59,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     }
 
     let mut struct_fields: Vec<StructFields> = Vec::new();
-    collect_structs(node, source, &mut struct_fields);
+    collect_structs(node, source, ctx, &mut struct_fields);
     dedup_cfg_twins(&mut struct_fields);
 
     // For each 3-field subset, record every struct that contains it, noting
@@ -199,9 +199,14 @@ struct StructFields {
 }
 
 /// Recursively collect struct field sets from the AST.
-fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructFields>) {
+fn collect_structs(
+    node: tree_sitter::Node,
+    source: &[u8],
+    ctx: &crate::rules::backend::CheckCtx,
+    out: &mut Vec<StructFields>,
+) {
     if node.kind() == "struct_item" {
-        if crate::rules::rust_helpers::is_in_test_context(node, source) {
+        if crate::rules::rust_helpers::is_test_code(node, source, ctx) {
             return;
         }
         let declared = declared_type_param_names(node, source);
@@ -258,7 +263,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
     let mut cursor = node.walk();
     if cursor.goto_first_child() {
         loop {
-            collect_structs(cursor.node(), source, out);
+            collect_structs(cursor.node(), source, ctx, out);
             if !cursor.goto_next_sibling() {
                 break;
             }

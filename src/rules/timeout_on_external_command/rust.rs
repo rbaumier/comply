@@ -16,8 +16,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node
     // `Command::new()` inside a `#[cfg(test)]` module / `#[test]` fn, or under a
     // `tests/` integration directory, is compile-time test setup that never runs
     // in production, so the timeout requirement does not apply.
-    if crate::rules::rust_helpers::is_in_test_context(node, source)
-        || crate::rules::rust_helpers::is_under_tests_dir(ctx.path)
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx)
     {
         return;
     }

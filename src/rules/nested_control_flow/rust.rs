@@ -80,7 +80,7 @@ impl AstCheck for Check {
         // need deep nesting; they ship only in the test binary. Checked only on
         // over-threshold candidates so production nodes skip the ancestor walk.
         if depth > max_depth
-            && !crate::rules::rust_helpers::is_in_test_context(node, ctx.source.as_bytes())
+            && !crate::rules::rust_helpers::is_test_code(node, ctx.source.as_bytes(), ctx)
         {
             let line = node.start_position().row + 1;
             if flagged_lines.insert(line) {

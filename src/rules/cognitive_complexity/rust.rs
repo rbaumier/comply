@@ -77,7 +77,7 @@ fn compute(node: tree_sitter::Node, source: &[u8], nesting: u32) -> u32 {
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     // Test-only combination generators and exhaustive fixtures legitimately
     // need deep nesting / high complexity; they ship only in the test binary.
-    if crate::rules::rust_helpers::is_in_test_context(node, source) {
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx) {
         return;
     }
     let Some(body) = node.child_by_field_name("body") else { return };

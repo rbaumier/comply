@@ -43,9 +43,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{
-    is_in_fn_main, is_in_test_context, is_in_trait_impl, is_under_tests_dir,
-};
+use crate::rules::rust_helpers::{is_in_fn_main, is_in_trait_impl, is_test_code};
 
 const KINDS: &[&str] = &["generic_type"];
 
@@ -83,8 +81,7 @@ impl AstCheck for Check {
         if is_in_trait_impl_method_signature(node) {
             return;
         }
-        if is_in_test_context(node, source_bytes)
-            || is_under_tests_dir(ctx.path)
+        if is_test_code(node, source_bytes, ctx)
             || is_in_fn_main(node, source_bytes)
             || crate::rules::path_utils::is_rust_build_script(ctx.path)
             || ctx

@@ -8,7 +8,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     crate_has_external_consumers, has_doc_hidden, has_outer_attribute_path, has_test_attribute,
-    is_in_test_context, is_under_tests_dir,
+    is_test_code,
 };
 use std::path::{Path, PathBuf};
 
@@ -76,9 +76,8 @@ impl AstCheck for Check {
         // attribute, an enum inside an enclosing `#[cfg(test)]` module, and a
         // `pub enum` under a `tests/` directory (integration tests, fixtures) —
         // none of which is a SemVer-bound published surface.
-        if is_in_test_context(node, source_bytes)
+        if is_test_code(node, source_bytes, ctx)
             || has_test_attribute(node, source_bytes)
-            || is_under_tests_dir(ctx.path)
         {
             return;
         }
@@ -628,8 +627,8 @@ mod tests {
         // #3846: a `pub enum` in a file under a `tests/` directory (integration
         // test, fixture) is not part of any crate's published API surface, so
         // `#[non_exhaustive]` is meaningless there. Exempt via the shared
-        // `is_under_tests_dir` predicate, generalizing the inline `#[cfg(test)]`
-        // exemption to the `tests/` directory.
+        // `is_in_test_context` predicate, whose path half generalizes the inline
+        // `#[cfg(test)]` exemption to the `tests/` directory.
         let dir = TempDir::new().unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(

@@ -37,7 +37,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     fn_is_extern, has_outer_attribute_path, has_symbol_export_attribute, has_test_attribute,
-    is_in_test_context, is_pub_including_restricted,
+    is_pub_including_restricted, is_test_code,
 };
 
 /// Name prefixes where a `bool` argument is already self-describing at the call
@@ -62,7 +62,7 @@ crate::ast_check! { on ["function_item", "function_signature_item"] prefilter = 
     if ctx.file.path_segments.in_test_dir { return; }
     // `is_in_test_context` reads the ANCESTORS' attributes, so a `#[test]` or
     // `#[cfg(test)]` written on this very function needs its own check.
-    if is_in_test_context(node, source) || has_test_attribute(node, source) { return; }
+    if is_test_code(node, source, ctx) || has_test_attribute(node, source) { return; }
     if !is_public_api_fn(node, source) { return; }
 
     let Some(name_node) = node.child_by_field_name("name") else { return; };

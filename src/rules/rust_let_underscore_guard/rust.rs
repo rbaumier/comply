@@ -30,7 +30,7 @@
 //! usually just asserting the lock is free.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, rust_path_segments};
+use crate::rules::rust_helpers::{is_test_code, rust_path_segments};
 
 /// Zero-argument methods that return an RAII guard rather than a plain value.
 const GUARD_METHODS: &[&str] = &["lock", "try_lock", "read", "write", "enter", "entered"];
@@ -86,7 +86,7 @@ crate::ast_check! { on ["let_declaration"] prefilter = ["let _"] => |node, sourc
     let Some(value) = node.child_by_field_name("value") else { return; };
     let Some((kind, call)) = guard_producer(value, source) else { return; };
 
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
