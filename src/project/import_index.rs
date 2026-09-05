@@ -156,6 +156,21 @@ pub struct ExportedSymbol {
     /// `oxc_helpers::bound_positional_params`; read it through
     /// [`ExportedSymbol::binds_at_most`].
     pub bound_positional_params: Option<u8>,
+    /// The positional-parameter bound of every callable *member* this export
+    /// declares, paired with its name — `[("create", 1)]` for a factory object
+    /// exposing `create(column: string)`. Populated for a single-identifier
+    /// `const`/`let`/`var` binding whose members are statically visible: from its
+    /// declared object type (an inline type literal, or a module-local
+    /// `type`/`interface` it names, `Readonly<…>` unwrapped) or from a direct
+    /// object-literal initializer. Lets a consumer bound the arity of
+    /// `<import>.<member>` passed bare to an array-iterator method. An absent
+    /// member — every member of any other export shape included — means unknown
+    /// arity, never "unbounded".
+    ///
+    /// Resolving it needs the module's type declarations, so only the oxc
+    /// extractor computes it; the tree-sitter path (Vue SFC script blocks)
+    /// leaves it empty, which is the same conservative "unknown" state.
+    pub callable_member_bounds: Vec<(String, u8)>,
     /// `true` when this is a single `const` binding whose initializer is a string
     /// literal or a substitution-free template literal (`export const X = "lit"`).
     /// The exported value is then a compile-time-fixed string — the cross-file
@@ -177,6 +192,17 @@ impl ExportedSymbol {
     #[must_use]
     pub fn binds_at_most(&self, n: u8) -> bool {
         self.bound_positional_params.is_some_and(|bound| bound <= n)
+    }
+
+    /// `true` when this export declares `member` as a callable whose positional
+    /// parameters absorb at most the first `n` arguments passed to it. `false`
+    /// when the member is absent from [`ExportedSymbol::callable_member_bounds`]:
+    /// unknown arity is never a bound.
+    #[must_use]
+    pub fn member_binds_at_most(&self, member: &str, n: u8) -> bool {
+        self.callable_member_bounds
+            .iter()
+            .any(|(name, bound)| name == member && *bound <= n)
     }
 }
 
@@ -1723,6 +1749,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: None,
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         });
     }
@@ -2570,6 +2597,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
             return;
@@ -2586,6 +2614,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: None,
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         });
         return;
@@ -2632,6 +2661,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -2655,6 +2685,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: default_export_bound_positional_params(node, source),
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         });
         return;
@@ -2694,6 +2725,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             is_vue_ref_factory: false,
                             is_pinia_store_factory: false,
                             bound_positional_params: fn_bound_positional_params(inner),
+                            callable_member_bounds: Vec::new(),
                             is_string_literal_const: false,
                         });
                     }
@@ -2746,6 +2778,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: fn_bound_positional_params(child),
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -2767,6 +2800,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -2820,6 +2854,10 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         is_vue_ref_factory,
                         is_pinia_store_factory,
                         bound_positional_params,
+                        // Member bounds need the module's type declarations,
+                        // which only the oxc extractor resolves (see
+                        // `ExportedSymbol::callable_member_bounds`).
+                        callable_member_bounds: Vec::new(),
                         is_string_literal_const,
                     });
                 }
@@ -2842,6 +2880,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -2863,6 +2902,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -2885,6 +2925,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -3343,7 +3384,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                 if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic)
                     && !crate::oxc_helpers::is_in_ts_namespace(node.id(), &semantic) =>
             {
-                oxc_extract_export_named(&lines, export, &mut exports);
+                oxc_extract_export_named(&lines, export, &semantic, &mut exports);
             }
             AstKind::ExportAllDeclaration(export)
                 if !crate::oxc_helpers::is_in_ambient_declaration(node.id(), &semantic)
@@ -3370,6 +3411,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                         &export.declaration,
                         &semantic,
                     ),
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -3858,6 +3900,7 @@ fn reference_is_deferred(nodes: &oxc_semantic::AstNodes, ref_node_id: oxc_semant
 fn oxc_extract_export_named(
     lines: &[usize],
     export: &oxc_ast::ast::ExportNamedDeclaration,
+    semantic: &oxc_semantic::Semantic,
     out: &mut Vec<ExportedSymbol>,
 ) {
     use oxc_ast::ast::{Declaration, TSModuleDeclarationName};
@@ -3903,6 +3946,7 @@ fn oxc_extract_export_named(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -3936,6 +3980,7 @@ fn oxc_extract_export_named(
                     bound_positional_params: crate::oxc_helpers::bound_positional_params(
                         &func.params,
                     ),
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -3954,6 +3999,7 @@ fn oxc_extract_export_named(
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -3993,6 +4039,15 @@ fn oxc_extract_export_named(
                 // arrow or function expression (`export const f = (x) => …`).
                 let bound_positional_params =
                     decl.init.as_ref().and_then(oxc_init_bound_positional_params);
+                // The members of a factory object (`export const Node = { create(x) {…} }`,
+                // or one whose declared type names them). Only a single-identifier
+                // binding owns them; a destructuring pattern spreads several names
+                // over one initializer.
+                let callable_member_bounds =
+                    match matches!(&decl.id, BindingPattern::BindingIdentifier(_)) {
+                        true => oxc_declarator_callable_member_bounds(decl, semantic),
+                        false => Vec::new(),
+                    };
                 // Parity with the same-file const-string predicate in
                 // security_detect_non_literal_regexp: a single-identifier `const`
                 // bound to a string literal or a substitution-free template literal.
@@ -4018,6 +4073,7 @@ fn oxc_extract_export_named(
                         is_vue_ref_factory,
                         is_pinia_store_factory,
                         bound_positional_params,
+                        callable_member_bounds: callable_member_bounds.clone(),
                         is_string_literal_const,
                     });
                 }
@@ -4036,6 +4092,7 @@ fn oxc_extract_export_named(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -4052,6 +4109,7 @@ fn oxc_extract_export_named(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -4068,6 +4126,7 @@ fn oxc_extract_export_named(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -4089,6 +4148,7 @@ fn oxc_extract_export_named(
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
                     bound_positional_params: None,
+                    callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
                 });
             }
@@ -4131,6 +4191,7 @@ fn oxc_extract_cjs_export(
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: None,
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         });
     };
@@ -4249,6 +4310,7 @@ fn oxc_extract_export_all(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -4269,6 +4331,7 @@ fn oxc_extract_export_all(
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
         bound_positional_params: None,
+        callable_member_bounds: Vec::new(),
         is_string_literal_const: false,
     });
 }
@@ -4303,6 +4366,32 @@ fn oxc_init_is_pinia_store_factory(init: &oxc_ast::ast::Expression) -> bool {
     matches!(init, Expression::CallExpression(call) if matches!(&call.callee,
         Expression::Identifier(callee)
             if callee.name.as_str() == crate::oxc_helpers::PINIA_STORE_FACTORY))
+}
+
+/// The positional-parameter bounds of a declarator's callable members, from the
+/// declared object type when it names them (`const Node: NodeFactory = …`) and
+/// otherwise from a direct object-literal initializer
+/// (`const Node = { create(x) {…} }`). The annotation wins: it is the contract
+/// the module publishes, and an initializer may be wrapped in a factory call
+/// whose result this cannot see through.
+fn oxc_declarator_callable_member_bounds(
+    decl: &oxc_ast::ast::VariableDeclarator,
+    semantic: &oxc_semantic::Semantic,
+) -> Vec<(String, u8)> {
+    use oxc_ast::ast::Expression;
+    if let Some(ann) = decl.type_annotation.as_ref() {
+        let from_type =
+            crate::oxc_helpers::type_callable_member_bounds(&ann.type_annotation, semantic);
+        if !from_type.is_empty() {
+            return from_type;
+        }
+    }
+    match decl.init.as_ref() {
+        Some(Expression::ObjectExpression(object)) => {
+            crate::oxc_helpers::object_literal_callable_member_bounds(object)
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// oxc equivalent of tree-sitter `declarator_bound_positional_params`: the
@@ -5540,6 +5629,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
         bound_positional_params: None,
+        callable_member_bounds: Vec::new(),
         is_string_literal_const: false,
     });
 }
@@ -5619,6 +5709,7 @@ fn extract_rust_use(
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
                 bound_positional_params: None,
+                callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
             });
         }
@@ -8525,6 +8616,14 @@ mod tests {
                 for imp in &mut oxc.imports {
                     imp.is_runtime_value = true;
                 }
+                // `callable_member_bounds` is likewise oxc-only: resolving a
+                // factory object's members through the module's type
+                // declarations needs the semantic model. The tree-sitter path
+                // leaves it empty (the conservative "unknown arity"), so clear
+                // it before the syntactic-equivalence comparison.
+                for export in &mut oxc.exports {
+                    export.callable_member_bounds.clear();
+                }
                 assert_eq!(
                     oxc, ts,
                     "case #{i} ({file}) diverged:\n--- source ---\n{src}\n\
@@ -8610,6 +8709,42 @@ mod tests {
         // A non-callable default has no statically-visible parameter list.
         assert_eq!(bound("export default 42;"), None);
         assert_eq!(bound("export default class Widget {}"), None);
+    }
+
+    // #6253: a factory object's members carry their own arity — from a
+    // module-local declared type (even behind `Readonly<…>`, and even when the
+    // initializer is an opaque `freeze(…)` call) or from a direct object literal.
+    #[test]
+    fn oxc_computes_export_callable_member_bounds() {
+        let bounds = |src: &str, export_name: &str| {
+            let extract = extract_ts_oxc(src, Path::new("f.ts")).expect("oxc extract");
+            extract
+                .exports
+                .iter()
+                .find(|e| e.name == export_name)
+                .expect("export")
+                .callable_member_bounds
+                .clone()
+        };
+        assert_eq!(
+            bounds(
+                "type Factory = Readonly<{ create(column: string): string }>;\n\
+                 export const Node: Factory = freeze<Factory>({ create(column) { return column; } });",
+                "Node"
+            ),
+            vec![("create".to_string(), 1)]
+        );
+        assert_eq!(
+            bounds(
+                "export const Node = { create(column: string) { return column; }, of: (a: string, b: string) => a + b };",
+                "Node"
+            ),
+            vec![("create".to_string(), 1), ("of".to_string(), 2)]
+        );
+        // An opaque initializer with no declared type exposes no member.
+        assert!(bounds("export const Node = buildFactory();", "Node").is_empty());
+        // A non-callable member carries no parameter list.
+        assert!(bounds("export const Node = { kind: 'x' };", "Node").is_empty());
     }
 
     #[test]

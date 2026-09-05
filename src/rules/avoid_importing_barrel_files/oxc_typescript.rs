@@ -421,6 +421,7 @@ mod tests {
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: None,
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         };
         let own = ExportedSymbol {
@@ -435,6 +436,7 @@ mod tests {
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
             bound_positional_params: None,
+            callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
         };
         // Pure re-export hub → barrel.
