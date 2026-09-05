@@ -2705,6 +2705,28 @@ pub fn is_in_trait_impl(node: Node) -> bool {
     false
 }
 
+/// The implemented trait's last path segment for the nearest `impl Trait for
+/// Type` block enclosing `node` — `Drop` for `impl Drop for T`, `Index` for
+/// `impl ops::Index<&str> for T`.
+///
+/// `None` when the nearest enclosing `impl_item` is inherent (`impl Type { … }`)
+/// or there is none, the same cut [`is_in_trait_impl`] makes. Rules that exempt
+/// a shape one *specific* trait mandates — `Drop::drop` has no `Result` to
+/// return the failure in, `Index::index` returns a reference — read the name
+/// here instead of repeating the walk.
+pub fn enclosing_trait_impl_name<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut current = node.parent();
+    while let Some(ancestor) = current {
+        if ancestor.kind() == "impl_item" {
+            return ancestor
+                .child_by_field_name("trait")
+                .and_then(|trait_node| trait_base_name(trait_node, source));
+        }
+        current = ancestor.parent();
+    }
+    None
+}
+
 /// The `impl Trait for Type` block whose trait mandates the signature that
 /// `node` sits in, when `node` lies inside the declared return type of one of
 /// that impl's methods.
@@ -2747,20 +2769,10 @@ pub fn trait_impl_mandating_return_type(node: Node) -> Option<Node> {
 /// otherwise forbid panicking exempt these bodies.
 ///
 /// Matches both bare `impl Index<…> for T` and path-qualified
-/// `impl ops::Index<…> for T` / `impl std::ops::IndexMut<…> for T` by keying on
-/// the trait name's last path segment, via the nearest enclosing `impl_item`.
+/// `impl ops::Index<…> for T` / `impl std::ops::IndexMut<…> for T`, via
+/// [`enclosing_trait_impl_name`].
 pub fn is_in_index_trait_impl(node: Node, source: &[u8]) -> bool {
-    let mut current = node.parent();
-    while let Some(ancestor) = current {
-        if ancestor.kind() == "impl_item" {
-            return ancestor
-                .child_by_field_name("trait")
-                .and_then(|t| trait_base_name(t, source))
-                .is_some_and(|name| name == "Index" || name == "IndexMut");
-        }
-        current = ancestor.parent();
-    }
-    false
+    enclosing_trait_impl_name(node, source).is_some_and(|name| name == "Index" || name == "IndexMut")
 }
 
 /// The trait's last path segment from an `impl_item`'s `trait` field, e.g.
