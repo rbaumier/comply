@@ -7499,108 +7499,112 @@ fn ident_resolves_to_type_parameter(
     matches!(semantic.nodes().kind(decl), AstKind::TSTypeParameter(_))
 }
 
+/// True when `is_match` holds for `t` or for any type reachable from it through
+/// the forms a type expression composes out of: union and intersection members,
+/// parentheses, generic type arguments, the four parts of a conditional type,
+/// both sides of an indexed access, array and tuple element types (optional and
+/// rest markers peeled), and the operand of a type operator. So `ReturnType<X>`,
+/// `T extends A ? T['x'] : string`, `this['_']['data']`, `T[]`, `keyof T` and
+/// `[T, U]` all reach their inner types.
+///
+/// A type reference's *name* is not descended into — only its type arguments —
+/// so `is_match` receives the reference node itself and decides on the name.
+fn type_tree_any(t: &oxc_ast::ast::TSType, is_match: &impl Fn(&oxc_ast::ast::TSType) -> bool) -> bool {
+    use oxc_ast::ast::TSType;
+    if is_match(t) {
+        return true;
+    }
+    match t {
+        TSType::TSTypeReference(tref) => tref
+            .type_arguments
+            .as_ref()
+            .is_some_and(|args| args.params.iter().any(|p| type_tree_any(p, is_match))),
+        TSType::TSUnionType(u) => u.types.iter().any(|m| type_tree_any(m, is_match)),
+        TSType::TSIntersectionType(i) => i.types.iter().any(|m| type_tree_any(m, is_match)),
+        TSType::TSConditionalType(c) => {
+            type_tree_any(&c.check_type, is_match)
+                || type_tree_any(&c.extends_type, is_match)
+                || type_tree_any(&c.true_type, is_match)
+                || type_tree_any(&c.false_type, is_match)
+        }
+        TSType::TSIndexedAccessType(a) => {
+            type_tree_any(&a.object_type, is_match) || type_tree_any(&a.index_type, is_match)
+        }
+        TSType::TSParenthesizedType(p) => type_tree_any(&p.type_annotation, is_match),
+        TSType::TSArrayType(arr) => type_tree_any(&arr.element_type, is_match),
+        TSType::TSTypeOperatorType(op) => type_tree_any(&op.type_annotation, is_match),
+        TSType::TSTupleType(tuple) => tuple
+            .element_types
+            .iter()
+            .any(|el| tuple_element_any(el, is_match)),
+        TSType::TSNamedTupleMember(member) => tuple_element_any(&member.element_type, is_match),
+        _ => false,
+    }
+}
+
+/// Recurse into a single tuple element, unwrapping optional (`[T?]`) and rest
+/// (`[...T[]]`) markers, so a type held anywhere inside a tuple member is reached.
+fn tuple_element_any(
+    el: &oxc_ast::ast::TSTupleElement,
+    is_match: &impl Fn(&oxc_ast::ast::TSType) -> bool,
+) -> bool {
+    use oxc_ast::ast::TSTupleElement;
+    match el {
+        TSTupleElement::TSOptionalType(opt) => type_tree_any(&opt.type_annotation, is_match),
+        TSTupleElement::TSRestType(rest) => type_tree_any(&rest.type_annotation, is_match),
+        other => other
+            .as_ts_type()
+            .is_some_and(|inner| type_tree_any(inner, is_match)),
+    }
+}
+
 /// True when `t` references at least one enclosing-scope type parameter, or the
-/// polymorphic `this` type, looking through union/intersection members,
-/// parentheses, generic type arguments, conditional types, indexed accesses,
-/// array/tuple element types, and type operators (so `ReturnType<CallFunction>`,
+/// polymorphic `this` type, anywhere in its structure (`ReturnType<CallFunction>`,
 /// `CTEBuilderCallback<N>`, `T extends A ? T['x'] : string`, `this['_']['data']`,
-/// `T[]`, `keyof T`, and `[T, U]` are all seen to reference their parameter or
-/// `this`). Such a type is instantiation-dependent: its concrete form is deferred
-/// to whatever the parameter (or `this`) is bound to per call, so it cannot be
-/// lifted to a module-level alias.
+/// `T[]`, `keyof T`, `[T, U]`). Such a type is instantiation-dependent: its
+/// concrete form is deferred to whatever the parameter (or `this`) is bound to
+/// per call, so it cannot be lifted to a module-level alias.
 #[must_use]
 pub fn type_references_enclosing_type_parameter(
     t: &oxc_ast::ast::TSType,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
-    match t {
-        TSType::TSTypeReference(tref) => {
-            if let TSTypeName::IdentifierReference(id) = &tref.type_name
-                && ident_resolves_to_type_parameter(id, semantic)
-            {
-                return true;
-            }
-            tref.type_arguments.as_ref().is_some_and(|args| {
-                args.params
-                    .iter()
-                    .any(|p| type_references_enclosing_type_parameter(p, semantic))
-            })
-        }
-        TSType::TSUnionType(u) => u
-            .types
-            .iter()
-            .any(|m| type_references_enclosing_type_parameter(m, semantic)),
-        TSType::TSIntersectionType(i) => i
-            .types
-            .iter()
-            .any(|m| type_references_enclosing_type_parameter(m, semantic)),
-        // A conditional type (`T extends A ? B : C`) is instantiation-dependent
-        // when its test, constraint, or either branch references an enclosing
-        // type parameter (or `this`); recurse into all four so a fully-concrete
-        // conditional still resolves to `false` and stays extractable.
-        TSType::TSConditionalType(c) => {
-            type_references_enclosing_type_parameter(&c.check_type, semantic)
-                || type_references_enclosing_type_parameter(&c.extends_type, semantic)
-                || type_references_enclosing_type_parameter(&c.true_type, semantic)
-                || type_references_enclosing_type_parameter(&c.false_type, semantic)
-        }
-        // An indexed access (`this['_']['data']`, `T['data']`) inherits scope
-        // dependence from its object or index type; recurse into both.
-        TSType::TSIndexedAccessType(a) => {
-            type_references_enclosing_type_parameter(&a.object_type, semantic)
-                || type_references_enclosing_type_parameter(&a.index_type, semantic)
-        }
+    type_tree_any(t, &|node| match node {
+        TSType::TSTypeReference(tref) => matches!(
+            &tref.type_name,
+            TSTypeName::IdentifierReference(id) if ident_resolves_to_type_parameter(id, semantic)
+        ),
         // The polymorphic `this` type is bound to its enclosing class/interface
         // scope and is invalid at module scope, so it can never be hoisted.
         TSType::TSThisType(_) => true,
-        // Unwrap parentheses so the walk reaches the inner type of a
-        // parenthesized member (`(T extends A ? B : C) | SQL`).
-        TSType::TSParenthesizedType(p) => {
-            type_references_enclosing_type_parameter(&p.type_annotation, semantic)
-        }
-        // Element-wrapping forms inherit scope dependence from the type they
-        // wrap: `T[]` (array), `keyof T` / `readonly T[]` (type operator), and
-        // `[T, U]` (tuple) each hold an enclosing type parameter that is equally
-        // unhoistable, so recurse into the wrapped element type(s).
-        TSType::TSArrayType(arr) => {
-            type_references_enclosing_type_parameter(&arr.element_type, semantic)
-        }
-        TSType::TSTypeOperatorType(op) => {
-            type_references_enclosing_type_parameter(&op.type_annotation, semantic)
-        }
-        TSType::TSTupleType(tuple) => tuple
-            .element_types
-            .iter()
-            .any(|el| tuple_element_references_enclosing_type_parameter(el, semantic)),
-        // A named tuple member (`[first: T]`) labels its element; the scope
-        // dependence lives in the inner element type.
-        TSType::TSNamedTupleMember(member) => {
-            tuple_element_references_enclosing_type_parameter(&member.element_type, semantic)
-        }
         _ => false,
-    }
+    })
 }
 
-/// Recurse into a single tuple element, unwrapping optional (`[T?]`) and rest
-/// (`[...T[]]`) markers, so an enclosing type parameter held anywhere inside a
-/// tuple member is seen.
-fn tuple_element_references_enclosing_type_parameter(
-    el: &oxc_ast::ast::TSTupleElement,
+/// True when the type-position identifier `id` names a same-file `type X = …`
+/// alias whose right-hand side has no written shape of its own: it is derived
+/// from a value through a `typeof` query (`type TState = ReturnType<typeof
+/// createState>`, `Parameters<typeof f>[0]`, `Awaited<typeof p>`, plain
+/// `typeof x`), or it references a type parameter in scope.
+///
+/// Such an alias is a name for an inferred type. Its members exist only after the
+/// checker has inferred the queried value's type — which, for a value that is
+/// itself generic or contextually typed, differs per instantiation — so there is
+/// no shape a `typeof`/`in`/type-predicate check could test for, and the checker
+/// will not reduce the alias from a runtime check. Casting to it bridges to an
+/// inferred type exactly as `as T` does for a lexical type parameter.
+#[must_use]
+pub fn resolves_to_inferred_type_alias(
+    id: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    use oxc_ast::ast::TSTupleElement;
-    match el {
-        TSTupleElement::TSOptionalType(opt) => {
-            type_references_enclosing_type_parameter(&opt.type_annotation, semantic)
-        }
-        TSTupleElement::TSRestType(rest) => {
-            type_references_enclosing_type_parameter(&rest.type_annotation, semantic)
-        }
-        other => other
-            .as_ts_type()
-            .is_some_and(|inner| type_references_enclosing_type_parameter(inner, semantic)),
-    }
+    use oxc_ast::ast::TSType;
+    let Some(aliased) = resolve_same_file_type_alias(id, semantic) else {
+        return false;
+    };
+    type_tree_any(aliased, &|node| matches!(node, TSType::TSTypeQuery(_)))
+        || type_references_enclosing_type_parameter(aliased, semantic)
 }
 
 /// True when any enclosing function/arrow of `node_id` declares a type-predicate
