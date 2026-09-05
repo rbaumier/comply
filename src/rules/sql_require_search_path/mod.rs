@@ -1,5 +1,9 @@
 //! sql-require-search-path
 //!
+//! A migration satisfies the rule either way its object names can stop
+//! depending on the ambient path: by assigning `search_path` itself, or by
+//! schema-qualifying every `CREATE`/`ALTER TABLE` target.
+//!
 //! `search_path` is a PostgreSQL concept, so a migration file whose SQL is
 //! ClickHouse DDL (`is_clickhouse_ddl`) is skipped entirely.
 
@@ -19,8 +23,8 @@ use crate::rules::sql_helpers::{
 
 pub const META: RuleMeta = RuleMeta {
     id: "sql-require-search-path",
-    description: "Migration files must set `search_path` or use schema-qualified identifiers.",
-    remediation: "Start migrations with `SET search_path = pg_catalog, public;` or qualify every identifier (`public.user`, `pg_catalog.setval`). An attacker with CREATE on any schema in search_path can shadow functions.",
+    description: "Migration files must set `search_path` or schema-qualify their `CREATE`/`ALTER TABLE` targets.",
+    remediation: "Start migrations with `SET LOCAL search_path = public;` (or your app schema): `LOCAL` reverts the path at COMMIT instead of leaving it on the pooled connection, and leaving `pg_catalog` unnamed keeps it searched first for built-ins while `current_schema()` stays writable — a leading `pg_catalog` makes unqualified `CREATE TABLE` fail. Alternatively schema-qualify every `CREATE`/`ALTER TABLE` target (`public.user`). An attacker with CREATE on any schema in search_path can shadow functions.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql"],
@@ -28,6 +32,12 @@ pub const META: RuleMeta = RuleMeta {
     skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
 };
+
+/// The single wording every backend emits. `SET LOCAL search_path = public;`
+/// is the spelling that both survives the migration (it reverts at COMMIT
+/// rather than staying on the pooled connection) and keeps `current_schema()`
+/// writable, so unqualified `CREATE TABLE` still works.
+pub(super) const MESSAGE: &str = "Migration must set `search_path` (`SET LOCAL search_path = public;`) or schema-qualify its `CREATE`/`ALTER TABLE` targets, to prevent identifier hijacking.";
 
 pub fn register() -> RuleDef {
     RuleDef {

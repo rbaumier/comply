@@ -25,7 +25,7 @@ impl TextCheck for Check {
             line: 1,
             column: 1,
             rule_id: super::META.id.into(),
-            message: "Migration must `SET search_path = pg_catalog, public;` (or use schema-qualified names) to prevent identifier hijacking.".into(),
+            message: super::MESSAGE.into(),
             severity: Severity::Error,
             span: None,
         }]
@@ -58,6 +58,20 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn message_prescribes_a_spelling_that_works_for_create_table_issue_8491() {
+        // A leading `pg_catalog` makes `current_schema()` pg_catalog, so an
+        // unqualified `CREATE TABLE` is refused; and a session-scoped `SET`
+        // outlives the migration's COMMIT on a pooled connection. The remedy
+        // the diagnostic hands the author must be neither.
+        let diagnostics = run("/app/migrations/001.sql", "CREATE TABLE users (id INT);");
+        let [only] = diagnostics.as_slice() else {
+            panic!("expected exactly one diagnostic, got {diagnostics:?}");
+        };
+        assert!(only.message.contains("SET LOCAL search_path = public;"));
+        assert!(!only.message.contains("pg_catalog, public"));
     }
 
     #[test]

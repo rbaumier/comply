@@ -66,7 +66,7 @@ impl OxcCheck for Check {
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "Migration must `SET search_path = pg_catalog, public;` (or use schema-qualified names) to prevent identifier hijacking.".into(),
+            message: super::MESSAGE.into(),
             severity: Severity::Error,
             span: None,
         }]
