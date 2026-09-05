@@ -50,15 +50,19 @@
 //!   (`if <cmp> { return false; } … true`), not the `if op() { true } else {
 //!   false }` collapse — *and* the body performs no operation whose failure it
 //!   could swallow: no `?` (`try_expression`), no `Ok`/`Err` construction or
-//!   match pattern, no `.is_ok()`/`.is_err()` call, no discarded call statement
-//!   (`persist(x);`). With a provably infallible body there is no error to hoist
-//!   into `Result::Err`, so `bool` is correct (generalizes the `Some`/`None`
-//!   case to guard clauses). A body that maps a condition onto literals or
-//!   swallows an operation keeps flagging — that is the rule's real target.
+//!   match pattern, no `.is_ok()`/`.is_err()` call, no call result dropped into
+//!   `let _` (`let _ = persist(x);`). With a provably infallible body there is
+//!   no error to hoist into `Result::Err`, so `bool` is correct (generalizes the
+//!   `Some`/`None` case to guard clauses). A body that maps a condition onto
+//!   literals or swallows an operation keeps flagging — that is the rule's real
+//!   target.
+//! - Test code (`#[cfg(test)]`, `#[test]`, a `tests/` directory): the rule's
+//!   subject is a published contract, and a test helper's only caller is the
+//!   test next to it.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_trait_impl, pattern_contains_identifier};
+use crate::rules::rust_helpers::{is_in_trait_impl, is_test_code, pattern_contains_identifier};
 
 const KINDS: &[&str] = &["function_item"];
 
@@ -157,6 +161,12 @@ impl AstCheck for Check {
         // A trait-impl method can't change its signature to `Result` —
         // the `bool` is dictated by the trait contract.
         if is_in_trait_impl(node) {
+            return;
+        }
+        // The remediation ("the caller can see WHY the operation failed")
+        // is about a published contract; a `#[cfg(test)]` helper or a
+        // `tests/` fixture has no caller outside its own test.
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // The bool is a genuine computed value (parser-progress
@@ -723,7 +733,7 @@ fn collect_explicit_returns(node: tree_sitter::Node, source: &[u8], returns: &mu
 /// - `saw_indirect` — a literal produced by an `if`/`match` *value* is the
 ///   `if op() { true } else { false }` collapse the rule exists to flag.
 /// - `body_swallows_operation` — a `?`, `Ok`/`Err`, `.is_ok()`/`.is_err()`, or a
-///   discarded call statement is an operation whose failure is being dropped.
+///   call result dropped into `let _` is an operation whose failure is dropped.
 fn returns_total_predicate(func: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(body) = func.child_by_field_name("body") else {
         return false;
@@ -746,8 +756,8 @@ fn returns_total_predicate(func: tree_sitter::Node, source: &[u8]) -> bool {
 /// True if `node`'s subtree performs an operation whose failure a total
 /// predicate could be swallowing: the `?` operator (`try_expression`), an
 /// `Ok(..)`/`Err(..)` construction or match pattern, a `.is_ok()`/`.is_err()`
-/// call, or a bare call/`await` statement whose result is discarded
-/// (`persist(x);`). Closures, `async` blocks, and nested `fn`s are not descended
+/// call, or a call/`await` whose result is deliberately dropped (`let _ =
+/// persist(x);`). Closures, `async` blocks, and nested `fn`s are not descended
 /// into — an operation there belongs to that inner boundary, not this function
 /// (mirrors `collect_explicit_returns`).
 fn body_swallows_operation(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -768,14 +778,8 @@ fn body_swallows_operation(node: tree_sitter::Node, source: &[u8]) -> bool {
                 return true;
             }
         }
-        "expression_statement" => {
-            // A call/`await` performed for effect with its result dropped is an
-            // operation that could be failing silently (`persist(x);`). A macro
-            // statement (`debug_assert!`, `println!`) is not counted.
-            if node
-                .named_child(0)
-                .is_some_and(|inner| matches!(inner.kind(), "call_expression" | "await_expression"))
-            {
+        "let_declaration" => {
+            if discards_call_result(node, source) {
                 return true;
             }
         }
@@ -784,6 +788,27 @@ fn body_swallows_operation(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut cursor = node.walk();
     node.children(&mut cursor)
         .any(|child| body_swallows_operation(child, source))
+}
+
+/// True if `let_decl` drops a call's result into the wildcard pattern (`let _ =
+/// persist(x);`, `let _ = self.flush().await;`).
+///
+/// `let _ =` is the shape that *silences* `unused_must_use`, so it is the one
+/// statement-level discard that can hide a failure: `Result` and `Option` are
+/// both `#[must_use]`, which makes a bare `persist(x);` statement in a crate
+/// that compiles warning-free proof that the callee returns `()` — nothing to
+/// swallow. A named binding (`let _pending = …`) keeps the value; the callee's
+/// own `Ok`/`Err` markers decide that one.
+fn discards_call_result(let_decl: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(pattern) = let_decl.child_by_field_name("pattern") else {
+        return false;
+    };
+    if pattern.utf8_text(source).map(str::trim) != Ok("_") {
+        return false;
+    }
+    let_decl
+        .child_by_field_name("value")
+        .is_some_and(|value| matches!(value.kind(), "call_expression" | "await_expression"))
 }
 
 /// True if a `call_expression`'s `function` operand marks a fallible call: a
@@ -1422,7 +1447,7 @@ mod tests {
     fn flags_action_with_reachable_true_and_false_returns() {
         // A genuine fallible action: `false` on bad input, `true` on success.
         // Both literals are reachable, so the bool collapses success/failure.
-        let src = "fn save_state(&mut self, x: &str) -> bool { if x.is_empty() { return false; } persist(x); true }";
+        let src = "fn save_state(&mut self, x: &str) -> bool { if x.is_empty() { return false; } let _ = persist(x); true }";
         assert_eq!(run_on(src).len(), 1);
     }
 
@@ -1611,16 +1636,86 @@ mod tests {
     }
 
     #[test]
-    fn flags_total_shape_swallowing_discarded_call() {
-        // Direct-literal guards but a discarded call statement (`persist(x);`):
-        // an operation performed for effect whose failure is dropped.
+    fn flags_total_shape_dropping_call_result() {
+        // Direct-literal guards but a call result dropped into `let _`: the one
+        // statement-level discard that silences `unused_must_use`, so the
+        // failure really is being swallowed into the `bool`.
         let src = "\
             fn apply_change(&self, x: &str) -> bool {\n\
                 if x.is_empty() { return false; }\n\
-                persist(x);\n\
+                let _ = persist(x);\n\
                 true\n\
             }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_total_shape_dropping_awaited_call_result() {
+        // `let _ = <await>;` drops the awaited result the same way.
+        let src = "\
+            async fn apply_change(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                let _ = self.persist(x).await;\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    // --- #8265: a bare call statement is not evidence of a swallowed failure —
+    // `Result` and `Option` are `#[must_use]`, so in a crate that compiles
+    // warning-free `f(x);` provably returns `()` ---
+
+    #[test]
+    fn allows_total_predicate_with_infallible_call_statement() {
+        // quinn `Path::remove_in_flight` — literal guard, a `()`-returning call
+        // statement, literal tail. `BTreeSet::remove` swallows nothing.
+        let src = "\
+            fn remove_in_flight(&mut self, packet: &SentPacket) -> bool {\n\
+                if packet.path_generation != self.generation { return false; }\n\
+                self.in_flight.remove(packet);\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_total_predicate_with_named_binding_of_infallible_call() {
+        // A named binding keeps the value; only `let _ =` drops it.
+        let src = "\
+            fn insert_entry(&mut self, x: u64) -> bool {\n\
+                if self.set.contains(&x) { return false; }\n\
+                let inserted = self.set.insert(x);\n\
+                let _ = inserted;\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_action_bool_in_cfg_test_module() {
+        // A `#[cfg(test)]` helper has no published contract to fix.
+        let src = "\
+            #[cfg(test)]\n\
+            mod tests {\n\
+                fn insert_one(set: &mut BTreeSet<u64>, x: u64) -> bool {\n\
+                    if set.contains(&x) { return false; }\n\
+                    let _ = set.insert(x);\n\
+                    true\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_action_bool_in_tests_directory() {
+        // Same for an integration-test file, which carries no test attribute.
+        let src = "\
+            fn insert_one(set: &mut BTreeSet<u64>, x: u64) -> bool {\n\
+                if set.contains(&x) { return false; }\n\
+                let _ = set.insert(x);\n\
+                true\n\
+            }";
+        assert!(crate::rules::test_helpers::run_rule(&Check, src, "tests/it.rs").is_empty());
     }
 
     // --- #7642: a `macro_invocation` tail forwards a computed bool the same way
