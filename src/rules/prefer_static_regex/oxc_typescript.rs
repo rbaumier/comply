@@ -3,6 +3,9 @@
 //! call). A regex inside an immediately-invoked function expression (IIFE) is
 //! exempt when no non-IIFE function encloses it: a module-scoped IIFE runs once
 //! at load time, so its regex literals are already constructed exactly once.
+//! A `g`/`y`-flagged regex is exempt when hoisting would share its `lastIndex`
+//! cursor: when it drives `.exec()`/`.test()`, or when it is the value the
+//! enclosing function returns.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -67,16 +70,12 @@ impl OxcCheck for Check {
             return;
         }
 
-        // A `g`/`y`-flagged regex used as the receiver of `.exec()`/`.test()`
-        // is stateful: those methods read and advance the regex's `lastIndex`.
-        // Hoisting such a regex to module scope makes that mutable cursor persist
-        // across separate calls (and re-entrant use), corrupting iteration — the
-        // canonical `while ((m = re.exec(s)))` loop relies on `lastIndex`
-        // restarting at 0 on every fresh local instance. Keep it local. Stateless
-        // regexes (no `g`/`y`, or used only with `.match`/`.replace`/…) are still
-        // suggested for hoisting.
+        // Only a `g`/`y`-flagged regex carries a mutable `lastIndex` cursor;
+        // hoisting one whose cursor would then be shared corrupts iteration, so
+        // it stays local. Stateless regexes (no `g`/`y`, or used only with
+        // `.match`/`.replace`/…) are still suggested for hoisting.
         if regex.regex.flags.intersects(RegExpFlags::G | RegExpFlags::Y)
-            && stateful_exec_or_test_usage(node, ctx.source, semantic)
+            && hoisting_would_share_last_index(node, ctx.source, semantic)
         {
             return;
         }
@@ -94,16 +93,21 @@ impl OxcCheck for Check {
     }
 }
 
-/// True when the regex literal at `node` is the receiver of a `.exec()`/`.test()`
-/// call — either inline (`/…/g.exec(s)`) or via a binding (`const re = /…/g;
-/// re.exec(s)`). These are the methods that read/advance `lastIndex`, so a
-/// `g`/`y`-flagged regex used this way must stay local rather than be hoisted.
-fn stateful_exec_or_test_usage<'a>(
+/// True when moving the `g`/`y`-flagged regex literal at `node` to module scope
+/// would let one `lastIndex` cursor be shared. Either the regex is the receiver
+/// of a `.exec()`/`.test()` call — the methods that read and advance
+/// `lastIndex` — inline (`/…/g.exec(s)`) or through a binding (`const re =
+/// /…/g; re.exec(s)`); or it is the value its enclosing function returns, which
+/// hands it to callers this file cannot see.
+fn hoisting_would_share_last_index<'a>(
     node: &oxc_semantic::AstNode<'a>,
     source: &str,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     if regex_is_inline_exec_test_receiver(node, semantic) {
+        return true;
+    }
+    if regex_is_enclosing_function_return_value(node, semantic) {
         return true;
     }
     let Some(var_name) = find_enclosing_binding(node, semantic) else {
@@ -113,6 +117,37 @@ fn stateful_exec_or_test_usage<'a>(
     let exec_pattern = format!("{var_name}.exec(");
     crate::oxc_helpers::source_contains(source, &test_pattern)
         || crate::oxc_helpers::source_contains(source, &exec_pattern)
+}
+
+/// True when the regex literal *is* the value handed back by the function that
+/// encloses it — the concise body of an arrow (`() => /…/g`) or the argument of
+/// a `return` statement. Such a regex escapes to callers the file cannot see, so
+/// a `g`/`y`-flagged one must keep its own `lastIndex` per call. A regex merely
+/// nested inside the returned expression (`return s.replace(/…/g, '')`,
+/// `return { re: /…/g }`) does not escape and is not matched here.
+fn regex_is_enclosing_function_return_value<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    let regex_span = node.kind().span();
+    for ancestor in semantic.nodes().ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ReturnStatement(ret) => {
+                return ret
+                    .argument
+                    .as_ref()
+                    .is_some_and(|argument| argument.span() == regex_span);
+            }
+            AstKind::ArrowFunctionExpression(arrow) => {
+                return arrow
+                    .get_expression()
+                    .is_some_and(|body| body.span() == regex_span);
+            }
+            AstKind::Function(_) => return false,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// True when the regex literal is the immediate object of a `.exec(...)`/
@@ -314,6 +349,37 @@ mod tests {
         // The sticky `/y` flag is stateful the same way as `/g`.
         let code = "function f(s) { const re = /a/y; return re.exec(s); }";
         assert!(run(code).is_empty());
+    }
+
+    #[test]
+    fn allows_global_regex_returned_by_factory() {
+        // Regression for issue #8102: a factory whose value is a `/g` regex
+        // hands a mutable `lastIndex` cursor to unknown callers; hoisting the
+        // literal to module scope would share that cursor between them.
+        let arrow = "const CREATE_CHARACTER_CLASS_PATTERN = () => /\\[([^\\[\\]])*\\]/g;";
+        assert!(run(arrow).is_empty(), "{:?}", run(arrow));
+        let sticky = "const f = () => /a/y;";
+        assert!(run(sticky).is_empty(), "{:?}", run(sticky));
+        let returned = "function f() { return /\\d+/g; }";
+        assert!(run(returned).is_empty(), "{:?}", run(returned));
+    }
+
+    #[test]
+    fn flags_stateless_regex_returned_by_factory() {
+        // Negative space for issue #8102: without `g`/`y` there is no cursor to
+        // share, so a returned regex is still worth hoisting.
+        assert_eq!(run("const f = () => /\\d+/;").len(), 1);
+        assert_eq!(run("function f() { return /\\d+/; }").len(), 1);
+    }
+
+    #[test]
+    fn flags_global_regex_that_does_not_escape_the_function() {
+        // Negative space for issue #8102: the regex is an argument of the
+        // returned expression, not the returned value, so it never escapes.
+        let code = "function f(s) { return s.replace(/\\d+/g, ''); }";
+        assert_eq!(run(code).len(), 1, "{:?}", run(code));
+        let nested = "function f() { return { re: /\\d+/g }; }";
+        assert_eq!(run(nested).len(), 1, "{:?}", run(nested));
     }
 
     #[test]
