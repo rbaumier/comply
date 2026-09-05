@@ -19,6 +19,7 @@ tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.23"
 ignore = "0.4"
 anyhow = "1"
+thiserror = "2"
 tempfile = "3"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["io-std", "rt-multi-thread", "macros", "sync"] }

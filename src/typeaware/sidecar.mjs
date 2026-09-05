@@ -13,8 +13,9 @@
 //
 // The @typescript/native-preview package is resolved from the linted project's
 // node_modules (comply spawns this script with cwd = project root); a missing
-// package yields { error: "package-not-found" } so comply can print an install
-// hint and skip the phase gracefully.
+// package yields { error: "package-not-found" }, which comply reports as a
+// toolchain gap — it names the install command and aborts the run rather than
+// under-report the type-aware rules.
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";

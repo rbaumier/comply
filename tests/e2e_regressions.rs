@@ -352,6 +352,39 @@ fn diff_only_survives_a_non_utf8_file_in_the_diff_issue_8502() {
 }
 
 #[test]
+fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
+    // A TypeScript project with a tsconfig.json but no `@typescript/native-preview`
+    // in its node_modules is every repo you clone. comply diagnoses that gap
+    // itself and knows the remedy, so it must answer like `rustup component add
+    // clippy` does — never "crashed unexpectedly" with a bug-report URL.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\"compilerOptions\":{\"strict\":true},\"include\":[\"src\"]}\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/index.ts"),
+        "export const one = 1;\n",
+    )
+    .unwrap();
+
+    // Whether `node` itself or the package is what's absent decides which
+    // sentence comply prints; both are toolchain gaps and both must exit 2
+    // through the actionable path.
+    Command::cargo_bin("comply")
+        .unwrap()
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("comply: type-aware analysis needs"))
+        .stderr(predicate::str::contains("crashed unexpectedly").not())
+        .stderr(predicate::str::contains("github.com/rbaumier/comply/issues").not());
+}
+
+#[test]
 fn ansi_fixture_does_not_cost_its_batch_its_diagnostics_issue_8402() {
     // oxlint's json writer echoes source text into `message` unescaped, so a
     // golden fixture storing terminal output verbatim (first byte ESC) yields
