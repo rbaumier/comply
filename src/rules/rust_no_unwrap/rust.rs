@@ -5,6 +5,13 @@
 //! opposite of what production code should do. Prefer `?` + proper error
 //! types, or `unwrap_or_else` with a meaningful fallback.
 //!
+//! The message names only remedies that are writable at the reported span. When
+//! the nearest enclosing function or closure has no error channel to propagate
+//! into, `?` does not compile there, so the message drops it and asks for
+//! `unwrap_or_else` or a documented `.expect(…)` instead — the same shape the
+//! `.expect("documented reason")` exemption below already accepts at that
+//! position.
+//!
 //! The diagnostic is anchored on the `unwrap` / `expect` method-name node.
 //! A tree-sitter `call_expression` spans from the head of the receiver chain.
 //! That head is not the method the message names. Once rustfmt has broken the
@@ -291,26 +298,39 @@ impl AstCheck for Check {
         if field_text == "expect" && !first_arg_is_string_message(node, source_bytes) {
             return;
         }
+        let cannot_propagate = enclosing_fn_cannot_propagate(node, source_bytes);
         // Skip `.expect("documented reason")` when the enclosing function/closure
         // cannot propagate via `?` — its return type does not denote a `Result`.
         // `?` is then syntactically impossible, so a documented `.expect()` is the
         // only non-API-breaking invariant assertion. `.unwrap()` (no message) and
         // `.expect("")` (no documented reason) are never exempted here.
-        if field_text == "expect"
-            && expect_has_nonempty_message(node)
-            && enclosing_fn_cannot_propagate(node, source_bytes)
-        {
+        if field_text == "expect" && expect_has_nonempty_message(node) && cannot_propagate {
             return;
         }
-        diagnostics.push(Diagnostic::at_node(
-            std::sync::Arc::clone(&ctx.path_arc),
-            &field,
-            "rust-no-unwrap",
+        // The remedy has to be writable at the reported span: where the enclosing
+        // scope has no error channel, `?` does not compile, so the message names
+        // the two edits that do — and lands on the `.expect("reason")` shape the
+        // exemption above already accepts there.
+        let message = if cannot_propagate {
+            format!(
+                "`.{field_text}()` turns a runtime condition into a panic, and the \
+                 enclosing function or closure has no error channel to propagate \
+                 into — its return type is not a `Result`. Use `unwrap_or_else` \
+                 with a meaningful fallback, or `.expect(\"documented invariant\")` \
+                 when the case is unreachable. Tests are exempted."
+            )
+        } else {
             format!(
                 "`.{field_text}()` turns a runtime condition into a panic. \
                  Use `?` with a proper error type, or `unwrap_or_else` with \
                  a meaningful fallback. Tests are exempted."
-            ),
+            )
+        };
+        diagnostics.push(Diagnostic::at_node(
+            std::sync::Arc::clone(&ctx.path_arc),
+            &field,
+            "rust-no-unwrap",
+            message,
             Severity::Error,
         ));
     }
@@ -1569,5 +1589,90 @@ proc-macro = true
     }
 }"#;
         assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #8222, reduced from `sharkdp/fd`'s `cli.rs:795`: `?` in a fn
+    /// returning `NonZeroUsize` is `error[E0277]`, so the message must not
+    /// prescribe it. The finding stands — a bare `.unwrap()` still hides why the
+    /// author believes the case unreachable — only the remedy changes.
+    #[test]
+    fn message_omits_question_mark_where_the_scope_cannot_propagate() {
+        let source = "pub fn c() -> NonZeroUsize { NonZeroUsize::new(64).unwrap() }";
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(!diagnostics[0].message.contains('?'), "{}", diagnostics[0].message);
+        assert!(diagnostics[0].message.contains("unwrap_or_else"));
+        assert!(diagnostics[0].message.contains(".expect("));
+    }
+
+    /// `OnceLock::get_or_init` fixes its closure's return type to `T`, so `?`
+    /// fails inside it whatever the enclosing fn returns. The rule's walk stops at
+    /// the closure, and the message follows.
+    #[test]
+    fn message_omits_question_mark_inside_a_non_result_closure() {
+        let source = r#"pub fn a(s: &str) -> Option<usize> {
+    let p = PATTERN.get_or_init(|| compile(r"^\d+$").unwrap());
+    s.find(p.as_str())
+}"#;
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(!diagnostics[0].message.contains('?'), "{}", diagnostics[0].message);
+    }
+
+    /// Where the enclosing fn does return a `Result`, `?` is the right edit and
+    /// the message keeps naming it.
+    #[test]
+    fn message_names_question_mark_where_the_scope_can_propagate() {
+        let source = "pub fn d(s: &str) -> Result<String, E> { Ok(compile(s).unwrap()) }";
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("Use `?` with a proper error type"));
+    }
+
+    /// A closure annotated `|| -> Result<T, E>` has an error channel of its own,
+    /// so `?` works inside it.
+    #[test]
+    fn message_names_question_mark_inside_an_annotated_result_closure() {
+        let source = r#"pub fn f() -> u32 {
+    let run = || -> Result<u32, E> { Ok(compile("x").unwrap()) };
+    run().unwrap_or(0)
+}"#;
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("Use `?` with a proper error type"));
+    }
+
+    /// `.expect("")` carries no documented reason, so it keeps flagging — with the
+    /// message that fits its scope.
+    #[test]
+    fn flags_empty_expect_message_with_the_non_propagating_message() {
+        let source = r#"pub fn c() -> NonZeroUsize { NonZeroUsize::new(64).expect("") }"#;
+        let diagnostics = run_on(source);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(!diagnostics[0].message.contains('?'), "{}", diagnostics[0].message);
+    }
+
+    /// No emitted message may prescribe an edit the rule has itself determined is
+    /// unavailable at that span: whenever `?` cannot be written in the enclosing
+    /// scope, it must not appear in the diagnostic.
+    #[test]
+    fn no_message_prescribes_an_unavailable_question_mark() {
+        let non_propagating = [
+            "pub fn c() -> NonZeroUsize { NonZeroUsize::new(64).unwrap() }",
+            "pub fn p() -> PathBuf { home_dir().unwrap() }",
+            r#"pub fn a(s: &str) -> Option<usize> { CELL.get_or_init(|| c(s).unwrap()); None }"#,
+            r#"pub fn m() -> ExitCode { handles.map(|h| h.join().unwrap()); ExitCode::SUCCESS }"#,
+            r#"pub fn s() -> u32 { thread::scope(|scope| scope.spawn(f).join().unwrap()) }"#,
+        ];
+        for source in non_propagating {
+            let diagnostics = run_on(source);
+            assert!(!diagnostics.is_empty(), "expected a diagnostic for {source}");
+            for diagnostic in diagnostics {
+                assert!(
+                    !diagnostic.message.contains('?'),
+                    "message prescribes `?` where it does not compile: {source}"
+                );
+            }
+        }
     }
 }
