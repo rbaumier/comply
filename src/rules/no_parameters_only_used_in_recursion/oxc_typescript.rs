@@ -14,7 +14,8 @@
 //!   symbol, so a same-named binding in another scope (shadowing) is not mistaken
 //!   for recursion.
 //! - Class and object methods have no callable binding, so they recurse through
-//!   `this.method(…)` / `this["method"](…)` matched on the method name.
+//!   `this.method(…)` / `this.#method(…)` / `this["method"](…)` matched on the
+//!   method name.
 //!
 //! A parameter is reported only when it has at least one reference and *every*
 //! reference is a whole argument of a recursive call — a bare identifier passed
@@ -45,8 +46,8 @@ enum Recursion {
     /// `let`/`const foo`): there is no binding to compare, so a bare-identifier
     /// callee matching this name — itself resolving to no binding — is recursive.
     GlobalName(String),
-    /// Class / object method: a call is recursive when it is `this.<name>()` or
-    /// `this["<name>"]()` for this method name.
+    /// Class / object method: a call is recursive when it is `this.<name>()`,
+    /// `this.#<name>()` or `this["<name>"]()` for this method name.
     Method(String),
 }
 
@@ -348,12 +349,15 @@ fn is_recursive_call(
     }
 }
 
-/// True when a callee is `this.<name>` or `this["<name>"]` (optional chaining
-/// included), matching the recursive method name.
+/// True when a callee is `this.<name>`, `this.#<name>` or `this["<name>"]`
+/// (optional chaining included), matching the recursive method name.
 fn callee_is_this_method(callee: &Expression, name: &str) -> bool {
     match callee {
         Expression::StaticMemberExpression(member) => {
             object_is_this(&member.object) && member.property.name == name
+        }
+        Expression::PrivateFieldExpression(member) => {
+            object_is_this(&member.object) && member.field.name == name
         }
         Expression::ComputedMemberExpression(member) => {
             object_is_this(&member.object) && computed_member_is(&member.expression, name)
@@ -363,6 +367,9 @@ fn callee_is_this_method(callee: &Expression, name: &str) -> bool {
             match &chain.expression {
                 oxc_ast::ast::ChainElement::StaticMemberExpression(member) => {
                     object_is_this(&member.object) && member.property.name == name
+                }
+                oxc_ast::ast::ChainElement::PrivateFieldExpression(member) => {
+                    object_is_this(&member.object) && member.field.name == name
                 }
                 oxc_ast::ast::ChainElement::ComputedMemberExpression(member) => {
                     object_is_this(&member.object) && computed_member_is(&member.expression, name)
@@ -394,6 +401,9 @@ fn method_name(key: &oxc_ast::ast::PropertyKey) -> Option<String> {
     match key {
         oxc_ast::ast::PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
         oxc_ast::ast::PropertyKey::StringLiteral(lit) => Some(lit.value.to_string()),
+        // `id.name` is sigil-less on both the declaration and the `this.#name(…)`
+        // callee, so the two sides match without normalisation.
+        oxc_ast::ast::PropertyKey::PrivateIdentifier(id) => Some(id.name.to_string()),
         _ => None,
     }
 }
@@ -506,6 +516,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn private_method_this_call() {
+        // Regression for rbaumier/comply#8153 — a `#private` method is authored
+        // exactly like a public one, and `this.#count(…)` is the same recursion,
+        // so `acc` is just as dead there as in the public form.
+        assert_eq!(
+            count("class C {\n  #count(n, acc) {\n    if (n === 0) return 0;\n    return this.#count(n - 1, acc);\n  }\n}"),
+            1
+        );
+    }
+
     // --- Valid (Biome valid.js fixtures): parameter read outside recursion ---
 
     #[test]
@@ -558,6 +579,16 @@ mod tests {
     fn optional_chaining_param_used_elsewhere() {
         assert_eq!(
             count("class C {\n  count(n, acc) {\n    console.log(acc);\n    if (n === 0) return 0;\n    return this?.count(n - 1, acc);\n  }\n}"),
+            0
+        );
+    }
+
+    #[test]
+    fn private_method_param_read_outside_recursion() {
+        // Negative space for #8153: reaching `#private` members must not widen
+        // the rule — a private method whose parameter is really read stays clean.
+        assert_eq!(
+            count("class C {\n  #count(n, acc) {\n    if (n === 0) return acc;\n    return this.#count(n - 1, acc);\n  }\n}"),
             0
         );
     }
