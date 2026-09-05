@@ -643,6 +643,59 @@ const renderImage: RenderRule = (tokens, idx, options) => tokens[options];
         assert!(run(src).is_empty());
     }
 
+    /// Regression for issue #8298 — Effect-TS's vitest wrapper annotates its
+    /// bindings with an indexed access on a named type. `Tester<R>["only"]`
+    /// owns that parameter list exactly as a bare `Test<R>` would.
+    #[test]
+    fn no_fp_on_indexed_access_annotated_bindings_issue_8298() {
+        let src = r#"
+const only: Vitest.Tester<R>["only"] = (name, self, timeout) => run(name, self, timeout);
+const skip: Vitest.Tester<R>["skip"] = (name, self, timeout) => run(name, self, timeout);
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    /// Control: the indexed access reads an inline type literal, whose members
+    /// are written at the same site as the functions, so the parameter list is
+    /// still the author's to change.
+    #[test]
+    fn still_flags_inline_indexed_access_annotated_bindings() {
+        let src = r#"
+const only: { only: (name: string, self: string, timeout: number) => void }["only"] =
+  (name, self, timeout) => run(name, self, timeout);
+const skip: { skip: (name: string, self: string, timeout: number) => void }["skip"] =
+  (name, self, timeout) => run(name, self, timeout);
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    /// Regression for issue #8298 — a curried factory whose own position is
+    /// annotated declares no return type, but the constraint on that position
+    /// reaches the function it returns.
+    #[test]
+    fn no_fp_on_curried_annotated_factories_issue_8298() {
+        let src = r#"
+const skipIf: Factory = (condition) => (name, self, timeout) => run(name, self, timeout);
+const runIf: Factory = (condition) => (name, self, timeout) => run(name, self, timeout);
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    /// The block-body spelling of the same shape: the constraint reaches the
+    /// returned function through a `return` statement too.
+    #[test]
+    fn no_fp_on_curried_annotated_factories_with_block_body() {
+        let src = r#"
+const skipIf: Factory = (condition) => {
+  return (name, self, timeout) => run(name, self, timeout);
+};
+const runIf: Factory = (condition) => {
+  return (name, self, timeout) => run(name, self, timeout);
+};
+"#;
+        assert!(run(src).is_empty());
+    }
+
     #[test]
     fn no_fp_on_named_type_annotated_function_expressions() {
         // The `function (…)` form of an annotated binding takes its parameter list
