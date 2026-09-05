@@ -83,10 +83,18 @@
 //! method or accessor. Building a literal never calls what it holds; the stored
 //! expression runs only once something reaches into the literal through the
 //! variable. The trigger is therefore wider than for a directly bound expression:
-//! any *eager read* of the variable before the referenced binding's declaration
-//! line keeps the reference flagged (`const h = { run: () => later }; h.run();
-//! const later = 1`), because a call, a getter read and a setter write all go
-//! through such a read.
+//! an *eager read* of the variable that can run what the literal holds, before the
+//! referenced binding's declaration line, keeps the reference flagged. Three read
+//! shapes qualify — a member access used as a call callee (`const h = { run: () =>
+//! later }; h.run(); const later = 1`), any member access when the literal
+//! declares a getter or a setter (`config.value` runs the getter, `config.value =
+//! 2` runs the setter), and a read of the variable itself (`register(h)`,
+//! `export default h`, `const { run } = h`), which hands the whole container to
+//! somebody who may reach into it. A member access that only extracts a stored
+//! function from a data-only literal (`bus.on('save', reg.onSave)`) runs nothing
+//! and is not a trigger. Following that extracted value is out of reach, so
+//! calling it through an intermediate binding (`const g = h.run; g(); const later
+//! = 1`) is a tolerated false negative.
 //!
 //! A function/arrow expression *assigned* to a target (`inst.email = (params) =>
 //! later`, the constructor-factory convention `factory("Name", (inst, def) => {
@@ -554,8 +562,8 @@ fn is_inside_deferred_definition<'a>(
 ///   `decl_start` (`const f = () => later; f(); const later = 1`);
 /// - a variable holding a literal that *stores* the expression
 ///   (`const handlers = { run: () => later }`) and eagerly read before
-///   `decl_start` (`handlers.run(); const later = 1`): reaching into the literal
-///   is the only way to invoke what it stores, so any eager read may run it;
+///   `decl_start` through a read that can run what the literal holds
+///   (`handlers.run(); const later = 1`) — see [`binding_read_before`];
 /// - an assignment (`inst.email = (p) => later`) whose own site is eagerly
 ///   reachable, which puts the expression within reach of a later call.
 ///
@@ -580,9 +588,20 @@ fn is_deferred_function_expression<'a>(
         Some(ExpressionOwner::Variable(symbol_id, BindingReach::IsValue)) => {
             !binding_called_before(nodes, scoping, symbol_id, decl_start)
         }
-        Some(ExpressionOwner::Variable(symbol_id, BindingReach::StoredInValue)) => {
-            !binding_read_before(nodes, scoping, symbol_id, decl_start)
-        }
+        Some(ExpressionOwner::Variable(
+            symbol_id,
+            BindingReach::StoredInValue {
+                container_declares_accessor,
+            },
+        )) => !binding_read_before(
+            nodes,
+            scoping,
+            symbol_id,
+            &ReadTrigger {
+                decl_start,
+                member_access_runs_code: container_declares_accessor,
+            },
+        ),
         Some(ExpressionOwner::Assignment) => !is_eagerly_reachable(nodes, func_id, decl_start),
         None => false,
     }
@@ -616,9 +635,15 @@ enum BindingReach {
     IsValue,
     /// The expression is *stored inside* the variable's value — an object or
     /// array literal (`const handlers = { run: () => ... }`). Reaching into that
-    /// literal is the only way to trigger the expression, so any read of the
-    /// variable may run it.
-    StoredInValue,
+    /// literal is the only way to trigger the expression, so a read of the
+    /// variable that can run something the literal holds may run it.
+    StoredInValue {
+        /// Whether an object literal on the way from the expression to the
+        /// variable declares a getter or a setter. Such a literal runs code on a
+        /// plain member access, so every member access on it is a trigger; a
+        /// data-only literal runs nothing until one of its members is called.
+        container_declares_accessor: bool,
+    },
 }
 
 /// What holds a function/arrow expression at its own site (`const App = () => ...`,
@@ -635,8 +660,9 @@ enum BindingReach {
 /// - *containers* — object and array literals, whatever the property spelling
 ///   (computed key, shorthand method, accessor). They store the expression in the
 ///   holder's value (`BindingReach::StoredInValue`); building a literal never
-///   calls what it holds, and every way of triggering what it holds — a call, a
-///   getter read, a setter write — goes through a read of the holder.
+///   calls what it holds. The walk records whether any object literal it crosses
+///   declares an accessor, which decides later whether a plain member access on
+///   the holder runs code.
 ///
 /// A non-transparent parent (a `CallExpression` making the expression an IIFE or
 /// a call argument, ...) stops the walk and yields `None`. For a variable holder,
@@ -647,13 +673,21 @@ fn function_expression_owner<'a>(
     func_id: NodeId,
 ) -> Option<ExpressionOwner> {
     let mut current = func_id;
-    let mut reach = BindingReach::IsValue;
+    let mut stored_in_container = false;
+    let mut container_declares_accessor = false;
     loop {
         let parent_id = nodes.parent_id(current);
         match nodes.kind(parent_id) {
             AstKind::VariableDeclarator(declarator) => {
                 let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &declarator.id else {
                     return None;
+                };
+                let reach = if stored_in_container {
+                    BindingReach::StoredInValue {
+                        container_declares_accessor,
+                    }
+                } else {
+                    BindingReach::IsValue
                 };
                 return id
                     .symbol_id
@@ -666,15 +700,31 @@ fn function_expression_owner<'a>(
             | AstKind::ParenthesizedExpression(_)
             | AstKind::TSAsExpression(_)
             | AstKind::TSSatisfiesExpression(_) => current = parent_id,
-            AstKind::ObjectProperty(_)
-            | AstKind::ObjectExpression(_)
-            | AstKind::ArrayExpression(_) => {
-                reach = BindingReach::StoredInValue;
+            AstKind::ObjectExpression(object) => {
+                stored_in_container = true;
+                container_declares_accessor |= object_declares_accessor(object);
+                current = parent_id;
+            }
+            AstKind::ObjectProperty(_) | AstKind::ArrayExpression(_) => {
+                stored_in_container = true;
                 current = parent_id;
             }
             _ => return None,
         }
     }
+}
+
+/// True when the object literal declares a getter or a setter, so reading or
+/// writing one of its members runs a body instead of moving a value.
+fn object_declares_accessor(object: &oxc_ast::ast::ObjectExpression) -> bool {
+    use oxc_ast::ast::{ObjectPropertyKind, PropertyKind};
+    object.properties.iter().any(|property| {
+        matches!(
+            property,
+            ObjectPropertyKind::ObjectProperty(prop)
+                if matches!(prop.kind, PropertyKind::Get | PropertyKind::Set)
+        )
+    })
 }
 
 /// True when the binding is the callee of an *eager* call expression whose call
@@ -707,25 +757,106 @@ fn binding_called_before(
     })
 }
 
-/// True when an *eager* read of `symbol_id` starts before `decl_start`. Applies
-/// to a function/arrow expression stored in an object or array literal: reaching
-/// into that literal through its variable is the only way to trigger the stored
-/// expression, so an eager read is what could run it during the synchronous
-/// initialization pass that precedes the declaration. Reads nested in another
-/// deferred function body run only when that body is later invoked and do not
-/// count. A write-only reference (`handlers = otherLiteral`) replaces the value
-/// instead of reaching into it, so it cannot trigger what the old literal holds.
+/// Which eager reads of a holder count as reaching what its value stores.
+struct ReadTrigger {
+    /// The referenced binding's declaration: a read starting at or after it runs
+    /// once the binding is initialized and is no hazard.
+    decl_start: u32,
+    /// Whether a member access that is not a call callee runs a body — true when
+    /// the holder's literal declares a getter or a setter.
+    member_access_runs_code: bool,
+}
+
+/// True when an *eager* read of `symbol_id` that can run what the holder's value
+/// stores starts before `trigger.decl_start`. Applies to a function/arrow
+/// expression stored in an object or array literal: reaching into that literal
+/// through its variable is the only way to trigger the stored expression, so such
+/// a read is what could run it during the synchronous initialization pass that
+/// precedes the declaration.
+///
+/// Three read shapes reach what the literal stores, per [`ContainerReadKind`]:
+/// an invoking member access, any member access when the literal declares an
+/// accessor, and a non-member read, which hands the whole container to somebody
+/// who may reach into it. A member access that only extracts a stored function
+/// (`reg.onSave` handed to a listener table) runs nothing on a data-only literal.
+///
+/// Reads nested in another deferred function body run only when that body is
+/// later invoked and do not count. A write-only reference (`handlers =
+/// otherLiteral`) replaces the value instead of reaching into it, so it cannot
+/// trigger what the old literal holds.
 fn binding_read_before(
     nodes: &oxc_semantic::AstNodes,
     scoping: &Scoping,
     symbol_id: oxc_semantic::SymbolId,
-    decl_start: u32,
+    trigger: &ReadTrigger,
 ) -> bool {
     scoping.get_resolved_references(symbol_id).any(|reference| {
-        reference.is_read()
-            && nodes.kind(reference.node_id()).span().start < decl_start
-            && is_eagerly_reachable(nodes, reference.node_id(), decl_start)
+        if !reference.is_read() {
+            return false;
+        }
+        let ref_id = reference.node_id();
+        if nodes.kind(ref_id).span().start >= trigger.decl_start {
+            return false;
+        }
+        let reaches = match container_read_kind(nodes, ref_id) {
+            ContainerReadKind::InvokingMember | ContainerReadKind::WholeContainer => true,
+            ContainerReadKind::PlainMember => trigger.member_access_runs_code,
+        };
+        reaches && is_eagerly_reachable(nodes, ref_id, trigger.decl_start)
     })
+}
+
+/// What an eager read of a holder does with the value it reads.
+enum ContainerReadKind {
+    /// A member access used as a call callee — `h.run()`, `h[key]()`,
+    /// `h.run?.()`, `h!.run()`, `h.run.call(null)`. It invokes what the holder's
+    /// value stores.
+    InvokingMember,
+    /// A member access that is not a callee — an extraction handed elsewhere
+    /// (`bus.on('save', reg.onSave)`) or a property write (`h.value = 1`). It
+    /// moves a value; running a body needs an accessor on the literal.
+    PlainMember,
+    /// A read of the holder itself — `register(h)`, `export default h`,
+    /// `const { run } = h`, `{ ...h }`. The whole container goes to somebody who
+    /// may reach into it, so it counts like an invocation.
+    WholeContainer,
+}
+
+/// How the read at `ref_id` reaches the holder's value, by walking outward
+/// through the member accesses rooted at that read. Parentheses, non-null
+/// assertions and optional-chain wrappers are transparent: the runtime never sees
+/// them as a step. A member access whose *property* is the read (`x[h]`) is not
+/// rooted at it, so the walk stops there.
+fn container_read_kind(nodes: &oxc_semantic::AstNodes, ref_id: NodeId) -> ContainerReadKind {
+    let mut current = ref_id;
+    let mut through_member = false;
+    loop {
+        let current_span = nodes.kind(current).span();
+        let parent_id = nodes.parent_id(current);
+        match nodes.kind(parent_id) {
+            AstKind::StaticMemberExpression(member) if member.object.span() == current_span => {
+                through_member = true;
+            }
+            AstKind::ComputedMemberExpression(member) if member.object.span() == current_span => {
+                through_member = true;
+            }
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::ChainExpression(_) => {}
+            AstKind::CallExpression(call)
+                if through_member && call.callee.span() == current_span =>
+            {
+                return ContainerReadKind::InvokingMember;
+            }
+            _ => break,
+        }
+        current = parent_id;
+    }
+    if through_member {
+        ContainerReadKind::PlainMember
+    } else {
+        ContainerReadKind::WholeContainer
+    }
 }
 
 /// True when `node_id` shares a synchronous pass with the declaration starting
@@ -2459,5 +2590,99 @@ mod tests {
             "the lexical eagerness read leaves this shape unflagged: {:?}",
             run_on(source)
         );
+    }
+
+    #[test]
+    fn no_fp_stored_arrow_only_registered_as_a_listener_issue_8177() {
+        // `bus.on('save', reg.onSave)` extracts the arrow and hands it to a
+        // listener table; nothing invokes it during module evaluation, so `store`
+        // is initialized long before the arrow runs.
+        let source = "declare const bus: { on(name: string, fn: () => number): void };\n\
+                      const reg = { onSave: () => store.value };\n\
+                      bus.on('save', reg.onSave);\n\
+                      const store = { value: 1 };";
+        assert!(
+            run_on(source).is_empty(),
+            "extracting a stored arrow should not count as running it: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_stored_arrow_invoked_through_a_computed_member_call_issue_8177() {
+        // Negative space: a computed callee invokes what the literal stores just
+        // like a static one, whatever the key resolves to.
+        let d = run_on(
+            "const h = { run: () => later };\n\
+             const key = 'run';\n\
+             h[key]();\n\
+             const later = 1;",
+        );
+        assert_eq!(d.len(), 1, "a computed member call must stay flagged: {d:?}");
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_stored_arrow_invoked_through_a_chained_member_call_issue_8177() {
+        // Negative space: the callee sits two member levels above the read, and
+        // `Function.prototype.call` runs the stored arrow all the same.
+        let d = run_on(
+            "const h = { run: () => later };\n\
+             h.run.call(null);\n\
+             const later = 1;",
+        );
+        assert_eq!(d.len(), 1, "a chained member call must stay flagged: {d:?}");
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_extraction_on_a_container_declaring_an_accessor_issue_8177() {
+        // Negative space: the accessor gate is per container, not per property —
+        // reading any member of a literal that declares a getter may run it.
+        let d = run_on(
+            "declare const bus: { on(name: string, fn: () => number): void };\n\
+             const h = { get v() { return 0; }, onSave: () => later };\n\
+             bus.on('x', h.onSave);\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an extraction on a container with an accessor must stay flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn tolerated_false_negative_stored_arrow_extracted_then_called_issue_8177() {
+        // `h.run` is a non-invoking member access, so it is not a trigger; the
+        // call goes through `g`, which the analysis does not follow back to the
+        // literal. A runtime TDZ error stays unflagged.
+        let source = "const h = { run: () => later };\n\
+                      const g = h.run;\n\
+                      g();\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "extraction through an intermediate binding is not followed: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn still_flags_container_handed_to_a_callee_issue_8177() {
+        // Negative space: a non-member read hands the whole container away, and
+        // the callee may reach into it during module evaluation.
+        let d = run_on(
+            "const h = { run: () => later };\n\
+             register(h);\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "a container handed to a callee must stay flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
     }
 }
