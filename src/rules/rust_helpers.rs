@@ -473,6 +473,34 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
         || enclosing_item_has_attribute(node, source, attr_marks_test)
 }
 
+/// True when the whole Rust file at `path` is test code, whatever its own AST
+/// says. Two shapes qualify:
+///
+/// - a Cargo integration-test target — anything under a package's `tests/`
+///   directory, where a `#[cfg(test)]` attribute is neither needed nor possible
+/// - a module whose `mod` chain from the crate root crosses a `#[cfg(test)]`
+///   gate, e.g. `#[cfg(test)] mod tests;` in `lib.rs` gating `src/tests/util.rs`
+///
+/// Complements [`is_in_test_context`], which reads only the gates written in the
+/// file itself: neither shape above marks the test code's own ancestors. Rules
+/// whose subject is the code that ships in the release binary pair the two.
+pub fn is_test_only_rust_file(path: &Path, project: &ProjectCtx) -> bool {
+    is_cargo_test_target(path, project) || project.rust_file_is_cfg_test_gated(path)
+}
+
+/// True when `path` sits under the `tests/` directory of the Cargo package that
+/// owns it. The package root anchors the match, so a workspace member's
+/// `crates/foo/tests/io.rs` qualifies while a package that merely lives under a
+/// directory named `tests` does not. A file with no `Cargo.toml` ancestor owns
+/// no target and answers false.
+fn is_cargo_test_target(path: &Path, project: &ProjectCtx) -> bool {
+    let Some(manifest) = project.nearest_cargo_manifest(path) else {
+        return false;
+    };
+    path.strip_prefix(manifest.manifest_dir())
+        .is_ok_and(crate::rules::path_utils::is_cargo_test_target_dir_path)
+}
+
 /// True if the author gated `node`'s compilation on `test`. Every legal
 /// spelling of that gate counts, whether it sits on the node or on a scope
 /// containing it:

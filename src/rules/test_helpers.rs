@@ -113,18 +113,32 @@ pub fn run_rule_in_split_module(
     parent: (&str, &str),
     child: (&str, &str),
 ) -> Vec<Diagnostic> {
-    let (parent_rel, parent_src) = parent;
-    let (child_rel, child_src) = child;
+    run_rule_in_module_tree(check, &[parent, child])
+}
+
+/// Write every `(path relative to the crate root, source)` pair into a temporary
+/// crate, then run `check` on the last one. A rule that walks the `mod` chain
+/// from the crate root — the `#[cfg(test)]` gate can sit several files up — needs
+/// every link of that chain present on disk, which the two-file
+/// [`run_rule_in_split_module`] cannot express.
+///
+/// # Panics
+///
+/// Panics when `files` is empty: there is no file to run the rule on.
+#[must_use]
+pub fn run_rule_in_module_tree(check: &dyn RunRule, files: &[(&str, &str)]) -> Vec<Diagnostic> {
     let dir = tempfile::TempDir::new().unwrap();
-    for rel in [parent_rel, child_rel] {
+    let mut leaf = None;
+    for &(rel, src) in files {
         if let Some(dir_rel) = Path::new(rel).parent() {
             std::fs::create_dir_all(dir.path().join(dir_rel)).unwrap();
         }
+        let path = dir.path().join(rel);
+        std::fs::write(&path, src).unwrap();
+        leaf = Some((path, src));
     }
-    std::fs::write(dir.path().join(parent_rel), parent_src).unwrap();
-    let child_path = dir.path().join(child_rel);
-    std::fs::write(&child_path, child_src).unwrap();
-    run_rule(check, child_src, &child_path)
+    let (leaf_path, leaf_src) = leaf.expect("at least one file to run the rule on");
+    run_rule(check, leaf_src, &leaf_path)
 }
 
 /// Manifest of a crate that exports procedural macros only.

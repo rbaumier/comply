@@ -36,13 +36,18 @@ const SECRET_INDICATORS: &[&str] = &[
 /// Words that pin an overloaded `hash` / `digest` name (see
 /// `OVERLOADED_HASH_WORDS`) to its cryptographic sense. A name ending in one
 /// of those words is sensitive only when one of these is also a word of the
-/// name (`passwordHash`, `expectedHash`, `auth_digest`, `hmac_digest`), so a
-/// bare `hash` (URL fragment) or `digest` (content hash) stays unflagged.
+/// name (`passwordHash`, `auth_digest`, `hmac_digest`), so a bare `hash` (URL
+/// fragment) or `digest` (content hash) stays unflagged.
+///
+/// Every entry names what the value *is* — a credential, or the primitive that
+/// produced it. A word naming what the value *does in the comparison* is not
+/// one: `expected`, `actual`, `computed` and `stored` name the two roles of any
+/// equality check, content-integrity ones included, so they say nothing about
+/// provenance and would qualify every hash comparison in existence.
 const HASH_CRYPTO_QUALIFIERS: &[&str] = &[
     "password", "passwd", "pwd", "secret", "credential", "token", "auth", "authorization",
     "authentication", "pin", "otp", "totp", "hotp", "key", "salt", "digest", "hmac", "sha", "md5",
-    "bcrypt", "scrypt", "argon", "pbkdf", "signature", "checksum", "expected", "computed", "stored",
-    "actual",
+    "bcrypt", "scrypt", "argon", "pbkdf", "signature", "checksum",
 ];
 
 /// Words that name a cryptographic checksum in auth code (`passwordHash`,
@@ -179,9 +184,9 @@ impl NormalizedName {
 /// match but a lexer's `comment_token` or an LSP `lsp_signature` does not.
 ///
 /// A name ending in `hash` or `digest` requires a cryptographic qualifier word
-/// (`passwordHash`, `expectedHash`, `auth_digest`, `hmac_digest`); a bare
-/// `hash` (URL fragment) or `digest` (OCI / sigstore content hash) does not
-/// match.
+/// (`passwordHash`, `auth_digest`, `hmac_digest`); a bare `hash` (URL fragment),
+/// a `digest` (OCI / sigstore content hash), and a pair named for their
+/// comparison roles only (`expected_hash` against `actual_hash`) do not match.
 pub fn is_sensitive_identifier(name: &str) -> bool {
     let name = NormalizedName::new(name);
     if SECRET_WORDS.iter().any(|word| name.ends_with_word(word)) {
@@ -308,12 +313,27 @@ mod tests {
         assert!(is_sensitive_identifier("auth_digest"));
         assert!(is_sensitive_identifier("password_digest"));
         assert!(is_sensitive_identifier("hmac_digest"));
-        assert!(is_sensitive_identifier("expected_digest"));
         // A bare or content-addressed `digest` is a public fingerprint, not a
         // credential — the overloaded word does not qualify itself.
         assert!(!is_sensitive_identifier("digest"));
         assert!(!is_sensitive_identifier("blob_digest"));
         assert!(!is_sensitive_identifier("messageDigest"));
+    }
+
+    /// A word naming a comparison role says which side of an `==` a value sits
+    /// on, not what the value is: every content-integrity check names its
+    /// operands `expected` / `actual` / `computed` / `stored` just as an auth
+    /// check does (#8266).
+    #[test]
+    fn comparison_role_word_does_not_qualify() {
+        assert!(!is_sensitive_identifier("expected_hash"));
+        assert!(!is_sensitive_identifier("expectedHash"));
+        assert!(!is_sensitive_identifier("actual_hash"));
+        assert!(!is_sensitive_identifier("computedHash"));
+        assert!(!is_sensitive_identifier("stored_hash"));
+        assert!(!is_sensitive_identifier("expected_digest"));
+        // The credential word on the other side still qualifies the pair.
+        assert!(is_sensitive_identifier("expected_password_hash"));
     }
 
     /// `hash` is overloaded: a cryptographic digest in auth code, a URL
@@ -323,11 +343,9 @@ mod tests {
         // Genuine crypto hashes still fire.
         assert!(is_sensitive_identifier("passwordHash"));
         assert!(is_sensitive_identifier("password_hash"));
-        assert!(is_sensitive_identifier("expected_hash"));
-        assert!(is_sensitive_identifier("expectedHash"));
-        assert!(is_sensitive_identifier("computedHash"));
         assert!(is_sensitive_identifier("sha256Hash"));
         assert!(is_sensitive_identifier("token_hash"));
+        assert!(is_sensitive_identifier("bcryptHash"));
         // A bare or routing `hash` is the URL fragment, not a credential.
         assert!(!is_sensitive_identifier("hash"));
         assert!(!is_sensitive_identifier("locationHash"));
@@ -337,7 +355,7 @@ mod tests {
     #[test]
     fn snake_case_suffix() {
         assert!(is_sensitive_identifier("user_password"));
-        assert!(is_sensitive_identifier("expected_hash"));
+        assert!(is_sensitive_identifier("password_hash"));
         assert!(is_sensitive_identifier("api_key"));
         assert!(is_sensitive_identifier("auth_token"));
     }
@@ -345,7 +363,7 @@ mod tests {
     #[test]
     fn camel_case_suffix() {
         assert!(is_sensitive_identifier("userPassword"));
-        assert!(is_sensitive_identifier("expectedHash"));
+        assert!(is_sensitive_identifier("passwordHash"));
         assert!(is_sensitive_identifier("accessToken"));
     }
 

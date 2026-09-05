@@ -10,21 +10,23 @@
 //! when it is a scalar-integer or boolean comparison (a single constant-time
 //! instruction), or when either operand is a string / char literal (a public
 //! compile-time constant baked into the binary, not a runtime secret).
+//!
+//! Test code is out of scope — it is no attack surface. That covers the gates
+//! the file itself carries (`#[cfg(test)]`, `#[test]`) and the ones it cannot:
+//! a Cargo `tests/` target and a module gated by its parent's
+//! `#[cfg(test)] mod …;` (`rust_helpers::is_test_only_rust_file`).
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 use super::helpers::{is_content_integrity_comparison, is_sensitive_identifier};
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
-    if crate::rules::rust_helpers::is_in_test_context(node, source) {
-        return;
-    }
-    if is_in_partial_eq_eq_method(node, source) {
-        return;
-    }
     let Some(op) = node.child_by_field_name("operator") else { return };
     let op_text = op.utf8_text(source).unwrap_or("");
     if op_text != "==" && op_text != "!=" {
+        return;
+    }
+    if is_in_partial_eq_eq_method(node, source) {
         return;
     }
     let Some(left) = node.child_by_field_name("left") else { return };
@@ -41,6 +43,15 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let left_hit = left_name.is_some_and(is_sensitive_identifier);
     let right_hit = right_name.is_some_and(is_sensitive_identifier);
     if !left_hit && !right_hit {
+        return;
+    }
+    // Test code is no attack surface: it runs under `cargo test` and never ships.
+    // The gate can sit on the comparison's own ancestors, on the `mod`
+    // declaration in a parent file, or nowhere at all (a Cargo `tests/` target).
+    // Both lookups are far costlier than the name match, so they run last.
+    if crate::rules::rust_helpers::is_in_test_context(node, source)
+        || crate::rules::rust_helpers::is_test_only_rust_file(ctx.path, ctx.project)
+    {
         return;
     }
     // A scalar-integer comparison is a single constant-time machine instruction,
@@ -215,6 +226,11 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
+    /// A comparison the rule flags on its own, so a multi-file test reads as a
+    /// question about the file's role rather than about the comparison.
+    const PASSWORD_COMPARISON: &str =
+        "pub fn same(password: &str, other: &str) -> bool { password == other }";
+
     #[test]
     fn flags_password_comparison() {
         let src = "fn f(password: &str, input: &str) -> bool { password == input }";
@@ -236,8 +252,23 @@ mod tests {
 
     #[test]
     fn flags_hash_comparison() {
-        let src = "fn f() -> bool { expected_hash != received_hash }";
+        let src = "fn f() -> bool { password_hash != received_hash }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// quinn/tests/many_connections.rs:174 (#8266) — a CRC32 check of a public
+    /// payload. `encoded_hash` and `actual_hash` name the two roles of the
+    /// comparison and nothing else: neither operand is a credential.
+    #[test]
+    fn does_not_flag_crc32_role_named_hash_comparison() {
+        let src = r#"
+fn hash_correct(data: &[u8], crc: &Crc<u32>) -> bool {
+    let encoded_hash = ((data[0] as u32) << 24) | data[3] as u32;
+    let actual_hash = crc.checksum(&data[4..]);
+    encoded_hash == actual_hash
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -584,12 +615,12 @@ fn validate(dist: &Dist) -> Result<(), LockError> {
     }
 
     /// A property of a secret is one bit, not the secret: `.is_some()` proves
-    /// both operands are `bool`. The `expected_hash` field is sensitive and
+    /// both operands are `bool`. The `password_hash` field is sensitive and
     /// carries no visible type, so the boolean exemption is what suppresses the
     /// diagnostic.
     #[test]
     fn does_not_flag_boolean_property_of_secret() {
-        let src = "fn f(user: &User) -> bool { user.password_hash.is_some() == user.expected_hash }";
+        let src = "fn f(user: &User) -> bool { user.session.is_some() == user.password_hash }";
         assert!(run_on(src).is_empty());
     }
 
@@ -645,5 +676,80 @@ fn validate(dist: &Dist) -> Result<(), LockError> {
     fn flags_secret_against_other_secret() {
         let src = "fn f(secret: &str, other_secret: &str) -> bool { secret == other_secret }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// quinn-proto/src/tests/util.rs (#8266) — the `#[cfg(test)]` sits on the
+    /// `mod tests;` declaration in the parent file, so the test file's own AST
+    /// carries no gate. Test code is not attack surface.
+    #[test]
+    fn does_not_flag_module_gated_by_parent_cfg_test() {
+        let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+            &Check,
+            &[
+                ("src/lib.rs", "#[cfg(test)]\nmod tests;\n"),
+                ("src/tests/mod.rs", "mod util;\n"),
+                ("src/tests/util.rs", PASSWORD_COMPARISON),
+            ],
+        );
+        assert!(diagnostics.is_empty());
+    }
+
+    /// Over-exemption guard: the same module declared without the gate ships in
+    /// the release binary and must still flag.
+    #[test]
+    fn flags_module_declared_without_cfg_test() {
+        let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+            &Check,
+            &[("src/lib.rs", "mod helpers;\n"), ("src/helpers.rs", PASSWORD_COMPARISON)],
+        );
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    /// quinn/tests/many_connections.rs (#8266) — a Cargo integration test is a
+    /// test binary by construction; `#[cfg(test)]` is neither needed nor possible
+    /// there. Its shared helper modules are test code too.
+    #[test]
+    fn does_not_flag_cargo_integration_test_target() {
+        for target in ["tests/it.rs", "tests/common/mod.rs"] {
+            let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+                &Check,
+                &[
+                    ("Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                    ("src/lib.rs", ""),
+                    (target, PASSWORD_COMPARISON),
+                ],
+            );
+            assert!(diagnostics.is_empty(), "{target} is test-only code");
+        }
+    }
+
+    /// Over-exemption guard: the `tests/` directory is anchored on the package
+    /// root, so a package that merely lives under a directory named `tests` is
+    /// ordinary shipped code.
+    #[test]
+    fn flags_package_nested_under_a_tests_directory() {
+        let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+            &Check,
+            &[
+                ("tests/pkg/Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                ("tests/pkg/src/lib.rs", PASSWORD_COMPARISON),
+            ],
+        );
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    /// Over-exemption guard: a `src/tests/` module is an ordinary module unless
+    /// its declaration is gated, so the `tests` segment alone exempts nothing.
+    #[test]
+    fn flags_src_tests_directory_without_gate() {
+        let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+            &Check,
+            &[
+                ("src/lib.rs", "mod tests;\n"),
+                ("src/tests/mod.rs", "mod util;\n"),
+                ("src/tests/util.rs", PASSWORD_COMPARISON),
+            ],
+        );
+        assert_eq!(diagnostics.len(), 1);
     }
 }

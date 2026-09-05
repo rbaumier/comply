@@ -36,8 +36,10 @@
 //! cryptographic checksum in auth code (`passwordHash`, `auth_digest`) but a
 //! URL fragment (`location.hash`, `route.hash`) or an OCI / sigstore content
 //! hash (`blob_digest`, a struct field `digest`) elsewhere — so each fires
-//! only with a crypto qualifier (`passwordHash`, `expected_digest`), never on
-//! a bare `hash` / `digest`.
+//! only with a crypto qualifier (`passwordHash`, `auth_digest`), never on a
+//! bare `hash` / `digest`. A word naming a comparison *role* (`expected`,
+//! `actual`, `computed`, `stored`) is no such qualifier: it names both sides of
+//! any equality check, integrity ones included.
 //!
 //! A comparison inside the `eq` method of an `impl PartialEq for T` (Rust) is
 //! exempt: `self.hash == other.hash` there is a structural-hash short-circuit
@@ -46,8 +48,13 @@
 //!
 //! A comparison whose operands are provably scalar integers or `bool` (Rust) is
 //! exempt: one such operand types both sides, and the CPU compares them in a
-//! single constant-time instruction. `password_hash.is_some() == expected_hash`
+//! single constant-time instruction. `session.is_some() == password_hash`
 //! carries one bit per side, so it has no byte-by-byte channel to measure.
+//!
+//! Test code is out of scope — it is no attack surface. A TS file under a test
+//! directory is skipped, and so is a Rust file the release binary never
+//! compiles: one gated by `#[cfg(test)]` / `#[test]`, one whose `mod` chain
+//! crosses such a gate, and a Cargo `tests/` integration-test target.
 //!
 //! A comparison where either operand is a JS `Symbol` (TS) is exempt: an inline
 //! `Symbol(...)` / `Symbol.for(...)` call, or an identifier bound to one. A

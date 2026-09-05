@@ -388,6 +388,28 @@ fn is_examples_segment(seg: &str) -> bool {
 /// `src/tests/helper.rs`, `src/examples/mod.rs` — whose items are as reachable
 /// as any other, so a `src` segment before the match disqualifies the path.
 pub fn is_cargo_non_library_target_dir_path(path: &Path) -> bool {
+    cargo_non_library_target_segment(path).is_some()
+}
+
+/// True when `path` sits under a Cargo `tests/` directory outside the package's
+/// `src/`. Cargo compiles every file there into an integration-test crate that
+/// only `cargo test` builds, so nothing in it reaches a release binary and no
+/// `#[cfg(test)]` attribute is needed — or even possible — to say so.
+///
+/// The whole subtree counts, so a shared `tests/common/mod.rs` qualifies as much
+/// as the `tests/it.rs` target that declares it. Narrower than
+/// [`is_cargo_non_library_target_dir_path`], which also answers for `examples/`
+/// and `benches/`: those ship as runnable demos and benchmarks, not as test-only
+/// code.
+pub fn is_cargo_test_target_dir_path(path: &Path) -> bool {
+    cargo_non_library_target_segment(path) == Some("tests")
+}
+
+/// The `examples`/`benches`/`tests` segment naming the Cargo non-library target
+/// directory `path` belongs to. `None` when a `src` segment comes first (an
+/// ordinary module such as `src/tests/helper.rs`) or when the path names none of
+/// them.
+fn cargo_non_library_target_segment(path: &Path) -> Option<&str> {
     for component in path.components() {
         let std::path::Component::Normal(segment) = component else {
             continue;
@@ -396,13 +418,13 @@ pub fn is_cargo_non_library_target_dir_path(path: &Path) -> bool {
             continue;
         };
         if segment == "src" {
-            return false;
+            return None;
         }
         if segment == "benches" || segment == "tests" || is_examples_segment(segment) {
-            return true;
+            return Some(segment);
         }
     }
-    false
+    None
 }
 
 /// True when `path` is a Cargo binary target file: a file sitting directly in a
