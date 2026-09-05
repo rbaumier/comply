@@ -1020,6 +1020,26 @@ export default function Component({ children }) {
     }
 
     #[test]
+    fn no_fp_on_preact_h_import_in_jsx_file() {
+        // The `.jsx` extension carries the same classic transform as `.tsx`:
+        // `h` is consumed by the transform, never by an explicit reference.
+        // (#2085's reproducer path.)
+        let src = r#"
+import { h } from 'preact';
+
+export default function Component({ children }) {
+    return <div>{children}</div>;
+}
+"#;
+        let path = "src/components/Component.jsx";
+        assert!(
+            run_gated(src, path).is_empty(),
+            "FP on `h` import in a .jsx file: {:?}",
+            run_gated(src, path)
+        );
+    }
+
+    #[test]
     fn still_flags_preact_h_import_without_jsx() {
         // No JSX in the file → the classic transform consumes nothing, so an
         // unused `h` import from preact is genuinely dead code.
