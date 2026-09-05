@@ -125,6 +125,49 @@ mod tests {
         assert!(!rule_requires_subprocess(comment_duplicate_detection::RULE_ID));
     }
 
+    /// The full run drives the type-aware toolchain only for the rules that are
+    /// still on: a project whose config disables every type-aware rule must not
+    /// pay the TypeScript program build — nor fail on a toolchain it no longer
+    /// needs.
+    #[test]
+    fn type_aware_gate_follows_the_enabled_rule_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = vec![write_ts(&dir, "a.ts", "export const a = 1;\n")];
+
+        let stock = Config::load_from(dir.path()).unwrap();
+        assert!(
+            type_aware_rules_active(&ts, &stock),
+            "the stock config keeps type-aware rules enabled"
+        );
+
+        let mut disable_all = String::new();
+        let mut seen = FxHashSet::default();
+        for def in rules::all_rule_defs().iter().filter(|r| def_needs_type_aware(r)) {
+            if seen.insert(def.meta.id) {
+                disable_all.push_str(&format!("[rules.\"{}\"]\ndisabled = true\n", def.meta.id));
+            }
+        }
+        assert!(!seen.is_empty(), "expected registered type-aware rules");
+        std::fs::write(dir.path().join("comply.toml"), disable_all).unwrap();
+
+        let opted_out = Config::load_from(dir.path()).unwrap();
+        assert!(
+            !type_aware_rules_active(&ts, &opted_out),
+            "no type-aware rule left enabled must not drive the sidecar"
+        );
+    }
+
+    /// No TypeScript file means no program to resolve, whatever the config says.
+    #[test]
+    fn type_aware_gate_off_without_typescript_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "pub fn f() {}\n").unwrap();
+        let rs = vec![SourceFile { path, language: Language::Rust }];
+        let config = Config::load_from(dir.path()).unwrap();
+        assert!(!type_aware_rules_active(&rs, &config));
+    }
+
     #[test]
     fn run_cross_file_rules_dispatches_only_requested_detectors() {
         let dir = tempfile::tempdir().unwrap();
@@ -406,16 +449,40 @@ fn rule_requires_subprocess(id: &str) -> bool {
         })
 }
 
+/// Whether `def` is enforced through a type-aware backend — a rule delegated to
+/// tsgolint or one of comply's own sidecar rules. Both need a resolved
+/// TypeScript program, so both hang off the same toolchain.
+fn def_needs_type_aware(def: &rules::RuleDef) -> bool {
+    use crate::rules::backend::Backend;
+    def.backends
+        .iter()
+        .any(|(_, b)| matches!(b, Backend::Tsgolint { .. } | Backend::TypeAware))
+}
+
 /// Whether `id` is enforced through the type-aware sidecar (tsgolint / the
 /// type-aware backend), which the full pipeline only runs when asked.
 fn rule_requires_type_aware(id: &str) -> bool {
-    use crate::rules::backend::Backend;
-    rules::all_rule_defs().iter().any(|r| {
-        r.meta.id == id
-            && r.backends
-                .iter()
-                .any(|(_, b)| matches!(b, Backend::Tsgolint { .. } | Backend::TypeAware))
-    })
+    rules::all_rule_defs()
+        .iter()
+        .any(|r| r.meta.id == id && def_needs_type_aware(r))
+}
+
+/// Whether this run needs a resolved TypeScript program: true when at least one
+/// type-aware rule is still enabled on at least one TypeScript file once the
+/// project's config has been applied. A project that disables them all pays
+/// neither the program build nor the toolchain it requires.
+fn type_aware_rules_active(discovered: &[SourceFile], config: &Config) -> bool {
+    let ts: Vec<&SourceFile> = discovered
+        .iter()
+        .filter(|f| f.language.is_typescript_family())
+        .collect();
+    if ts.is_empty() {
+        return false;
+    }
+    rules::all_rule_defs()
+        .iter()
+        .filter(|r| def_needs_type_aware(r))
+        .any(|r| ts.iter().any(|f| config.is_rule_enabled(r.meta.id, &f.path)))
 }
 
 /// Run the in-process cross-file detectors named in `filter`. They need the
@@ -557,11 +624,7 @@ fn lint_project(cli: &Cli) -> Result<bool> {
         &discovered,
         &config,
         &mut timings,
-        // Type-aware analysis is mandatory: the full run always drives the
-        // sidecar and the tsgolint rule set. The `type_aware` gate below stays
-        // for the isolated per-rule path (`comply rules <id>`), which skips the
-        // sidecar when the requested rule doesn't need it.
-        true,
+        type_aware_rules_active(&discovered, &config),
         cli.is_partial_scan(),
     )?;
 
