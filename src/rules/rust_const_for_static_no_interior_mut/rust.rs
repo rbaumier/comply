@@ -32,6 +32,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cfg_test_gates_compilation, has_symbol_export_attribute, is_in_test_macro_fn,
+    is_test_only_rust_file,
 };
 
 const KINDS: &[&str] = &["static_item"];
@@ -123,14 +124,19 @@ impl AstCheck for Check {
     }
 }
 
-/// True when the author gated `node`'s compilation on `test`, so a shipped
-/// artifact reserves no address for it.
+/// True when `node` is compiled only into a test binary, so a shipped artifact
+/// reserves no address for it.
 ///
 /// Three gates, in cost order: `cfg_test_gates_compilation` (the static itself,
-/// an enclosing scope, or the file), an enclosing `#[test]` function, then the
-/// chain of `mod` declarations reaching the file. The first two read the
-/// static's own ancestry, so a `#[cfg(test)] mod tests` elsewhere in the file
-/// leaves the production code beside it in scope.
+/// an enclosing scope, or the file), an enclosing `#[test]` function, then
+/// `is_test_only_rust_file` — the whole file being a Cargo integration-test
+/// target or reached through a `#[cfg(test)] mod …;` declaration. The first two
+/// read the static's own ancestry, so a `#[cfg(test)] mod tests` elsewhere in
+/// the file leaves the production code beside it in scope.
+///
+/// The file gate is what covers a `tests/` support module: Cargo compiles it
+/// only as a test target, so it carries neither a `#[cfg(test)]` attribute nor a
+/// `#[test]` function of its own for the first two gates to find.
 ///
 /// Not `is_in_test_context`: it misses `#[cfg(test)]` on the static itself, and
 /// it counts `#[cfg_attr(test, …)]`, which leaves the item in the release build.
@@ -140,7 +146,7 @@ fn is_test_only(node: tree_sitter::Node, ctx: &CheckCtx) -> bool {
     let source = ctx.source.as_bytes();
     cfg_test_gates_compilation(node, source)
         || is_in_test_macro_fn(node, source)
-        || ctx.project.rust_file_is_cfg_test_gated(ctx.path)
+        || is_test_only_rust_file(ctx.path, ctx.project)
 }
 
 fn is_literal_value(node: tree_sitter::Node) -> bool {
@@ -484,6 +490,39 @@ mod tests {
         // Without this half, any harness breakage would read as a pass above.
         let shipped = run_rule_in_split_module(&Check, ("src/lib.rs", "mod fixtures;\n"), fixture);
         assert_eq!(shipped.len(), 1);
+    }
+
+    /// A support module of a Cargo integration test: `tests/util.rs`, reached by
+    /// `mod util;` from the sibling test targets. Cargo compiles it only as a
+    /// test target, so it carries neither a `#[cfg(test)]` gate nor a `#[test]`
+    /// function for the AST gates to find.
+    const SUPPORT_MODULE: &str = r#"static TEST_DIR: &'static str = "ripgrep-tests";"#;
+
+    fn run_on_crate_file(rel_path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            crate::rules::test_helpers::LIB_CARGO_TOML,
+            SUPPORT_MODULE,
+            rel_path,
+        )
+    }
+
+    #[test]
+    fn allows_static_in_a_cargo_integration_test_support_file() {
+        assert!(run_on_crate_file("tests/util.rs").is_empty());
+        assert!(run_on_crate_file("tests/common/mod.rs").is_empty());
+        // Positive control: the same static under `src/` ships, so it is still
+        // flagged. Without this half, a broken harness would read as a pass.
+        assert_eq!(run_on_crate_file("src/util.rs").len(), 1);
+    }
+
+    #[test]
+    fn flags_statics_outside_the_cargo_test_target_root() {
+        // The gate is the package's `tests/` target root, not a path substring:
+        // `src/test/` is an ordinary module that ships, and a build script runs
+        // at build time with a real address for its statics.
+        assert_eq!(run_on_crate_file("src/test/mod.rs").len(), 1);
+        assert_eq!(run_on_crate_file("build.rs").len(), 1);
     }
 
     #[test]
