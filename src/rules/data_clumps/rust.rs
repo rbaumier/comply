@@ -3,14 +3,21 @@
 //! Walks the AST to find `struct_item` nodes, extracts their fields, and flags
 //! when the same 3-field subset appears in 2+ structs.
 //!
-//! A field is identified by its name *and* its declared type: one shared type
-//! has to pick one type per field, so a name held as `f32` in one struct and
-//! `i32`/`usize` in another (a subpixel and a whole-pixel rectangle) names two
-//! different values and nothing can be extracted. Types are compared as
-//! normalised source text — whitespace collapsed, module path prefixes dropped
-//! so `font::Point` and `Point` agree — and a field whose type cannot be read
-//! matches nothing. `Option<T>` against `T`, `Arc<X>` against `Weak<X>` and
-//! `String` against `Cow<'a, str>` are all type disagreements under that rule.
+//! A field is identified by its name, its declared type *and* its
+//! `#[cfg(...)]` gate. One shared type has to pick one type per field, so a name
+//! held as `f32` in one struct and `i32`/`usize` in another (a subpixel and a
+//! whole-pixel rectangle) names two different values and nothing can be
+//! extracted. Types are compared as normalised source text — whitespace
+//! collapsed, module path prefixes dropped so `font::Point` and `Point` agree —
+//! and a field whose type cannot be read matches nothing. `Option<T>` against
+//! `T`, `Arc<X>` against `Weak<X>` and `String` against `Cow<'a, str>` are all
+//! type disagreements under that rule.
+//!
+//! Cargo features gate individual fields, so a subset only counts when its
+//! fields can be present in one build at once: gated fields must agree on their
+//! predicate, while ungated fields compile everywhere and coexist with any
+//! single gate. A subset that survives under a gate names it in the message, so
+//! a reader on another feature set can reproduce the finding.
 //!
 //! Borrowed "view" structs (a lifetime parameter plus at least one
 //! reference-typed field) are excluded: they intentionally mirror an owned
@@ -63,6 +70,11 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut subset_occurrences: FxHashMap<Vec<Field>, Vec<Occurrence>> = FxHashMap::default();
     for sf in &struct_fields {
         for combo in combinations(&sf.fields, 3) {
+            // Fields under divergent `#[cfg]` gates are never all present in one
+            // build, so they are not a field group any build has.
+            if !is_co_present(&combo) {
+                continue;
+            }
             let all_generic = combo
                 .iter()
                 .all(|f| sf.generic_param_only.contains(&f.name));
@@ -102,15 +114,23 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                 .map(|f| format!("{}: {}", f.name, f.ty))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // Co-presence leaves at most one distinct gate, so the first one is
+            // the build the clump belongs to. Naming it lets a reader on another
+            // feature set reproduce the finding.
+            let build = match subset.iter().find_map(|f| f.cfg.as_deref()) {
+                Some(gate) => format!(" under `#[cfg({gate})]`"),
+                None => String::new(),
+            };
             for &line in &flaggable {
                 if flagged_lines.insert(line) {
                     results.push((
                         line,
                         format!(
-                            "Fields [{}] appear together in {} structs \
+                            "Fields [{}] appear together in {} structs{} \
                              \u{2014} extract into a shared type.",
                             field_names,
                             flaggable.len(),
+                            build,
                         ),
                     ));
                 }
@@ -145,14 +165,18 @@ struct Occurrence {
 }
 
 /// A declared struct field, as it participates in a shared subset. Two fields
-/// are the same field only if both the name and the declared type agree — a
-/// shared type has one type per field, so a name that holds different types in
-/// two structs cannot be factored out.
+/// are the same field only if the name, the declared type and the
+/// conditional-compilation gate all agree — a shared type has one type per
+/// field, and a field the two structs gate differently is not present in the
+/// same builds on both sides.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Field {
     name: String,
     /// Declared type, normalised for comparison by `normalized_type_text`.
     ty: String,
+    /// The `#[cfg(...)]` predicate gating the field, `None` when it compiles in
+    /// every build.
+    cfg: Option<String>,
 }
 
 /// Per-struct field data gathered for clump detection.
@@ -201,6 +225,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                         fields.push(Field {
                             name: name.to_string(),
                             ty: ty_text,
+                            cfg: cfg_predicate(field, source),
                         });
                         if type_is_generic_param_only(ty, &declared, source) {
                             generic_param_only.insert(name.to_string());
@@ -223,7 +248,7 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
             out.push(StructFields {
                 line: node.start_position().row + 1,
                 name,
-                cfg_gated: has_cfg_gate(node, source),
+                cfg_gated: cfg_predicate(node, source).is_some(),
                 fields,
                 generic_param_only,
             });
@@ -254,35 +279,74 @@ fn dedup_cfg_twins(structs: &mut Vec<StructFields>) {
     structs.retain(|sf| !sf.cfg_gated || kept_gated_names.insert(sf.name.clone()));
 }
 
-/// True if `struct_node` carries a `#[cfg(...)]` conditional-compilation gate as
-/// a preceding `attribute_item` sibling. Only `cfg` counts, not `cfg_attr`:
-/// `#[cfg_attr(...)]` conditionally applies an attribute but always compiles the
-/// item, so it does not make two same-name definitions mutually exclusive.
-/// Interleaved comment siblings are skipped and unrelated attributes
+/// The `#[cfg(...)]` predicate gating `item` — a `struct_item` or a
+/// `field_declaration` — as normalised text (`feature = "v1"`), or `None` when
+/// the item compiles in every build. Several `#[cfg]` attributes on one item all
+/// have to hold, so they are joined in source order and compare as one gate.
+///
+/// Only `cfg` counts, not `cfg_attr`: `#[cfg_attr(...)]` conditionally applies
+/// an attribute but always compiles the item, so it makes nothing mutually
+/// exclusive. Attributes are the item's preceding `attribute_item` siblings;
+/// interleaved comment siblings are skipped and unrelated attributes
 /// (`#[derive(...)]`) are traversed past. Keying on the `attribute`'s path child
 /// — not a raw text scan — means an attribute merely ending in `cfg`, or the
 /// token `cfg` in a comment, does not match.
-fn has_cfg_gate(struct_node: tree_sitter::Node, source: &[u8]) -> bool {
-    let mut sibling = struct_node.prev_named_sibling();
+fn cfg_predicate(item: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut predicates: Vec<String> = Vec::new();
+    let mut sibling = item.prev_named_sibling();
     while let Some(s) = sibling {
         match s.kind() {
             "line_comment" | "block_comment" => {}
             "attribute_item" => {
                 let mut cursor = s.walk();
-                let path = s
-                    .children(&mut cursor)
-                    .find(|c| c.kind() == "attribute")
-                    .and_then(|attr| attr.named_child(0))
-                    .and_then(|p| p.utf8_text(source).ok());
-                if path == Some("cfg") {
-                    return true;
+                if let Some(attribute) = s.children(&mut cursor).find(|c| c.kind() == "attribute")
+                    && attribute
+                        .named_child(0)
+                        .and_then(|path| path.utf8_text(source).ok())
+                        == Some("cfg")
+                {
+                    predicates.push(
+                        attribute
+                            .child_by_field_name("arguments")
+                            .and_then(|args| args.utf8_text(source).ok())
+                            .map(|text| {
+                                let inner =
+                                    text.trim().trim_start_matches('(').trim_end_matches(')');
+                                inner.split_whitespace().collect::<Vec<_>>().join(" ")
+                            })
+                            .unwrap_or_default(),
+                    );
                 }
             }
             _ => break,
         }
         sibling = s.prev_named_sibling();
     }
-    false
+    if predicates.is_empty() {
+        return None;
+    }
+    predicates.reverse();
+    Some(predicates.join(", "))
+}
+
+/// True when every field of `combo` can be present in one build: gated fields
+/// all carry the same `#[cfg]` predicate, and ungated fields compile in every
+/// build so they coexist with any gate. Two different predicates read as never
+/// co-occurring — without a feature-implication graph that is the sound
+/// reading, and a clump the rule then misses costs nothing.
+fn is_co_present(combo: &[Field]) -> bool {
+    let mut gate: Option<&str> = None;
+    for field in combo {
+        let Some(predicate) = field.cfg.as_deref() else {
+            continue;
+        };
+        match gate {
+            None => gate = Some(predicate),
+            Some(existing) if existing == predicate => {}
+            Some(_) => return false,
+        }
+    }
+    true
 }
 
 /// True when `ty` is determined solely by the host struct's own declared
@@ -1093,6 +1157,193 @@ struct Handle {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// smoltcp's `InterfaceInner` / `Config`: the three shared names sit behind
+    /// three independent Cargo features, so no build of the crate has the
+    /// reported field set — the clump is a fact about the union of build
+    /// variants, not about the code.
+    #[test]
+    fn no_fp_on_per_field_cfg_gates_issue_8344() {
+        let src = r#"
+pub struct InterfaceInner {
+    pub now: u64,
+    #[cfg(any(feature = "medium-ethernet", feature = "medium-ieee802154"))]
+    pub hardware_addr: HardwareAddress,
+    #[cfg(feature = "medium-ieee802154")]
+    pub pan_id: Option<Ieee802154Pan>,
+    #[cfg(feature = "proto-ipv6-slaac")]
+    pub slaac: Slaac,
+}
+
+pub struct Config {
+    pub random_seed: u64,
+    pub hardware_addr: HardwareAddress,
+    #[cfg(feature = "medium-ieee802154")]
+    pub pan_id: Option<Ieee802154Pan>,
+    #[cfg(feature = "proto-ipv6")]
+    pub slaac: bool,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Isolates the gate check from the type check: same names, same types,
+    /// three independent features. Whichever one is enabled, a build gets at
+    /// most one of the three fields.
+    #[test]
+    fn no_fp_on_divergent_field_gates_with_matching_types() {
+        let src = r#"
+pub struct Left {
+    pub now: u64,
+    #[cfg(feature = "a")]
+    pub host: u32,
+    #[cfg(feature = "b")]
+    pub port: u16,
+    #[cfg(feature = "c")]
+    pub proto: u8,
+}
+
+pub struct Right {
+    pub seed: u64,
+    #[cfg(feature = "a")]
+    pub host: u32,
+    #[cfg(feature = "b")]
+    pub port: u16,
+    #[cfg(feature = "c")]
+    pub proto: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The two structs must agree on the gate as well: smoltcp spells `slaac`
+    /// `#[cfg(feature = "proto-ipv6")]` in one struct and
+    /// `#[cfg(feature = "proto-ipv6-slaac")]` in the other, and a build can have
+    /// the field on one side only.
+    #[test]
+    fn no_fp_on_gates_that_differ_between_the_two_structs() {
+        let src = r#"
+pub struct Left {
+    pub now: u64,
+    #[cfg(feature = "x")]
+    pub host: u32,
+    #[cfg(feature = "x")]
+    pub port: u16,
+    #[cfg(feature = "x")]
+    pub proto: u8,
+}
+
+pub struct Right {
+    pub seed: u64,
+    #[cfg(feature = "y")]
+    pub host: u32,
+    #[cfg(feature = "y")]
+    pub port: u16,
+    #[cfg(feature = "y")]
+    pub proto: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Control for the gate comparison: the same three names, ungated, are
+    /// present in every build and stay a clump.
+    #[test]
+    fn still_flags_ungated_twin_of_the_smoltcp_shape() {
+        let src = r#"
+pub struct Left {
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+    pub other_l: u64,
+}
+
+pub struct Right {
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+    pub other_r: u64,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// Gated fields that agree on their predicate are present together whenever
+    /// the feature is on, so they are a clump — and the message names the build
+    /// it belongs to.
+    #[test]
+    fn still_flags_fields_under_one_shared_cfg_gate() {
+        let src = r#"
+pub struct Left {
+    pub other_l: u64,
+    #[cfg(feature = "x")]
+    pub host: u32,
+    #[cfg(feature = "x")]
+    pub port: u16,
+    #[cfg(feature = "x")]
+    pub proto: u8,
+}
+
+pub struct Right {
+    pub other_r: u64,
+    #[cfg(feature = "x")]
+    pub host: u32,
+    #[cfg(feature = "x")]
+    pub port: u16,
+    #[cfg(feature = "x")]
+    pub proto: u8,
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("under `#[cfg(feature = \"x\")]`"));
+    }
+
+    /// Gates on other fields do not disturb an ungated clump: the three shared
+    /// fields compile in every build.
+    #[test]
+    fn still_flags_ungated_clump_beside_gated_fields() {
+        let src = r#"
+pub struct Left {
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+    #[cfg(feature = "tls")]
+    pub cert: String,
+}
+
+pub struct Right {
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+    pub other_r: u64,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
+    }
+
+    /// `#[cfg_attr(...)]` applies an attribute conditionally but always compiles
+    /// the field, so it is not a build gate and the fields still coexist.
+    #[test]
+    fn still_flags_fields_under_cfg_attr() {
+        let src = r#"
+pub struct Left {
+    pub other_l: u64,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+}
+
+pub struct Right {
+    pub other_r: u64,
+    pub host: u32,
+    pub port: u16,
+    pub proto: u8,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
     }
 
     /// ttf-parser's COLR records: the clump is `ColorStopRaw`'s entire field
