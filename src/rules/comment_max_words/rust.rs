@@ -123,6 +123,22 @@ fn f() {}";
     }
 
     #[test]
+    fn a_rustdoc_colour_swatch_holds_no_words() {
+        let src = "\
+/// <style>.palette div{width:2rem;height:2rem}</style><div class=\"palette\" style=\"display:flex;flex-direction:row\"><div style=\"background-color: #f8fafc\"></div><div style=\"background-color: #f1f5f9\"></div><div style=\"background-color: #e2e8f0\"></div><div style=\"background-color: #cbd5e1\"></div><div style=\"background-color: #94a3b8\"></div></div>
+const SLATE: u32 = 0;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn a_long_prose_sentence_on_one_doc_line_still_counts() {
+        let src = "\
+/// This function walks the whole tree and then it walks it again and then a third time so that every node is visited.
+fn walk() {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
     fn fenced_code_in_a_doc_comment_counts_too() {
         let src = "\
 /// Builds the client.

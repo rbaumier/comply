@@ -50,11 +50,11 @@ impl CommentBlock {
         })
     }
 
-    /// Whitespace-separated word count over the whole block.
+    /// How many words the block holds.
     pub fn word_count(&self) -> usize {
         self.lines
             .iter()
-            .map(|l| l.text.split_whitespace().count())
+            .map(|l| l.text.split_whitespace().filter(|t| is_word(t)).count())
             .sum()
     }
 
@@ -72,6 +72,16 @@ impl CommentBlock {
         let lower = self.prose().to_lowercase();
         MARKERS.iter().any(|marker| lower.contains(marker))
     }
+}
+
+/// True when `token` reads as a word of prose.
+///
+/// A run of punctuation carries no prose: `«`, `»`, `—` and `───` are what
+/// surrounds words, not words. Neither is markup or code, which a written word
+/// never spells with an angle bracket, a brace or an equals sign — `<div`,
+/// `class="palette"` and `div{width:2rem}` are transcribed syntax.
+pub fn is_word(token: &str) -> bool {
+    token.chars().any(char::is_alphabetic) && !token.contains(['<', '>', '{', '}', '='])
 }
 
 /// True for a documentation comment (`///`, `//!`, `/**`, `/*!`).
@@ -497,6 +507,16 @@ mod tests {
         assert!(is_tool_directive("@ts-expect-error the upstream types are wrong"));
         assert!(is_tool_directive("Prettier-Ignore"));
         assert!(!is_tool_directive("the eslint-disable above is temporary"));
+    }
+
+    #[test]
+    fn punctuation_runs_and_markup_are_not_words() {
+        for token in ["«", "»", "—", "───", "|", "<div", "class=\"palette\"", "{width:2rem}"] {
+            assert!(!is_word(token), "counted as a word: {token}");
+        }
+        for token in ["Report", "vide", "docs/agents/frontend-patterns.md", "register()"] {
+            assert!(is_word(token), "not counted as a word: {token}");
+        }
     }
 
     #[test]

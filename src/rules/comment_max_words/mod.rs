@@ -62,15 +62,19 @@ pub(crate) fn flagged_sentences(comments: Vec<RawComment>, source: &str, max: us
 }
 
 /// Walk `block` word by word and flag each sentence past `max`.
+/// Only words spend the budget: a token of pure punctuation still closes the
+/// sentence it ends, but it is not something a reader has to read.
 fn over_budget_sentences(block: &comment_blocks::CommentBlock, max: usize) -> Vec<Flag> {
     let mut flags = Vec::new();
     let mut start_line = block.line;
     let mut words = 0;
     for (line, token) in block.tokens() {
-        if words == 0 {
-            start_line = line;
+        if comment_blocks::is_word(token) {
+            if words == 0 {
+                start_line = line;
+            }
+            words += 1;
         }
-        words += 1;
         if !ends_sentence(token) {
             continue;
         }
