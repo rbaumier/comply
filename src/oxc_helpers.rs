@@ -1470,10 +1470,17 @@ pub fn is_fixed_signature_library_callback<'a>(
 ///   (`function Grpc(): MethodDecorator { return (…) => … }`), and the concise body
 ///   of such an arrow (`const Grpc = (svc): MethodDecorator => (…) => …`).
 ///
-/// Only a type NAME qualifies. An inline function type
-/// (`const f: (a: string, b: string) => void = …`) is written at the same site as the
-/// function, so its parameter list is the author's to change; an `as const` assertion
-/// names no declaration and fixes no parameter list either.
+/// A function returned by a function that is itself in such a position inherits the
+/// constraint: `const skipIf: Tester["skipIf"] = (c) => (name, self, timeout) => …`
+/// declares no return type on the outer arrow, so the search resumes from the outer
+/// arrow's own position.
+///
+/// Only a type NAME qualifies, including through an indexed access
+/// (`Tester<R>["only"]`), which reads a member of a type declared elsewhere. An
+/// inline function type (`const f: (a: string, b: string) => void = …`) or an indexed
+/// access into an inline type literal (`{ only: (…) => void }["only"]`) is written at
+/// the same site as the function, so its parameter list is the author's to change; an
+/// `as const` assertion names no declaration and fixes no parameter list either.
 ///
 /// A `ParenthesizedExpression` is a transparent link on the way up; any other
 /// ancestor ends the search, so a function nested in a call argument or an object
@@ -1521,34 +1528,68 @@ pub fn conforms_to_named_function_type(
                     .is_some_and(|ann| is_named_type_reference(&ann.type_annotation));
             }
             // A `return` yields the value of the nearest enclosing function,
-            // whatever statements nest it.
-            AstKind::ReturnStatement(_) => return encloser_returns_named_type(nodes, parent),
-            // A concise arrow body (`(): T => (…) => …`) parses as a one-statement
-            // body, and the arrow returns that statement's value.
-            AstKind::ExpressionStatement(_) if is_concise_arrow_body(nodes, parent) => {
-                return encloser_returns_named_type(nodes, parent);
+            // whatever statements nest it; a concise arrow body
+            // (`(): T => (…) => …`) parses as a one-statement body whose value
+            // the arrow returns too.
+            AstKind::ReturnStatement(_) | AstKind::ExpressionStatement(_)
+                if statement_value_is_returned(nodes, parent) =>
+            {
+                let Some(function_id) = enclosing_function(nodes, parent) else {
+                    return false;
+                };
+                if declared_return_type(nodes.kind(function_id))
+                    .is_some_and(|ann| is_named_type_reference(&ann.type_annotation))
+                {
+                    return true;
+                }
+                // No declared return type: whatever constrains the returned
+                // function sits on the enclosing function's own position, so
+                // resume the walk from there.
+                current = function_id;
             }
             _ => return false,
         }
     }
 }
 
-/// True when the nearest function enclosing `node_id` declares a named return type.
-fn encloser_returns_named_type(
+/// True when `stmt_id`'s value is the one its enclosing function returns: a
+/// `return` argument, or the lone expression of a concise arrow body.
+fn statement_value_is_returned(
     nodes: &oxc_semantic::AstNodes,
-    node_id: oxc_semantic::NodeId,
+    stmt_id: oxc_semantic::NodeId,
 ) -> bool {
     use oxc_ast::AstKind;
 
-    nodes
-        .ancestor_kinds(node_id)
-        .find_map(|kind| match kind {
-            AstKind::Function(func) => Some(func.return_type.as_deref()),
-            AstKind::ArrowFunctionExpression(arrow) => Some(arrow.return_type.as_deref()),
-            _ => None,
-        })
-        .flatten()
-        .is_some_and(|ann| is_named_type_reference(&ann.type_annotation))
+    matches!(nodes.kind(stmt_id), AstKind::ReturnStatement(_))
+        || is_concise_arrow_body(nodes, stmt_id)
+}
+
+/// The nearest function or arrow function enclosing `node_id`.
+fn enclosing_function(
+    nodes: &oxc_semantic::AstNodes,
+    node_id: oxc_semantic::NodeId,
+) -> Option<oxc_semantic::NodeId> {
+    use oxc_ast::AstKind;
+
+    nodes.ancestor_ids(node_id).find(|&id| {
+        matches!(
+            nodes.kind(id),
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+        )
+    })
+}
+
+/// The return type a function node declares, if `kind` is a function at all.
+fn declared_return_type<'a>(
+    kind: oxc_ast::AstKind<'a>,
+) -> Option<&'a oxc_ast::ast::TSTypeAnnotation<'a>> {
+    use oxc_ast::AstKind;
+
+    match kind {
+        AstKind::Function(func) => func.return_type.as_deref(),
+        AstKind::ArrowFunctionExpression(arrow) => arrow.return_type.as_deref(),
+        _ => None,
+    }
 }
 
 /// True when `stmt_id` is the lone statement of an arrow function's concise body
@@ -1567,16 +1608,22 @@ fn is_concise_arrow_body(nodes: &oxc_semantic::AstNodes, stmt_id: oxc_semantic::
 }
 
 /// True when `ty` names a type declared elsewhere (`MethodDecorator`,
-/// `express.RequestHandler`), as opposed to a structural type written inline. The
-/// `const` of an `as const` assertion is not such a name: it prevents literal-type
-/// widening and declares no signature.
+/// `express.RequestHandler`, `Tester<R>["only"]`), as opposed to a structural type
+/// written inline. An indexed access reads a member of its object type, so it
+/// qualifies exactly when that object type does — which keeps
+/// `{ only: (…) => void }["only"]` out, its structure being written at the same site.
+/// The `const` of an `as const` assertion is not such a name either: it prevents
+/// literal-type widening and declares no signature.
 fn is_named_type_reference(ty: &oxc_ast::ast::TSType) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
 
-    let TSType::TSTypeReference(reference) = ty else {
-        return false;
-    };
-    !matches!(&reference.type_name, TSTypeName::IdentifierReference(id) if id.name.as_str() == "const")
+    match ty {
+        TSType::TSIndexedAccessType(indexed) => is_named_type_reference(&indexed.object_type),
+        TSType::TSTypeReference(reference) => {
+            !matches!(&reference.type_name, TSTypeName::IdentifierReference(id) if id.name.as_str() == "const")
+        }
+        _ => false,
+    }
 }
 
 /// True when `ident` resolves to a local binding declared with `const` or `let`
