@@ -413,20 +413,43 @@ fn resolve_alias<'r, 'a: 'r>(
     ty
 }
 
-/// Whether the callable type `ty` declares a `this` parameter — the contract a
-/// `function` written against it is type-checked by. `Some(true)` for a signature
-/// carrying one (`(this: Ctx) => void`), `Some(false)` for a signature without,
-/// `None` when `ty` is no callable signature this file can read: an interface or
-/// imported alias, a union, `any`.
-fn callable_declares_this<'a>(
-    ty: &TSType<'a>,
+/// What a declared callable signature says about the `this` of a `function`
+/// type-checked against it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThisContract {
+    /// The signature carries a `this` parameter, which supplies the binding.
+    Declared,
+    /// The signature declares no `this`, so the function's `this` is unbound.
+    Absent,
+}
+
+impl ThisContract {
+    /// The contract a signature declares, read from its `this` parameter.
+    fn of(this_param: Option<&oxc_ast::ast::TSThisParameter>) -> Self {
+        match this_param {
+            Some(_) => Self::Declared,
+            None => Self::Absent,
+        }
+    }
+}
+
+/// The `this` contract and parameter list of the callable type `ty`, seen through
+/// local aliases. Both spellings of a callable type are read: the function type
+/// (`(this: Ctx, e: string) => void`) and the object type's call signature
+/// (`{ (this: Ctx, e: string): void }`). `None` when `ty` is no callable signature
+/// this file can read — an interface or imported alias, a union, `any`.
+fn callable_signature<'r, 'a: 'r>(
+    ty: &'r TSType<'a>,
     semantic: &oxc_semantic::Semantic<'a>,
-) -> Option<bool> {
+) -> Option<(ThisContract, &'r oxc_ast::ast::FormalParameters<'a>)> {
     match resolve_alias(ty, semantic) {
-        TSType::TSFunctionType(func_type) => Some(func_type.this_param.is_some()),
+        TSType::TSFunctionType(func_type) => Some((
+            ThisContract::of(func_type.this_param.as_deref()),
+            &func_type.params,
+        )),
         TSType::TSTypeLiteral(literal) => literal.members.iter().find_map(|member| match member {
             oxc_ast::ast::TSSignature::TSCallSignatureDeclaration(sig) => {
-                Some(sig.this_param.is_some())
+                Some((ThisContract::of(sig.this_param.as_deref()), &*sig.params))
             }
             _ => None,
         }),
@@ -434,25 +457,23 @@ fn callable_declares_this<'a>(
     }
 }
 
+/// The `this` contract the callable type `ty` declares.
+fn callable_contract<'a>(
+    ty: &TSType<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<ThisContract> {
+    callable_signature(ty, semantic).map(|(contract, _)| contract)
+}
+
 /// The `this` contract that the callable type `ty` puts on its parameter at
-/// `index` — [`callable_declares_this`] of that parameter's declared type.
+/// `index` — the contract of that parameter's own declared type.
 fn signature_parameter_contract<'a>(
     ty: &TSType<'a>,
     index: usize,
     semantic: &oxc_semantic::Semantic<'a>,
-) -> Option<bool> {
-    match resolve_alias(ty, semantic) {
-        TSType::TSFunctionType(func_type) => {
-            callable_declares_this(parameter_type(&func_type.params, index)?, semantic)
-        }
-        TSType::TSTypeLiteral(literal) => literal.members.iter().find_map(|member| match member {
-            oxc_ast::ast::TSSignature::TSCallSignatureDeclaration(sig) => {
-                callable_declares_this(parameter_type(&sig.params, index)?, semantic)
-            }
-            _ => None,
-        }),
-        _ => None,
-    }
+) -> Option<ThisContract> {
+    let (_, params) = callable_signature(ty, semantic)?;
+    callable_contract(parameter_type(params, index)?, semantic)
 }
 
 /// The `this` contract that member `name` of the object type `ty` puts on its
@@ -464,7 +485,7 @@ fn member_parameter_contract<'a>(
     name: &str,
     index: usize,
     semantic: &oxc_semantic::Semantic<'a>,
-) -> Option<bool> {
+) -> Option<ThisContract> {
     let TSType::TSTypeLiteral(literal) = resolve_alias(ty, semantic) else {
         return None;
     };
@@ -481,7 +502,7 @@ fn member_parameter_contract<'a>(
         oxc_ast::ast::TSSignature::TSMethodSignature(method)
             if method.key.static_name().as_deref() == Some(name) =>
         {
-            callable_declares_this(parameter_type(&method.params, index)?, semantic)
+            callable_contract(parameter_type(&method.params, index)?, semantic)
         }
         _ => None,
     })
@@ -500,12 +521,13 @@ fn parameter_type<'r, 'a>(
 /// variable annotation ([`is_typed_callable_binding`]) and the return-type
 /// annotation ([`is_typed_callable_return`]).
 ///
-/// `Some(true)` when the parameter's declared type carries a `this` parameter, so
-/// TypeScript types the argument's `this` as that context; `Some(false)` when the
-/// parameter is a callable type declaring none, so the argument's `this` is
-/// genuinely unbound; `None` when the callee's signature is not readable from
-/// this file — it is imported, ambient, or annotated with a type this analysis
-/// does not resolve — and the callee's published contract answers instead.
+/// [`ThisContract::Declared`] when the parameter's declared type carries a `this`
+/// parameter, so TypeScript types the argument's `this` as that context;
+/// [`ThisContract::Absent`] when the parameter is a callable type declaring none,
+/// so the argument's `this` is genuinely unbound; `None` when the callee's
+/// signature is not readable from this file — it is imported, ambient, or
+/// annotated with a type this analysis does not resolve — and the callee's
+/// published contract answers instead.
 ///
 /// The callee is read from its declaration: a `function`/`declare function`
 /// statement, a binding annotated with a callable type, or a member of a binding
@@ -514,11 +536,11 @@ fn callee_parameter_contract<'a>(
     call: &oxc_ast::ast::CallExpression<'a>,
     index: usize,
     semantic: &oxc_semantic::Semantic<'a>,
-) -> Option<bool> {
+) -> Option<ThisContract> {
     match &call.callee {
         Expression::Identifier(callee) => match resolved_declaration(callee, semantic)? {
             AstKind::Function(func) => {
-                callable_declares_this(parameter_type(&func.params, index)?, semantic)
+                callable_contract(parameter_type(&func.params, index)?, semantic)
             }
             AstKind::VariableDeclarator(declarator) => signature_parameter_contract(
                 &declarator.type_annotation.as_ref()?.type_annotation,
@@ -607,7 +629,7 @@ fn is_callback_with_sibling_this_arg(
     // Trailing `thisArg` immediately after the callback, unless it is a
     // primitive literal that cannot serve as a receiver.
     call.arguments
-        .get(callback_index + 1)
+        .get(callback_index.saturating_add(1))
         .is_some_and(|arg| !is_primitive_literal_arg(arg))
 }
 
@@ -956,7 +978,7 @@ fn is_test_hook_callback(
 fn argument_position_contract(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
-) -> Option<bool> {
+) -> Option<ThisContract> {
     let (call_id, index) = enclosing_call_argument(func_id, semantic)?;
     callee_parameter_contract(call_at(call_id, semantic)?, index, semantic)
 }
@@ -978,7 +1000,7 @@ fn callee_contract_binds_this(
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
     match argument_position_contract(func_id, semantic) {
-        Some(declares_this) => declares_this,
+        Some(contract) => contract == ThisContract::Declared,
         None => {
             is_chai_registration_callback(func_id, semantic)
                 || is_event_emitter_listener_callback(func_id, semantic)
