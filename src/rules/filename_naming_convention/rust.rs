@@ -9,7 +9,10 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 
 /// Rust backend for `filename-naming-convention`: flags `.rs` filenames whose
 /// stem is not snake_case, after stripping a numeric ordering prefix
-/// (`0065_`) and a leading `_` private-module marker. Cargo target paths
+/// (`0065_`, via the shared
+/// [`crate::rules::path_utils::strip_numeric_ordering_prefix`] so every backend
+/// reaches the same verdict on the same prefixed name) and a leading `_`
+/// private-module marker. Cargo target paths
 /// (`src/bin/`, `examples/`, `benches/`, files directly in `tests/`, and any
 /// file declared as an explicit `[[bin]]` / `[[example]]` / `[[bench]]` /
 /// `[[test]]` target via a `path = "..."` field), trybuild and rustc-UI fixture
@@ -38,22 +41,6 @@ fn is_generated_rust_source(source: &str) -> bool {
             || line.contains("@generated")
             || line.contains("DO NOT EDIT")
     })
-}
-
-/// Strips a leading zero-padded numeric ordering prefix (`<digits>_`) from a
-/// stem, e.g. `0065_comment_newline` -> `comment_newline`. Such prefixes are a
-/// widespread convention for lexicographically ordered fixtures, migrations and
-/// parser test cases, and the remainder is what must satisfy the convention.
-/// Returns the stem unchanged when there is no prefix or nothing follows it.
-fn strip_ordering_prefix(stem: &str) -> &str {
-    let digits = stem.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return stem;
-    }
-    match stem[digits..].strip_prefix('_') {
-        Some(rest) if !rest.is_empty() => rest,
-        _ => stem,
-    }
 }
 
 /// Strips a leading `_` private-module prefix from a stem, e.g. `_features` ->
@@ -102,7 +89,13 @@ impl TextCheck for Check {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
-        let stem = file_name.split('.').next().unwrap_or(file_name);
+        // A leading numeric ordering prefix (`0065_comment_newline.rs`) is the
+        // sort key the fixture/migration suite is read in, not part of the
+        // author's chosen name; strip it so the convention is validated against
+        // the real name that follows.
+        let name_to_check =
+            crate::rules::path_utils::strip_numeric_ordering_prefix(file_name).unwrap_or(file_name);
+        let stem = name_to_check.split('.').next().unwrap_or(name_to_check);
         if stem.is_empty() {
             return Vec::new();
         }
@@ -155,7 +148,7 @@ impl TextCheck for Check {
         {
             return Vec::new();
         }
-        if is_snake_case(strip_ordering_prefix(strip_private_prefix(stem))) {
+        if is_snake_case(strip_private_prefix(stem)) {
             return Vec::new();
         }
         vec![Diagnostic {
@@ -246,6 +239,15 @@ mod tests {
     #[test]
     fn flags_miscased_remainder_after_ordering_prefix() {
         assert_eq!(run("test_data/0065_CommentNewline.rs").len(), 1);
+    }
+
+    // Cross-backend agreement (#8305): both backends reduce the same
+    // `<digits><sep><name>` prefix through the shared helper, so `0010_single_row`
+    // is clean here for the same reason `0010-single-row.js` is clean in the
+    // TS/JS backend.
+    #[test]
+    fn allows_ordering_prefix_matching_ts_backend_issue_8305() {
+        assert!(run("rustsrc/src/0010_single_row.rs").is_empty());
     }
 
     #[test]
