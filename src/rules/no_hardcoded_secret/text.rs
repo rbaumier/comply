@@ -6,11 +6,17 @@
 //! running `gitleaks` against public repos. The fix is obvious — env vars
 //! plus a vault — but the rule catches the moment of temptation.
 //!
-//! Detection: per-line regex scan for well-known token shapes. The rule
-//! is conservative — it only fires on patterns with a dedicated prefix
-//! (AWS, GitHub, Stripe, JWT, Bearer) or a -keyed assignment
-//! (API_KEY = "..."). False positives are acceptable; each one gets
-//! justified with a comply-ignore comment.
+//! Detection: per-line scan for well-known token shapes. The rule is
+//! conservative — it only fires on patterns with a dedicated prefix (AWS,
+//! GitHub, Stripe, Slack, PEM), a credential-carrying URL userinfo, or a
+//! keyed assignment (API_KEY = "..."). False positives are acceptable; each
+//! one gets justified with a comply-ignore comment.
+//!
+//! The verdict on a line is a function of that line alone: the rule declares
+//! no file-scoped prefilter, because its shapes have no common literal anchor
+//! (a URL userinfo needs `://`, a keyed assignment matches its keyword in any
+//! casing). A gate narrower than the shapes it guards would decide a literal's
+//! fate from unrelated text elsewhere in the file.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -18,52 +24,20 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 #[derive(Debug)]
 pub struct Check;
 
-impl Check {
-    /// Literal substrings that gate the rule — shared by the text backend and
-    /// the Rust tree-sitter backend so both prefilter on the same token set.
-    pub(crate) const PREFILTER: &'static [&'static str] = &[
-        "ACCESS_TOKEN",
-        "AKIA",
-        "API_KEY",
-        "APIKEY",
-        "gho_",
-        "ghp_",
-        "ghr_",
-        "ghs_",
-        "ghu_",
-        "github_pat_",
-        "PASSWORD",
-        "rk_live_",
-        "rk_test_",
-        "SECRET",
-        "service_account",
-        "sk_live_",
-        "sk_test_",
-    ];
-}
-
 impl TextCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(Self::PREFILTER)
-    }
-
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for (idx, line) in ctx.source.lines().enumerate() {
             if is_doc_or_comment_line(line) {
                 continue;
             }
-            if let Some(kind) = scan_line(line) {
-                // Test suites embed key blocks as fixtures: crypto libraries
-                // commit armored PGP key pairs as deterministic test vectors,
-                // and GitHub Apps SDKs embed a purpose-generated RSA/EC PEM key
-                // to exercise JWT signing against mock servers. Inside a test
-                // directory such a key block is fixture data, not a leaked
-                // production secret. Token-prefix shapes (AWS/GitHub/Stripe) are
-                // genuine credentials wherever they appear, so they still flag.
-                if ctx.file.path_segments.in_test_dir && is_key_block_header(line) {
+            if let Some(finding) = scan_line(line) {
+                if ctx.file.path_segments.in_test_dir
+                    && finding.evidence == Evidence::CarrierFormat
+                {
                     continue;
                 }
+                let kind = finding.kind;
                 diagnostics.push(Diagnostic {
                     path: std::sync::Arc::clone(&ctx.path_arc),
                     line: idx + 1,
@@ -83,53 +57,85 @@ impl TextCheck for Check {
     }
 }
 
-/// Scan one line for known secret shapes. Returns a short label describing
-/// what was found, or None when nothing matched.
-pub(crate) fn scan_line(line: &str) -> Option<&'static str> {
+/// What a match proves about the value it found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    /// The match identifies the credential itself: a provider-minted token, a
+    /// service-account key file, or a name that declares the value a secret.
+    /// A developer cannot fabricate one of these by accident, so a committed
+    /// match is a leak wherever it sits — test files included.
+    Credential,
+    /// The match is a credential-*carrying format*: a PEM/PGP key block frame,
+    /// a URL userinfo pair. Whether it holds a real credential is decided by
+    /// the value inside the frame, and a test suite has to fabricate
+    /// syntactically valid ones to exercise the parser or the redactor under
+    /// test, so inside a test file the match is fixture data.
+    CarrierFormat,
+}
+
+/// A secret shape found on a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Finding {
+    /// Short label naming the shape, quoted in the diagnostic message.
+    pub(crate) kind: &'static str,
+    pub(crate) evidence: Evidence,
+}
+
+const fn credential(kind: &'static str) -> Finding {
+    Finding { kind, evidence: Evidence::Credential }
+}
+
+const fn carrier_format(kind: &'static str) -> Finding {
+    Finding { kind, evidence: Evidence::CarrierFormat }
+}
+
+/// Scan one line for known secret shapes. The verdict depends on this line
+/// only — never on the rest of the file.
+pub(crate) fn scan_line(line: &str) -> Option<Finding> {
     // AWS access key: AKIA followed by 16 uppercase alphanum.
     if contains_aws_access_key(line) {
-        return Some("AWS access key");
+        return Some(credential("AWS access key"));
     }
     // GitHub token: ghp_/gho_/ghs_/ghu_/github_pat_ + base62.
     if contains_github_token(line) {
-        return Some("GitHub token");
+        return Some(credential("GitHub token"));
     }
     // Stripe live secret key: sk_live_ / rk_live_ + 24+ base62 (test-mode
     // keys carry a `_test_` segment and are exempt).
     if contains_stripe_key(line) {
-        return Some("Stripe secret key");
+        return Some(credential("Stripe secret key"));
     }
     // OpenAI key: sk-proj- or sk- + 48+ chars.
     if contains_openai_key(line) {
-        return Some("OpenAI key");
+        return Some(credential("OpenAI key"));
     }
     // Slack token: xoxb-/xoxp-/xoxa-/xoxo- prefix.
     if contains_slack_token(line) {
-        return Some("Slack token");
+        return Some(credential("Slack token"));
     }
     // Private key header (PEM / PGP).
     if contains_private_key_header(line) {
-        return Some("private key");
+        return Some(carrier_format("private key"));
     }
     // Slack webhook URL.
     if line.contains("hooks.slack.com/services/") {
-        return Some("Slack webhook URL");
+        return Some(credential("Slack webhook URL"));
     }
     // Twilio API key: SK + 32 hex chars.
     if contains_twilio_key(line) {
-        return Some("Twilio API key");
+        return Some(credential("Twilio API key"));
     }
     // Password in URL: ://user:password@host.
     if contains_password_in_url(line) {
-        return Some("password in URL");
+        return Some(carrier_format("password in URL"));
     }
     // GCP service account JSON.
     if contains_gcp_service_account(line) {
-        return Some("GCP service account");
+        return Some(credential("GCP service account"));
     }
     // Generic high-entropy string assigned to a SECRET/PASSWORD/TOKEN/API_KEY.
     if contains_keyed_literal(line) {
-        return Some("hardcoded credential");
+        return Some(credential("hardcoded credential"));
     }
     None
 }
@@ -219,17 +225,6 @@ fn contains_slack_token(line: &str) -> bool {
         }
     }
     false
-}
-
-/// True when the line carries a PEM or armored-PGP key block header. The
-/// test-directory exemption in [`Check::check`] relies on this to drop fixture
-/// key blocks (PGP test vectors, GitHub-App JWT-signing RSA/EC keys) while
-/// keeping token-prefix credential shapes (AWS/GitHub/Stripe) flagged. PEM
-/// headers reuse [`contains_private_key_header`], so an interpolated PEM frame
-/// (`${key}` body) is excluded here exactly as it is everywhere else.
-fn is_key_block_header(line: &str) -> bool {
-    contains_private_key_header(line)
-        || line.contains("-----BEGIN PGP PUBLIC KEY BLOCK-----")
 }
 
 fn contains_private_key_header(line: &str) -> bool {
@@ -371,17 +366,18 @@ fn contains_keyed_literal(line: &str) -> bool {
     let Some(eq_pos) = line.find('=') else {
         return false;
     };
-    // The sensitive keyword must appear in the LEFT side (the variable/key name),
-    // not in the value. This avoids FPs on `autoComplete="current-password"` or
-    // `to="/forgot-password"` where the keyword is in the assigned value.
-    let left = &line[..eq_pos].to_ascii_uppercase();
-    if !KEYS.iter().any(|k| left.contains(k)) {
+    // The sensitive keyword must qualify the assignment target, not the value
+    // (`autoComplete="current-password"`) and not a neighbour that merely
+    // shares the line (`<ResetPasswordPage initialToken="...">`, where the
+    // keyword belongs to the element name).
+    let target = assignment_target(&line[..eq_pos]);
+    let target_upper = target.to_ascii_uppercase();
+    if !KEYS.iter().any(|k| target_upper.contains(k)) {
         return false;
     }
-    // Name-based exemptions operate on the assigned identifier in original case
-    // (e.g. `secretEndpoint`, `API_KEY_HEADER_NAME`), so extract it before the
-    // left side is consumed as uppercase.
-    let name = assigned_name(&line[..eq_pos]);
+    // Name-shape exemptions read the assigned identifier in original case
+    // (e.g. `secretEndpoint`, `API_KEY_HEADER_NAME`).
+    let name = target_identifier(target);
     if names_an_identifier_not_a_value(name) || is_secret_as_adjective(name) {
         return false;
     }
@@ -418,14 +414,13 @@ fn contains_keyed_literal(line: &str) -> bool {
     // Attribute-name constants hold symbolic keys (database field names, protocol
     // parameters) rather than actual credentials. The variable name mirrors the
     // value: ATTR_APPLICATION_PASSWORD holds "application_password". Detect this
-    // by checking whether the variable name (left side, uppercased) contains the
-    // value (uppercased), which is impossible for random credential strings.
+    // by checking whether the assignment target (uppercased) contains the value
+    // (uppercased), which is impossible for random credential strings.
     // URN constants (e.g. "urn:ietf:params:oauth:token-type:access_token") are
     // exempt separately because their colons make them recognisable as protocol
     // identifiers rather than secret material.
-    let left_upper = left.to_ascii_uppercase();
     let value_upper = inner.to_ascii_uppercase().replace(['-', ':', '/', '.'], "_");
-    if left_upper.contains(&value_upper) {
+    if target_upper.contains(&value_upper) {
         return false;
     }
     if is_urn_or_protocol_identifier(&inner) {
@@ -434,12 +429,44 @@ fn contains_keyed_literal(line: &str) -> bool {
     true
 }
 
-/// Extract the assigned identifier from the left side of an assignment, in
-/// original case. Returns the last identifier-like run (alphanumeric or `_`),
-/// which covers `const secretEndpoint`, `API_KEY_HEADER_NAME`, and bracket-key
-/// forms like `process.env["ACCESS_TOKEN"]`.
-fn assigned_name(left: &str) -> &str {
+/// The expression an assignment writes to: the unbroken member/index chain
+/// that ends at the `=`, in original case — `API_KEY`, `config.secrets.jwt`,
+/// `process.env["ACCESS_TOKEN"]`. Whitespace ends the chain, so a neighbour
+/// sharing the line never joins it: in `<ResetPasswordPage initialToken="…">`
+/// the target is `initialToken`, not the element name.
+///
+/// A type annotation between the declared name and the `=` (`API_KEY: &str =
+/// "…"`) is stepped over so the name, not the type, is the target. Rust's `::`
+/// path separator is not an annotation.
+fn assignment_target(left: &str) -> &str {
+    let (start, end) = trailing_chain_span(left);
+    let head = left[..start].trim_end().trim_end_matches(['&', '<', ',', ' ']);
+    if head.ends_with(':') && !head.ends_with("::") {
+        let (annotated_start, annotated_end) = trailing_chain_span(&left[..head.len() - 1]);
+        return &left[annotated_start..annotated_end];
+    }
+    &left[start..end]
+}
+
+/// Byte span of the member/index chain that ends `left`, skipping any trailing
+/// separator that is not part of it.
+fn trailing_chain_span(left: &str) -> (usize, usize) {
     let bytes = left.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && !is_chain_byte(bytes[end - 1]) {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_chain_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    (start, end)
+}
+
+/// The bare identifier a target names, for the name-shape exemptions:
+/// `process.env["ACCESS_TOKEN"]` names `ACCESS_TOKEN`.
+fn target_identifier(target: &str) -> &str {
+    let bytes = target.as_bytes();
     let mut end = bytes.len();
     while end > 0 && !is_ident_byte(bytes[end - 1]) {
         end -= 1;
@@ -448,11 +475,16 @@ fn assigned_name(left: &str) -> &str {
     while start > 0 && is_ident_byte(bytes[start - 1]) {
         start -= 1;
     }
-    &left[start..end]
+    &target[start..end]
 }
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Identifier bytes plus the member/index punctuation that binds a chain.
+fn is_chain_byte(b: u8) -> bool {
+    is_ident_byte(b) || matches!(b, b'.' | b'[' | b']' | b'"' | b'\'')
 }
 
 /// Names ending in `_NAME`, `_HEADER`, or `_HEADER_NAME` hold a symbolic
@@ -500,6 +532,26 @@ mod tests {
 
     fn run(source: &str) -> Vec<Diagnostic> {
         Check.check(&CheckCtx::for_test(Path::new("t.ts"), source))
+    }
+
+    /// Lint through the engine, which applies the file-scoped prefilter pass
+    /// before calling the rule. Every other test here calls `check` directly
+    /// and therefore cannot see that gate at all.
+    fn engine_findings_at(path: &str, source: &str) -> usize {
+        crate::engine::lint_in_memory(
+            Path::new(path),
+            crate::files::Language::TypeScript,
+            source,
+            crate::config::default_static_config(),
+            None,
+        )
+        .iter()
+        .filter(|d| d.rule_id.as_ref() == "no-hardcoded-secret")
+        .count()
+    }
+
+    fn engine_findings(source: &str) -> usize {
+        engine_findings_at("src/dsn.ts", source)
     }
 
     /// Run the check as if the file lived under a test directory, so the
@@ -1023,5 +1075,106 @@ mod tests {
             1
         );
         assert_eq!(run("const db = 'redis://user:hunter2@host:6379';").len(), 1);
+    }
+
+    // Regression tests for #8518 — the rule's shapes share no literal anchor,
+    // so any file-scoped gate is narrower than what the scan detects and makes
+    // a line's verdict depend on unrelated text elsewhere in the file.
+    const DSN_LINE: &str =
+        r#"const legacy = parseDsn("postgres://legacy:l3gacypw@localhost/legacy_db");"#;
+
+    #[test]
+    fn dsn_verdict_is_unchanged_by_an_unrelated_secret_keyword() {
+        // Naming an env var that is asserted to be absent from the output adds
+        // no credential, so it must not change the verdict on the DSN above.
+        let with_keyword = format!("{DSN_LINE}\nexpect(banner).not.toContain(\"PGPASSWORD\");\n");
+        // Pinned to the value each line alone earns, so the two sides cannot
+        // agree by both collapsing to zero.
+        assert_eq!(engine_findings(DSN_LINE), 1);
+        assert_eq!(engine_findings(&with_keyword), 1);
+        // The file the issue reports is a test file, where the DSN is fixture
+        // data — the added keyword must not change that verdict either.
+        let test_file = "scripts/import-legacy-data-guard.test.ts";
+        assert_eq!(engine_findings_at(test_file, DSN_LINE), 0);
+        assert_eq!(engine_findings_at(test_file, &with_keyword), 0);
+    }
+
+    #[test]
+    fn flags_token_shape_in_file_naming_no_credential_keyword() {
+        // A provider-issued token is a leak on its own evidence — it must not
+        // take an unrelated `SECRET`/`PASSWORD` elsewhere in the file to surface.
+        assert_eq!(
+            engine_findings("const t = 'xoxb-1234567890-abcdefghij';"),
+            1
+        );
+        assert_eq!(
+            engine_findings("const k = '-----BEGIN RSA PRIVATE KEY-----';"),
+            1
+        );
+    }
+
+    #[test]
+    fn keyword_free_file_without_a_secret_shape_stays_clean() {
+        // Negative control: dropping the gate must not make ordinary source fire.
+        assert_eq!(
+            engine_findings("const url = 'https://example.com/path';\nconst n = 1;"),
+            0
+        );
+    }
+
+    // The keyword has to qualify the assignment target. A neighbour that only
+    // shares the line — here the JSX element name — is not the target.
+    #[test]
+    fn allows_literal_prop_on_an_element_whose_name_carries_the_keyword() {
+        assert!(
+            run(r#"renderWithProviders(<ResetPasswordPage initialToken="secret-token-123" />);"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_keyword_carried_by_the_target_chain() {
+        // The keyword may sit on any segment of the target chain, not just the
+        // last identifier — `config.secrets.jwt` still names a credential.
+        assert_eq!(
+            run(r#"config.secrets.jwt = "abcd1234567890abcdef";"#).len(),
+            1
+        );
+        assert_eq!(
+            run(r#"process.env.API_KEY = "abcd1234567890abcdef";"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_keyed_literal_behind_a_type_annotation() {
+        // The annotation between the name and the `=` must be stepped over.
+        assert_eq!(
+            run(r#"const API_KEY: string = "abcd1234567890abcdef";"#).len(),
+            1
+        );
+    }
+
+    // A test suite must fabricate syntactically valid key blocks and DSNs to
+    // exercise the parser or the redactor it is testing, so a carrier-format
+    // match inside a test file is fixture data. Shapes that identify the
+    // credential itself keep firing there.
+    #[test]
+    fn allows_url_credential_in_test_file() {
+        assert!(run_in_test_dir(DSN_LINE).is_empty());
+    }
+
+    #[test]
+    fn still_flags_credential_evidence_in_test_file() {
+        assert_eq!(run_in_test_dir("const t = 'xoxb-1234567890-abcdefghij';").len(), 1);
+        assert_eq!(
+            run_in_test_dir(r#"const API_KEY = "abcd1234567890abcdef";"#).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn still_flags_url_credential_outside_test_files() {
+        assert_eq!(run(DSN_LINE).len(), 1);
     }
 }
