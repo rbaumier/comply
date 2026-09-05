@@ -15,11 +15,30 @@
 //! [`rust_helpers::expression_is_reproducible`](crate::rules::rust_helpers::expression_is_reproducible).
 //! `chars.next().is_some_and(f) && chars.next().is_some_and(f)` reads two
 //! different characters: the calls advance the iterator between the two reads.
+//!
+//! `-` and `/` are skipped when an operand is provably an `f32`/`f64`
+//! ([`rust_helpers::expression_is_float`](crate::rules::rust_helpers::expression_is_float)).
+//! Reducing `x - x` to `0` holds for finite `x` only and `x / x` to `1` for
+//! finite non-zero `x` only; on a NaN or an infinity both yield NaN, which is
+//! what musl's `(x - x) / (x - x)` computes on purpose. An operand the AST
+//! cannot type stays flagged: the proof runs in one direction only.
+//!
+//! `#[allow(clippy::eq_op)]` / `#[expect(clippy::eq_op)]` on any enclosing scope
+//! suppresses the diagnostic, whatever the operator. `eq_op` is the upstream
+//! lint this rule mirrors, so the author's in-source suppression of it answers
+//! this rule too.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::expression_is_reproducible;
+use crate::rules::rust_helpers::{
+    expression_is_float, expression_is_reproducible, is_suppressed_by_clippy_allow,
+};
 
 const FLAGGED_OPS: &[&str] = &["&&", "||", "-", "/"];
+
+/// The upstream clippy lint this rule mirrors on Rust: it reports the same
+/// identical-operand expressions, so an author who has already answered it
+/// in-source has answered this rule.
+const MIRRORED_CLIPPY_LINTS: &[&str] = &["eq_op"];
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Some(op_node) = node.child_by_field_name("operator") else { return };
@@ -35,29 +54,38 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     let Ok(left_text) = left.utf8_text(source) else { return };
     let Ok(right_text) = right.utf8_text(source) else { return };
 
-    // Avoid false positives on single-char tokens for `-` and `/`.
-    if (op == "-" || op == "/") && left_text.len() <= 1 {
+    if left_text != right_text
+        || !expression_is_reproducible(left)
+        || !expression_is_reproducible(right)
+    {
         return;
     }
 
-    if left_text == right_text
-        && expression_is_reproducible(left)
-        && expression_is_reproducible(right)
+    // Float arithmetic does not reduce: `x - x` and `x / x` are NaN whenever `x`
+    // is NaN or infinite, and `0.0 / 0.0` is the signalling-NaN idiom.
+    if (op == "-" || op == "/")
+        && (expression_is_float(left, source) || expression_is_float(right, source))
     {
-        let pos = node.start_position();
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: pos.row + 1,
-            column: pos.column + 1,
-            rule_id: "no-identical-expressions".into(),
-            message: format!(
-                "Identical expression `{}` on both sides of `{}`.",
-                left_text, op
-            ),
-            severity: Severity::Error,
-            span: None,
-        });
+        return;
     }
+
+    if is_suppressed_by_clippy_allow(node, MIRRORED_CLIPPY_LINTS, source) {
+        return;
+    }
+
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: std::sync::Arc::clone(&ctx.path_arc),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-identical-expressions".into(),
+        message: format!(
+            "Identical expression `{}` on both sides of `{}`.",
+            left_text, op
+        ),
+        severity: Severity::Error,
+        span: None,
+    });
 }
 
 
@@ -231,5 +259,66 @@ mod tests {
         let d = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/ops.rs");
         assert_eq!(d.len(), 1, "rule must still fire outside test directories");
         assert!(d[0].message.contains("-"));
+    }
+
+    // Issue #8250 (mooman219/fontdue src/platform/float/sqrt.rs): musl's
+    // signalling-NaN idiom. On floats `x - x` is `0` only for finite `x` and
+    // `x / x` is `1` only for finite non-zero `x`, so nothing reduces.
+    #[test]
+    fn allows_self_arithmetic_on_provably_float_operands() {
+        for src in [
+            "pub fn snan(x: f32) -> f32 { (x - x) / (x - x) }",
+            "pub fn ratio(x: f64) -> f64 { x / x }",
+            "pub fn ratio2(xy: f64) -> f64 { xy / xy }",
+            "pub fn delta(x: f32) -> f32 { x - x }",
+            "pub fn f(a: f64, b: f64) -> f64 { (a - b) / (a - b) }",
+            "pub fn scaled(n: u32) -> f64 { n as f64 - n as f64 }",
+            "pub fn literal() -> f64 { 1.5 - 1.5 }",
+        ] {
+            assert!(run_on(src).is_empty(), "{src}: {:?}", run_on(src));
+        }
+    }
+
+    // Issue #8250: the verdict must not depend on how many characters the
+    // operand's name has — `n - n` and `count - count` are the same expression.
+    #[test]
+    fn flags_self_arithmetic_on_integers_whatever_the_name_length() {
+        for src in [
+            "pub fn zero(count: i64) -> i64 { count - count }",
+            "pub fn one(count: i64) -> i64 { count / count }",
+            "pub fn zero1(n: i64) -> i64 { n - n }",
+            "pub fn one1(n: i64) -> i64 { n / n }",
+        ] {
+            assert_eq!(run_on(src).len(), 1, "{src}: {:?}", run_on(src));
+        }
+    }
+
+    // Issue #8250: `clippy::eq_op` is the upstream lint this rule mirrors, so the
+    // author's in-source suppression of it answers this rule too. Integer
+    // operands throughout, so the silence comes from the attribute and not from
+    // the float exemption.
+    #[test]
+    fn honors_clippy_eq_op_suppression_at_every_scope() {
+        for src in [
+            // Statement scope.
+            "fn f(count: i64) -> i64 { #[allow(clippy::eq_op)] return count - count; }",
+            "fn f(count: i64) -> i64 { #[allow(clippy::eq_op)] let z = count - count; z }",
+            // Function scope.
+            "#[allow(clippy::eq_op)] fn f(count: i64) -> i64 { count - count }",
+            // `impl` scope.
+            "#[allow(clippy::eq_op)] impl S { fn f(&self, count: i64) -> i64 { count - count } }",
+            // Crate root.
+            "#![allow(clippy::eq_op)]\nfn f(count: i64) -> i64 { count - count }",
+            // `#[expect]` is the same opt-out.
+            "#[expect(clippy::eq_op)] fn f(count: i64) -> i64 { count - count }",
+        ] {
+            assert!(run_on(src).is_empty(), "{src}: {:?}", run_on(src));
+        }
+    }
+
+    #[test]
+    fn ignores_an_allow_of_an_unrelated_clippy_lint() {
+        let src = "#[allow(clippy::needless_return)] fn f(count: i64) -> i64 { count - count }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
     }
 }

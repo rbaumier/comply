@@ -7684,6 +7684,18 @@ pub fn cast_operand_is_float(cast: Node, source: &[u8]) -> bool {
         .is_some_and(|value| expression_yields_float(value, source, 0))
 }
 
+/// True when the expression rooted at `node` provably evaluates to an `f32`/`f64`
+/// value.
+///
+/// Starts [`expression_yields_float`] with a full recursion budget, so callers
+/// never handle the walk's depth themselves. The proof is one-sided: an
+/// expression the AST cannot type — a field access, an index, a trait method —
+/// answers `false`, so a caller gating on this keeps its behavior everywhere the
+/// type is not settled in-file.
+pub fn expression_is_float(node: Node, source: &[u8]) -> bool {
+    expression_yields_float(node, source, 0)
+}
+
 /// How many nested operands and binding hops [`expression_yields_float`]
 /// follows. The walk descends strictly, so the bound only caps how much of a
 /// deep expression it can prove; it also keeps a self-naming rebinding
