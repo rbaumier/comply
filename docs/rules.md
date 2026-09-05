@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2059 rules across 152 categories.
+2058 rules across 152 categories.
 
 ## Categories
 
@@ -22,7 +22,7 @@
 - [better-result](#better-result) (20 rules)
 - [bundle-size](#bundle-size) (3 rules)
 - [ci-cd](#ci-cd) (9 rules)
-- [code-quality](#code-quality) (259 rules)
+- [code-quality](#code-quality) (258 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
 - [comments](#comments) (6 rules)
@@ -405,7 +405,6 @@
 | `elseif-without-else` | `if/else if` chain without a final `else` clause. | Add a final `else` block to handle all remaining cases explicitly, even if it's just a comment or unreachable assertion. |
 | `empty-brace-spaces` | Do not add spaces between braces. | Remove whitespace between empty braces: `{  }` -> `{}`. |
 | `error-message` | Pass a message to the Error constructor. | Add a descriptive string message as the first argument to the Error constructor (or second for AggregateError, third for SuppressedError). Empty strings and non-string literals are also flagged. |
-| `error-message-is-remediation` | Error messages should describe what went wrong and what to do about it. | Replace short/noun-only error messages like `"Invalid"` or `"Not found"` with actionable messages: `"User not found — verify the ID and retry"`. Good errors contain a verb and guide the reader toward a fix. |
 | `error-without-cause` | new Error(e.message) drops the original stack — pass { cause: e }. | When wrapping a caught error, preserve the original stack and chain: `throw new Error('high-level message', { cause: original })`. Without `cause`, the debugger sees the wrapped message but loses the source location, type, and nested cause chain. |
 | `escape-case` | Use uppercase characters for the value of escape sequences. | Replace lowercase hex digits in escape sequences with uppercase: `\xff` -> `\xFF`, `\u00ff` -> `\u00FF`. |
 | `expiring-todo-comments` | TODO/FIXME with an expiration date that has passed should be resolved. | Resolve the TODO/FIXME — the expiration date has passed. Either complete the task or update the date. |
