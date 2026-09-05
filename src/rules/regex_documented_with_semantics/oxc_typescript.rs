@@ -3,13 +3,6 @@ use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
 
-const TEST_FILE_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
-
-fn is_test_file(path: &std::path::Path) -> bool {
-    let s = path.to_string_lossy();
-    TEST_FILE_MARKERS.iter().any(|m| s.contains(m))
-}
-
 /// When `node` is the direct initializer of a `const`/`let`/`var` declarator,
 /// return the 1-based line of the enclosing `VariableDeclaration`. The regex
 /// literal may live on a continuation line below `const X =`, so a doc comment
@@ -48,10 +41,6 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if is_test_file(ctx.path) {
-            return;
-        }
-
         let (span, pattern) = match node.kind() {
             AstKind::RegExpLiteral(re) => {
                 (re.span, re.regex.pattern.text.as_str().to_string())
@@ -80,13 +69,10 @@ impl OxcCheck for Check {
             return;
         }
 
-        // A plain anchored literal like `/^Type invalide : chaîne…$/`,
-        // or a pure `|`-alternation of plain literals like
-        // `/jiti|node:internal|citty/`, is its own documentation —
-        // adding a comment that restates the literals would be pure noise.
-        if super::is_simple_anchored_literal(&pattern)
-            || super::is_pure_literal_alternation(&pattern)
-        {
+        // A pattern that matches literal text only — `/^Type invalide : chaîne…$/`,
+        // `/jiti|node:internal|citty/`, `/Error: sendMessage\(\) cannot be used/` —
+        // is its own documentation; a comment restating it would be pure noise.
+        if super::is_literal_pattern(&pattern) {
             return;
         }
 
@@ -260,7 +246,7 @@ export const ESM_STATIC_IMPORT_RE =
     }
 
     fn run_with_path(src: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, path)
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
     }
 
     #[test]
@@ -276,9 +262,49 @@ expect(result).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,4}$/);"#;
     }
 
     #[test]
+    fn skips_complex_regex_under_a_test_directory() {
+        // Regression for rbaumier/comply#8243 — a project that keeps its tests in
+        // a `test/` directory instead of co-locating them was flagged, so the same
+        // regex got opposite verdicts depending on how the file is marked.
+        let src = r#"const result = execSync("grep -r 'x' src/").toString();
+expect(result).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,4}$/);"#;
+        for path in [
+            "test/direction.js",
+            "tests/direction.js",
+            "e2e/direction.js",
+            "test-helpers/direction.js",
+            "src/direction.test.ts",
+        ] {
+            assert!(
+                run_with_path(src, path).is_empty(),
+                "expected no diagnostics under {path}"
+            );
+        }
+    }
+
+    #[test]
     fn still_flags_in_non_test_file() {
         let src = r#"const r = /^[a-z]+@[a-z]+\.[a-z]{2,4}$/;"#;
         assert_eq!(run_with_path(src, "src/auth.ts").len(), 1);
+    }
+
+    #[test]
+    fn ignores_escaped_punctuation_literal() {
+        // Regression for rbaumier/comply#8243 — `\(` matches a parenthesis, so
+        // the pattern spells a plain sentence: there is nothing to document that
+        // the pattern does not already say.
+        let src = r#"export const A = /Error: sendMessage\(\) cannot be used/;
+export const B = /`stdout\.input` option must use a boolean/;"#;
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_escapes_that_carry_semantics() {
+        // `\d` is a class, not an escaped literal — the pattern still needs a
+        // comment even though it is spelled with backslashes.
+        let src = r#"export const C = /^fd(?<fdNumber>\d+)$/;
+export const T = /\d{2}:\d{2} something long enough/;"#;
+        assert_eq!(run(src).len(), 2);
     }
 
     #[test]
