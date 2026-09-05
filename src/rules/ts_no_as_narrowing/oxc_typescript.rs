@@ -142,6 +142,46 @@ fn operand_is_global_object(expr: &Expression) -> bool {
     )
 }
 
+/// Whether the cast is a covariant-return override: the operand is a
+/// `super.<member>(…)` call and the target names the class the cast sits in
+/// (`class Atomic extends Position { clone(): Atomic { return super.clone() as
+/// Atomic } }`). The base implementation builds the copy from `this.constructor`,
+/// so the value already IS an instance of the subclass — the base signature just
+/// cannot say so. None of the rule's remediations has a form here: `typeof`
+/// answers `"object"` for every class instance, `in` tests a property the class
+/// declaration already guarantees, and a type predicate would have to check a
+/// value that is unconditionally of the target type. A `super` call cast to any
+/// other type (`super.getNode() as HtmlNode`) stays reported.
+fn is_super_call_cast_to_enclosing_class(
+    as_expr: &oxc_ast::ast::TSAsExpression,
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Expression::CallExpression(call) = as_expr.expression.without_parentheses() else {
+        return false;
+    };
+    let Some(member) = call.callee.without_parentheses().as_member_expression() else {
+        return false;
+    };
+    if !matches!(member.object(), Expression::Super(_)) {
+        return false;
+    }
+    let TSType::TSTypeReference(r) = &as_expr.type_annotation else {
+        return false;
+    };
+    let TSTypeName::IdentifierReference(target) = &r.type_name else {
+        return false;
+    };
+    semantic
+        .nodes()
+        .ancestor_kinds(node_id)
+        .find_map(|kind| match kind {
+            AstKind::Class(class) => Some(class.id.as_ref().is_some_and(|id| id.name == target.name)),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn target_is_narrowing(ty: &TSType, semantic: &oxc_semantic::Semantic) -> bool {
     match ty {
         TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => true,
@@ -260,6 +300,12 @@ impl OxcCheck for Check {
         // recommends; the cast is needed to read properties off the
         // loosely-typed input, so flagging it would be circular advice.
         if is_inside_type_predicate_fn(node.id(), semantic) {
+            return;
+        }
+
+        // Skip the covariant-return override `super.method() as Self`, where the
+        // subclass restates a fact its base signature cannot express.
+        if is_super_call_cast_to_enclosing_class(as_expr, node.id(), semantic) {
             return;
         }
 
@@ -772,6 +818,74 @@ mod tests {
         let src = "interface Config { a: number }\n\
                    function f(x: unknown) { return x as Config; }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_super_call_cast_to_enclosing_class() {
+        // Regression for #8115: chessops' `Position` subclasses override
+        // `clone()` with a covariant return. `super.clone()` builds the copy from
+        // `this.constructor`, so the value already IS an `Atomic`; the base
+        // signature just cannot say so, and no `typeof`/`in`/type-predicate check
+        // can express that.
+        let src = "export class Position {\n\
+                   score = 0;\n\
+                   clone(): Position {\n\
+                   const copy = new (this.constructor as new () => this)();\n\
+                   copy.score = this.score;\n\
+                   return copy;\n\
+                   }\n\
+                   }\n\
+                   export class Atomic extends Position {\n\
+                   extra = 1;\n\
+                   clone(): Atomic { return super.clone() as Atomic; }\n\
+                   }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_super_call_cast_to_this_type() {
+        // #8115: the same override written with the polymorphic `this` type.
+        let src = "class Base { clone(): Base { return this; } }\n\
+                   class Sub extends Base { clone(): this { return super.clone() as this; } }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_super_call_cast_to_unrelated_type() {
+        // Control for #8115: a `super` call cast to a type OTHER than the
+        // enclosing class is a genuine narrowing — the exemption keys on the
+        // class the cast sits in, not on the `super` receiver alone.
+        let src = "class Parser extends BaseParser {\n\
+                   read() { return super.getNode() as HtmlNode; }\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_this_call_cast_to_enclosing_class() {
+        // Control for #8115: a `this.method()` receiver dispatches to the
+        // subclass's own (possibly overridden) method, so its declared return
+        // type is not the base's — the covariant-override argument does not
+        // apply and the cast stays reported.
+        let src = "class Atomic extends Position {\n\
+                   copy() { return this.clone() as Atomic; }\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_local_binding_cast_to_enclosing_class() {
+        // Control for #8115: a plain binding cast inside the same class is a
+        // refinable narrowing — the operand must be the `super` call itself.
+        let src = "class Atomic extends Position {\n\
+                   adopt(value: unknown) { return value as Atomic; }\n\
+                   }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 
     #[test]
