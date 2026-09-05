@@ -17,11 +17,15 @@
 //! instance) accepts fixes a strictly narrower contract, and defaulting or
 //! marking optional a parameter the target requires accepts calls the target
 //! rejects. Either way the two are not interchangeable.
+//!
+//! Methods that forward to a less reachable member of their own class — a
+//! `public` (or unmodified) wrapper over a `private`/`protected` target — are
+//! exempt: the wrapper is the published surface over a hidden implementation.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, node_has_preceding_deprecated_tag};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, FormalParameters, Statement};
+use oxc_ast::ast::{Expression, FormalParameters, Statement, TSAccessibility};
 use std::sync::Arc;
 
 pub struct Check;
@@ -196,6 +200,48 @@ fn widens_target_contract(params: &FormalParameters, target: Option<TargetArity>
     required < params.items.len() && target.is_none_or(|arity| arity.fewest_required > required)
 }
 
+/// How widely a class member can be reached, ordered from most to least
+/// restricted.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Reach {
+    /// `private` — the declaring class body only.
+    DeclaringClass,
+    /// `protected` — the declaring class and its subclasses.
+    Subclasses,
+    /// `public`, or no accessibility modifier at all — every consumer.
+    Consumers,
+}
+
+fn reach(accessibility: Option<TSAccessibility>) -> Reach {
+    match accessibility {
+        Some(TSAccessibility::Private) => Reach::DeclaringClass,
+        Some(TSAccessibility::Protected) => Reach::Subclasses,
+        Some(TSAccessibility::Public) | None => Reach::Consumers,
+    }
+}
+
+/// True when every declaration of `target` in `class` is less reachable than
+/// `method` itself. The wrapper is then the class's published surface over a
+/// hidden implementation: callers that reach the wrapper cannot name the target,
+/// so inlining the call does not compile, and deleting the wrapper withdraws the
+/// only entry point they have. A target the class does not declare is not
+/// provably hidden.
+fn class_hides_target_behind(
+    class: &oxc_ast::ast::Class,
+    method: &oxc_ast::ast::MethodDefinition,
+    target: &str,
+) -> bool {
+    let wrapper_reach = reach(method.accessibility);
+    let mut declared = false;
+    for member in class_declarations_of(class, method, target) {
+        declared = true;
+        if reach(member.accessibility) >= wrapper_reach {
+            return false;
+        }
+    }
+    declared
+}
+
 fn argument_names<'a>(args: &'a oxc_allocator::Vec<'a, oxc_ast::ast::Argument<'a>>) -> Option<Vec<&'a str>> {
     let mut out = Vec::new();
     for arg in args {
@@ -308,6 +354,19 @@ impl OxcCheck for Check {
         let target_arity = enclosing_class.and_then(|class| class_target_arity(class, method, target));
         let params = &method.value.params;
         if narrows_target_contract(params, target_arity) || widens_target_contract(params, target_arity) {
+            return;
+        }
+
+        // Published surface over a hidden implementation: the target is declared
+        // `private`/`protected` while the wrapper is reachable more widely (e.g.
+        // minisearch's public `vacuum` over its `private conditionalVacuum`).
+        // Callers of the wrapper cannot name the target, so inlining the call
+        // does not type-check and removing the wrapper withdraws the only entry
+        // point they have. A wrapper forwarding to an equally reachable sibling
+        // is a plain indirection and keeps flagging.
+        if let Some(class) = enclosing_class
+            && class_hides_target_behind(class, method, target)
+        {
             return;
         }
 
@@ -618,6 +677,65 @@ mod tests {
             doFlush (options: FlushOptions = {}): number { return options.batch ?? 0 }
         }";
         assert_eq!(run(src).len(), 1, "expected one diagnostic, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_public_wrapper_over_less_reachable_target() {
+        // Regression for #8129: minisearch's public `vacuum` forwards to the
+        // `private conditionalVacuum` at identical arity. External callers cannot
+        // reach the target, so inlining does not type-check and deleting the
+        // wrapper removes the only published entry point.
+        let private_target = "class Store {
+            flush (options: FlushOptions): number { return this.doFlush(options) }
+            private doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert!(run(private_target).is_empty(), "expected no diagnostics, got: {:?}", run(private_target));
+
+        let protected_target = "class Store {
+            flush (options: FlushOptions): number { return this.doFlush(options) }
+            protected doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert!(run(protected_target).is_empty(), "expected no diagnostics, got: {:?}", run(protected_target));
+
+        // `protected` wrapper over a `private` target narrows reach just the
+        // same: subclasses reach the wrapper and nothing else.
+        let protected_over_private = "class Store {
+            protected flush (options: FlushOptions): number { return this.doFlush(options) }
+            private doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert!(
+            run(protected_over_private).is_empty(),
+            "expected no diagnostics, got: {:?}",
+            run(protected_over_private)
+        );
+    }
+
+    #[test]
+    fn allows_wrapper_over_hash_private_target() {
+        // A `#`-private target is unreachable from outside the class body for the
+        // same reason as a `private` one.
+        let src = "class Store {
+            flush (options: FlushOptions): number { return this.#doFlush(options) }
+            #doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn flags_passthrough_between_equally_reachable_members() {
+        // Wrapper and target share their reach, so the indirection really is
+        // deletable. Bounds the visibility exemption on both sides.
+        let public_pair = "class Store {
+            flush (options: FlushOptions): number { return this.doFlush(options) }
+            public doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert_eq!(run(public_pair).len(), 1, "expected one diagnostic, got: {:?}", run(public_pair));
+
+        let private_pair = "class Store {
+            private flush (options: FlushOptions): number { return this.doFlush(options) }
+            private doFlush (options: FlushOptions): number { return options.batch ?? 0 }
+        }";
+        assert_eq!(run(private_pair).len(), 1, "expected one diagnostic, got: {:?}", run(private_pair));
     }
 
     #[test]
