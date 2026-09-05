@@ -68,9 +68,15 @@ fn inspect_node(
                 }
             }
         }
-        "while_statement" => check_field_body(node, "body", "while", block, ctx, diagnostics),
+        "while_statement" => {
+            if !condition_contains_call(node) {
+                check_field_body(node, "body", "while", block, ctx, diagnostics);
+            }
+        }
         "do_statement" => {
-            check_field_body(node, "body", "do-while", block, ctx, diagnostics);
+            if !condition_contains_call(node) {
+                check_field_body(node, "body", "do-while", block, ctx, diagnostics);
+            }
         }
         "for_statement" => check_field_body(node, "body", "for", block, ctx, diagnostics),
         "for_in_statement" => {
@@ -90,6 +96,28 @@ fn inspect_node(
         }
         _ => {}
     }
+}
+
+/// True when the condition of a `while` / `do…while` contains a call —
+/// `while (queue.shift()) {}`, `while (!device.isReady()) {}`.
+///
+/// A call there is what advances the loop, so the whole iteration is the
+/// condition and the empty body is the drain/poll idiom; a body comment could
+/// only restate the condition. A call-free condition — a bare flag, a literal, a
+/// pure comparison — is not self-documenting and still flags. The oxc and Rust
+/// backends draw the same line on the same idiom.
+fn condition_contains_call(loop_node: tree_sitter::Node) -> bool {
+    loop_node
+        .child_by_field_name("condition")
+        .is_some_and(subtree_has_call)
+}
+
+fn subtree_has_call(node: tree_sitter::Node) -> bool {
+    if node.kind() == "call_expression" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(subtree_has_call)
 }
 
 fn check_field_body(
@@ -187,8 +215,21 @@ mod tests {
 
     #[test]
     fn flags_empty_while_in_vue_script_setup() {
-        let src = "<script setup lang=\"ts\">\nwhile (poll()) {}\n</script>";
+        let src = "<script setup lang=\"ts\">\nwhile (running) {}\n</script>";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_empty_while_draining_a_queue_issue_1436() {
+        // Same call-in-condition drain idiom the oxc and Rust backends exempt.
+        let src = "<script setup lang=\"ts\">\nwhile (queue.shift()) {}\n</script>";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_empty_do_while_with_call_issue_1436() {
+        let src = "<script setup lang=\"ts\">\ndo {} while (queue.shift());\n</script>";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
