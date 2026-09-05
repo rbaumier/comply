@@ -4329,6 +4329,46 @@ impl ProjectCtx {
             .any(|entry| manifest_dir.join(entry) == path)
     }
 
+    /// True when `path` only ever runs as repo automation: it is a script entry
+    /// of its nearest `package.json` ([`is_script_entry_file`]), or every module
+    /// that transitively imports it is. Such a file executes in a terminal at
+    /// dev/CI time with no consumer but the developer running `npm run`, so
+    /// rules that constrain *product* code (e.g. `no-console`, where a script's
+    /// progress output is its whole interface) do not apply to it.
+    ///
+    /// The import graph is walked upwards from `path`: reaching a script entry
+    /// proves that branch is automation, while reaching a module nothing imports
+    /// — a published entry, an application root, a test — proves it is not, and
+    /// decides the whole question. So a helper imported only by build scripts
+    /// qualifies, and a `src/` module a build script shares with the shipped
+    /// entry point does not.
+    ///
+    /// [`is_script_entry_file`]: ProjectCtx::is_script_entry_file
+    pub fn is_script_tooling_module(&self, path: &Path) -> bool {
+        if self.is_script_entry_file(path) {
+            return true;
+        }
+        let index = self.import_index();
+        let mut visited: FxHashSet<PathBuf> = FxHashSet::from_iter([path.to_path_buf()]);
+        let mut queue: std::collections::VecDeque<PathBuf> =
+            std::collections::VecDeque::from([path.to_path_buf()]);
+        let mut reached_script_entry = false;
+        while let Some(current) = queue.pop_front() {
+            let importers = index.get_importers(&current);
+            if importers.is_empty() {
+                return false;
+            }
+            for importer in importers {
+                if self.is_script_entry_file(importer) {
+                    reached_script_entry = true;
+                } else if visited.insert(importer.to_path_buf()) {
+                    queue.push_back(importer.to_path_buf());
+                }
+            }
+        }
+        reached_script_entry
+    }
+
     /// True when `path` is a CLI tool's config file referenced by path from a
     /// `package.json` — a build/lint tool loads it by path (`rollup -c
     /// scripts/rollup/config.mjs`, `eslintConfig.extends: ["./preset.js"]`,
@@ -7162,6 +7202,28 @@ pub(crate) fn default_static_project_ctx() -> &'static ProjectCtx {
     DEFAULT.get_or_init(ProjectCtx::empty)
 }
 
+/// Load a `ProjectCtx` — import index included — from explicit
+/// `(relative-path, contents)` pairs written under a fresh tempdir. Returns the
+/// directory alongside it: dropping the `TempDir` deletes the files the context
+/// points at.
+#[cfg(test)]
+pub(crate) fn load_with_files(files: &[(&str, &str)]) -> (tempfile::TempDir, ProjectCtx) {
+    use crate::files::Language;
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut sources: Vec<SourceFile> = Vec::new();
+    for (rel, body) in files {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, body).unwrap();
+        if let Some(lang) = Language::from_path(&p) {
+            sources.push(SourceFile { path: p, language: lang });
+        }
+    }
+    let refs: Vec<&SourceFile> = sources.iter().collect();
+    let ctx = ProjectCtx::load(&refs, &Config::default());
+    (dir, ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8267,6 +8329,55 @@ mod tests {
         assert!(ctx.is_script_entry_file(&dir.path().join("build.ts")));
         // A sibling library module the scripts never invoke is not.
         assert!(!ctx.is_script_entry_file(&dir.path().join("src/load.ts")));
+    }
+
+    /// libphonenumber-js's `build-scripts/`: `scripts.gen` runs
+    /// `generate.js`, which is the only importer of `helpers/commit.js`, while
+    /// `src/lib.js` is shipped source no script reaches.
+    fn build_scripts_project() -> (TempDir, ProjectCtx) {
+        load_with_files(&[
+            (
+                "package.json",
+                r#"{"name":"libphonenumber-js","type":"module","scripts":{"gen":"node build-scripts/generate.js"}}"#,
+            ),
+            (
+                "build-scripts/generate.js",
+                "import { commit } from './helpers/commit.js';\nexport function generate() { commit(); }\n",
+            ),
+            ("build-scripts/helpers/commit.js", "export function commit() {}\n"),
+            ("src/lib.js", "export function lib() {}\n"),
+        ])
+    }
+
+    #[test]
+    fn is_script_tooling_module_covers_a_script_entry_and_what_only_it_imports() {
+        let (dir, ctx) = build_scripts_project();
+        assert!(ctx.is_script_tooling_module(&dir.path().join("build-scripts/generate.js")));
+        assert!(ctx.is_script_tooling_module(&dir.path().join("build-scripts/helpers/commit.js")));
+    }
+
+    #[test]
+    fn is_script_tooling_module_rejects_a_module_no_script_reaches() {
+        let (dir, ctx) = build_scripts_project();
+        // `src/lib.js` has no importer at all, so it is a graph root that is not
+        // a script entry — shipped source, judged on its own manifest entry.
+        assert!(!ctx.is_script_tooling_module(&dir.path().join("src/lib.js")));
+    }
+
+    #[test]
+    fn is_script_tooling_module_rejects_a_module_shared_with_shipped_code() {
+        let (dir, ctx) = load_with_files(&[
+            (
+                "package.json",
+                r#"{"name":"shared","type":"module","scripts":{"gen":"node scripts/generate.js"}}"#,
+            ),
+            ("scripts/generate.js", "import { fmt } from '../src/format.js';\nfmt();\n"),
+            ("src/index.js", "import { fmt } from './format.js';\nexport const run = () => fmt();\n"),
+            ("src/format.js", "export function fmt() {}\n"),
+        ]);
+        // `src/format.js` is reached from the build script *and* from the
+        // library entry, so it is product code, not tooling.
+        assert!(!ctx.is_script_tooling_module(&dir.path().join("src/format.js")));
     }
 
     #[test]
@@ -10276,25 +10387,6 @@ model Envelope {
         // No client specifier → falls back to the consumer's own boundary (no
         // schema) → None, so the caller fires on all models.
         assert_eq!(ctx.prisma_model_soft_delete(&file, "recipient", None), None);
-    }
-
-    /// Helper: load a `ProjectCtx` from explicit `(relative-path, contents)`
-    /// pairs under a fresh tempdir and return both, keeping the dir alive.
-    fn load_with_files(files: &[(&str, &str)]) -> (TempDir, ProjectCtx) {
-        use crate::files::Language;
-        let dir = TempDir::new().unwrap();
-        let mut sources: Vec<SourceFile> = Vec::new();
-        for (rel, body) in files {
-            let p = dir.path().join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, body).unwrap();
-            if let Some(lang) = Language::from_path(&p) {
-                sources.push(SourceFile { path: p, language: lang });
-            }
-        }
-        let refs: Vec<&SourceFile> = sources.iter().collect();
-        let ctx = ProjectCtx::load(&refs, &Config::default());
-        (dir, ctx)
     }
 
     // Issue #2080: a private test/harness overlay (`private: true`, no

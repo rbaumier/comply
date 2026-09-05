@@ -558,10 +558,15 @@ fn entry_with_filter(
 //    c. It imports a browser-only frontend package (see `BROWSER_PACKAGES`).
 //       `react-dom/server` is server-side rendering and is not a browser signal.
 //
-// 2. The nearest `package.json` declares a `bin` entry — the file belongs to a
-//    CLI-tool package whose product *is* terminal output, so `console.log` /
-//    `console.error` are the deliberate stdout/stderr API, not stray debug
-//    logging. This matches how teams disable `no-console` for CLI packages.
+// 2. The file runs in a terminal, where its output *is* its interface:
+//    a. The nearest `package.json` declares a `bin` entry — the file belongs to
+//       a CLI-tool package whose product is terminal output, so `console.log` /
+//       `console.error` are the deliberate stdout/stderr API, not stray debug
+//       logging. This matches how teams disable `no-console` for CLI packages.
+//    b. The file is repo automation: a `package.json` `scripts` entry names it,
+//       or only such entries import it (`ProjectCtx::is_script_tooling_module`).
+//       A `npm run build` task's progress and warnings are what the developer
+//       reads in the terminal; there is no log sink to route them to.
 //
 // A third drop is about the `console` member itself rather than the file: the
 // diagnostic survives only when the member is *invoked*. Reading the reference
@@ -594,7 +599,9 @@ impl PostFilter for NoConsoleFilter {
         source: Option<&str>,
         project: &crate::project::ProjectCtx,
     ) -> bool {
-        if is_cli_tool_package(&diag.path, project) {
+        if is_cli_tool_package(&diag.path, project)
+            || project.is_script_tooling_module(&diag.path)
+        {
             return false;
         }
         self.keep(diag, source)
@@ -1457,6 +1464,28 @@ mod tests {
         let pkg = r#"{"name":"@oclif/core","bin":"./bin/run.js"}"#;
         let source = "if (shouldPrint) {\n  console.error(pretty ?? stack)\n}\n";
         assert!(!keep_in_project(pkg, "src/errors/handle.ts", source));
+    }
+
+    // ── repo automation (dropped) — issue #8097 ──────────────────────────────
+
+    #[test]
+    fn drops_console_in_a_file_an_npm_script_runs() {
+        // libphonenumber-js publishes a library (no `bin`) yet runs
+        // `build-scripts/generate.js` from `scripts` — its progress output is
+        // the only interface the developer has while `npm run gen` works.
+        let pkg = r#"{"name":"libphonenumber-js","scripts":{"gen":"node build-scripts/generate.js"}}"#;
+        let source = "console.log('generating metadata')\n";
+        assert!(!keep_in_project(pkg, "build-scripts/generate.js", source));
+    }
+
+    #[test]
+    fn keeps_console_in_a_file_no_npm_script_runs() {
+        // Negative space: the same path with nothing in `scripts` naming it is
+        // still flagged — the exemption is earned by the manifest, not by the
+        // directory name.
+        let pkg = r#"{"name":"libphonenumber-js","scripts":{"test":"mocha"}}"#;
+        let source = "console.log('generating metadata')\n";
+        assert!(keep_in_project(pkg, "build-scripts/generate.js", source));
     }
 
     #[test]
