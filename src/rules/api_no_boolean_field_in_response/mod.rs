@@ -10,8 +10,11 @@
 //! Scope: response-shaped names — `*Response`, `*Dto`, `*Reply`, `*Body` fire
 //! on their own; the ambiguous `*Result` and `*Payload` suffixes fire only when
 //! the shape carries a response-shaped field (`data`, `status`, …), so Redux
-//! action payloads and generic library return types are untouched. Internal
-//! models and request types are untouched.
+//! action payloads and generic library return types are untouched.
+//! The last direction word in a name decides its half.
+//! Inbound names are skipped whatever their suffix.
+//! `ObjectiveRequestBody` is what the client sends.
+//! Internal models are untouched.
 
 mod oxc_typescript;
 
