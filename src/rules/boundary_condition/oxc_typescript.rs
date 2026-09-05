@@ -14,6 +14,7 @@ use crate::oxc_helpers::{
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
+use oxc_semantic::ReferenceFlags;
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -227,15 +228,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        // `parts[0]` / `parts[parts.length - 1]` where `parts` is a same-scope
-        // `const` bound to a `String.prototype.split` call (`str.split(sep)`).
-        // `split` is specified to always return an array with at least one element
-        // (even `''.split(',')` yields `['']`), so both the first and last reads
-        // are in-bounds with no length guard. Covers the file-extension /
-        // path-splitting idiom `const parts = name.split('.'); parts[parts.length - 1]`.
+        // `parts[0]` / `parts[parts.length - 1]` where every value `parts` can hold
+        // at the access is a `String.prototype.split` result — a declarator
+        // initializer (`const parts = name.split('.')`) or an assignment back into
+        // the binding (`a = a.split('-')`). `split` is specified to always return an
+        // array with at least one element (even `''.split(',')` yields `['']`), so
+        // both the first and last reads are in-bounds with no length guard.
         if (is_first || is_last)
             && let Expression::Identifier(obj_ident) = &member.object
-            && resolves_to_split_call(node, obj_ident.name.as_str(), semantic)
+            && resolves_to_split_call(node, obj_ident, semantic)
         {
             return;
         }
@@ -2948,47 +2949,99 @@ fn is_regex_exec_or_match_call(expr: &Expression) -> bool {
     matches!(member.property.name.as_str(), "exec" | "match")
 }
 
-/// Returns true when `name` resolves to a same-scope `const` whose initializer is
-/// a `String.prototype.split` call (`str.split(sep)`) — making `name[0]` and
-/// `name[name.length - 1]` provably in-bounds. Mirrors
-/// [`resolves_to_regex_match`]: walks ancestor scopes innermost-first so the
-/// closest binding wins, and only a direct `const` qualifies (a `let` may be
-/// reassigned to a shorter or empty array). `split` always returns an array with
-/// at least one element, so a non-empty length is guaranteed.
+/// Returns true when every value `ident`'s binding can hold at the access is a
+/// `String.prototype.split` result — making `ident[0]` and
+/// `ident[ident.length - 1]` provably in-bounds, since `split` always returns an
+/// array with at least one element (even `''.split(',')` yields `['']`).
+///
+/// The binding is resolved through the symbol table, so the guarantee follows the
+/// value wherever it is stored — a declarator initializer, or an assignment back
+/// into an existing binding (`a = a.split('-')`, the ES5-era shape that lands a
+/// split result in a parameter). Two conditions carry it:
+///
+///   1. EVERY write of the symbol is a plain `=` assignment whose right-hand side
+///      is a `split` call. One write of anything else — including a compound or
+///      destructuring write this predicate cannot read — leaves a value of unknown
+///      length, so the whole binding is disqualified. This is what the former
+///      `const`-only restriction approximated, without rejecting `let`, `var` and
+///      parameters along with it.
+///   2. A qualifying value REACHES the access: either the declaration itself
+///      initializes it, or one of those writes dominates the access (see
+///      [`any_dominating_stmt`]) — so a read placed before the assignment, where
+///      the binding still holds its original value, stays flagged.
 fn resolves_to_split_call(
     node: &oxc_semantic::AstNode,
-    name: &str,
+    ident: &IdentifierReference,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
+    let Some(symbol) = reference_symbol(ident, semantic) else {
+        return false;
+    };
     let nodes = semantic.nodes();
-    for ancestor in nodes.ancestors(node.id()) {
-        let stmts: &[Statement] = match ancestor.kind() {
-            AstKind::Program(prog) => &prog.body,
-            AstKind::FunctionBody(body) => &body.statements,
-            AstKind::BlockStatement(block) => &block.body,
-            _ => continue,
-        };
-        for stmt in stmts {
-            let Statement::VariableDeclaration(decl) = stmt else {
-                continue;
-            };
-            if decl.kind != VariableDeclarationKind::Const {
-                continue;
-            }
-            for declarator in &decl.declarations {
-                let BindingPattern::BindingIdentifier(id) = &declarator.id else {
-                    continue;
-                };
-                if id.name.as_str() != name {
-                    continue;
-                }
-                // Closest binding wins: the first declarator matching `name`
-                // decides, even if its initializer is not a `split` call.
-                return matches!(&declarator.init, Some(init) if is_split_call(init));
-            }
+    let mut write_spans: Vec<oxc_span::Span> = Vec::new();
+    for reference in semantic.scoping().get_resolved_references(symbol) {
+        if !reference.flags().contains(ReferenceFlags::Write) {
+            continue;
         }
+        let Some(assigned) = write_reference_source(reference.node_id(), nodes) else {
+            return false;
+        };
+        if !is_split_call(assigned) {
+            return false;
+        }
+        write_spans.push(nodes.kind(reference.node_id()).span());
     }
-    false
+    if declaration_initializer(symbol, semantic).is_some_and(is_split_call) {
+        return true;
+    }
+    any_dominating_stmt(node, semantic, |stmt| {
+        let stmt_span = stmt.span();
+        write_spans
+            .iter()
+            .any(|write| span_contains(stmt_span, *write))
+    })
+}
+
+/// Returns the expression a write reference stores into its binding: the
+/// right-hand side of the plain `=` assignment the reference is the whole target
+/// of. Returns `None` for every other write — a compound or logical assignment
+/// (`x += …`, `x ??= …`), an update (`x++`), a `for…of`/`for…in` binding, or a
+/// destructuring element — none of which exposes a single stored expression to
+/// inspect.
+fn write_reference_source<'a>(
+    reference_node_id: oxc_semantic::NodeId,
+    nodes: &oxc_semantic::AstNodes<'a>,
+) -> Option<&'a Expression<'a>> {
+    let AstKind::AssignmentExpression(assign) = nodes.parent_kind(reference_node_id) else {
+        return None;
+    };
+    if assign.operator != AssignmentOperator::Assign {
+        return None;
+    }
+    (assign.left.span() == nodes.kind(reference_node_id).span()).then_some(&assign.right)
+}
+
+/// Returns the initializer of the variable declarator that declares `symbol`.
+/// Returns `None` when the symbol is a parameter, an import, or a declarator
+/// written without one (`let m;`) — in each case the binding's first value is not
+/// an expression in this file.
+fn declaration_initializer<'a>(
+    symbol: oxc_semantic::SymbolId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a Expression<'a>> {
+    let nodes = semantic.nodes();
+    let decl_node_id = semantic.scoping().symbol_declaration(symbol);
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl.init.as_ref()),
+            AstKind::FormalParameter(_)
+            | AstKind::Function(_)
+            | AstKind::ArrowFunctionExpression(_)
+            | AstKind::Program(_) => Some(None),
+            _ => None,
+        })
+        .flatten()
 }
 
 /// Strips runtime-transparent wrapper expressions — type assertions (`expr as T`,
@@ -7006,6 +7059,41 @@ mod tests {
         // At each level only the statements strictly before the one holding the
         // read count, so a guard written after it does not vouch it safe.
         let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_split_result_assigned_back_into_a_parameter_issue_8101() {
+        // libphonenumber-js `source/tools/semver-compare.js`: the split result
+        // lands back in the parameter it came from, not in a fresh `const`.
+        let src = "export function compare(a, b) { a = a.split('-'); b = b.split('-'); const pa = a[0].split('.'); const pb = b[0].split('.'); return pa.length === pb.length; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_split_result_in_a_never_rewritten_let_issue_8101() {
+        let src = "function f(s) { let parts = s.split('-'); return parts[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_split_binding_with_a_non_split_write_issue_8101() {
+        let src = "function f(s, other) { let parts = s.split('-'); parts = other; return parts[0]; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_parameter_read_before_its_split_assignment_issue_8101() {
+        // The parameter still holds its incoming value at the read.
+        let src = "function f(a) { use(a[0]); a = a.split('-'); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_split_binding_written_by_destructuring_issue_8101() {
+        // A destructuring write exposes no single stored expression, so the
+        // binding is not provably a split result.
+        let src = "function f(s, xs) { let parts = s.split('-'); [parts] = xs; return parts[0]; }";
         assert_eq!(run_on(src).len(), 1);
     }
 
