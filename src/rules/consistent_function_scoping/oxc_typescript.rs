@@ -212,18 +212,11 @@ fn is_skipped_context(nodes: &oxc_semantic::AstNodes, node_id: NodeId) -> bool {
             let node_span = nodes.kind(node_id).span();
             new_expr.arguments.iter().any(|arg| arg.span() == node_span)
         }
-        AstKind::ParenthesizedExpression(_) => {
-            let grandparent_id = nodes.parent_id(parent_id);
-            if grandparent_id == parent_id {
-                return false;
-            }
-            matches!(
-                nodes.kind(grandparent_id),
-                AstKind::CallExpression(_)
-                    | AstKind::NewExpression(_)
-                    | AstKind::ReturnStatement(_)
-            )
-        }
+        // Parentheses are transparent: they change how the expression parses,
+        // never which position it occupies. Ask the same question one level up,
+        // about the parenthesized expression, so every context above answers
+        // for the function it wraps.
+        AstKind::ParenthesizedExpression(_) => is_skipped_context(nodes, parent_id),
         _ => false,
     }
 }
@@ -681,6 +674,37 @@ mod tests {
         let diags = run(src);
         assert_eq!(diags.len(), 1, "expected only `inner` to flag: {diags:?}");
         assert!(diags[0].message.contains("`inner`"), "{diags:?}");
+    }
+
+    #[test]
+    fn ignores_parenthesized_inner_arrow_as_expression_body_of_outer_arrow() {
+        // Regression for rbaumier/comply#6842 — parentheses around the
+        // returned inner arrow do not change what it is: the value the outer
+        // concise-body arrow produces.
+        let src = r#"
+            export const integer = () => ((input: string): number => {
+                const value = Number(input);
+                if (!Number.isInteger(value)) {
+                    throw new TypeError(`Expected an integer (got: ${input})`);
+                }
+                return value;
+            });
+        "#;
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_parenthesized_bare_arrow_statement_in_block_body() {
+        // Negative-space guard: parentheses are transparent, they do not
+        // exempt. A parenthesized bare arrow statement inside a *block*-body
+        // arrow is a genuine nested helper and still flags.
+        let src = r#"
+            const outer = () => {
+                ((x: number) => x + 1);
+                return 1;
+            };
+        "#;
+        assert!(!run(src).is_empty());
     }
 
     #[test]
