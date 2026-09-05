@@ -158,6 +158,53 @@ fn is_typed_callable_return(
         .is_some_and(is_callable_type_annotation)
 }
 
+/// The call that receives the function at `func_id` as an argument, as the
+/// `CallExpression`'s node id paired with that argument's index. Grouping and
+/// assertion wrappers around the function (parentheses, `as`/`satisfies`/`<T>`,
+/// `!`) are transparent, so `run(function () {…} as Hook)` reports the same
+/// position as `run(function () {…})`.
+///
+/// `None` when the function is not an argument of a call, so a `function` in
+/// callee position — an IIFE, `(function () {…})()` — never matches.
+fn enclosing_call_argument(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<(oxc_semantic::NodeId, usize)> {
+    let nodes = semantic.nodes();
+    let mut current = func_id;
+    loop {
+        let parent = nodes.parent_id(current);
+        if parent == current {
+            return None;
+        }
+        match nodes.kind(parent) {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::TSTypeAssertion(_) => current = parent,
+            AstKind::CallExpression(call) => {
+                let arg_span = nodes.kind(current).span();
+                let index = call.arguments.iter().position(|arg| arg.span() == arg_span)?;
+                return Some((parent, index));
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The `CallExpression` at `call_id`, for reading back a call located by
+/// [`enclosing_call_argument`].
+fn call_at<'a>(
+    call_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::CallExpression<'a>> {
+    match semantic.nodes().kind(call_id) {
+        AstKind::CallExpression(call) => Some(call),
+        _ => None,
+    }
+}
+
 /// Chai plugin-registration methods. Each invokes its registered function with
 /// `this` bound to the `chai.Assertion` instance, so `this` in the function body
 /// is the documented Chai plugin API.
@@ -186,17 +233,11 @@ fn is_chai_registration_callback(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(func_id);
-    let call = match nodes.kind(parent_id) {
-        AstKind::CallExpression(call) => call,
-        _ => {
-            let gp_id = nodes.parent_id(parent_id);
-            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
-                return false;
-            };
-            call
-        }
+    let Some((call_id, _)) = enclosing_call_argument(func_id, semantic) else {
+        return false;
+    };
+    let Some(call) = call_at(call_id, semantic) else {
+        return false;
     };
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
@@ -302,22 +343,12 @@ fn is_event_emitter_listener_callback(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(func_id);
-    let call = match nodes.kind(parent_id) {
-        AstKind::CallExpression(call) => call,
-        _ => {
-            let gp_id = nodes.parent_id(parent_id);
-            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
-                return false;
-            };
-            call
-        }
-    };
-    let func_span = nodes.kind(func_id).span();
-    if !call.arguments.iter().any(|arg| arg.span() == func_span) {
+    let Some((call_id, _)) = enclosing_call_argument(func_id, semantic) else {
         return false;
-    }
+    };
+    let Some(call) = call_at(call_id, semantic) else {
+        return false;
+    };
     if is_listener_method_callee(&call.callee) {
         return true;
     }
@@ -329,6 +360,190 @@ fn is_event_emitter_listener_callback(
         return false;
     }
     is_listener_method_callee(&member.object)
+}
+
+/// The number of `type A = B` hops followed when reading a callable contract. A
+/// cyclic alias is invalid TypeScript but reachable input, so the walk is bound.
+const MAX_ALIAS_HOPS: usize = 8;
+
+/// The declaration node the identifier `ident` resolves to, via its own symbol —
+/// so a same-named binding in another scope cannot answer for it. `None` when the
+/// identifier resolves to nothing (an ambient global, declared in a `.d.ts` this
+/// file does not reach).
+fn resolved_declaration<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<AstKind<'a>> {
+    let scoping = semantic.scoping();
+    let symbol_id = scoping.get_reference(ident.reference_id.get()?).symbol_id()?;
+    Some(semantic.nodes().kind(scoping.symbol_declaration(symbol_id)))
+}
+
+/// The right-hand side of the `type A = …` declaration that `ty` names. `None`
+/// for anything else — an interface, an imported type, a generic parameter —
+/// which leaves the contract unreadable from this file.
+fn alias_target<'a>(
+    ty: &TSType<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let TSType::TSTypeReference(reference) = ty else {
+        return None;
+    };
+    let oxc_ast::ast::TSTypeName::IdentifierReference(ident) = &reference.type_name else {
+        return None;
+    };
+    let AstKind::TSTypeAliasDeclaration(decl) = resolved_declaration(ident, semantic)? else {
+        return None;
+    };
+    Some(&decl.type_annotation)
+}
+
+/// Follow `type A = B` declarations from `ty` to the type it ultimately names,
+/// returning `ty` unchanged when the chain ends or the hop bound is spent.
+fn resolve_alias<'r, 'a: 'r>(
+    mut ty: &'r TSType<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> &'r TSType<'a> {
+    for _ in 0..MAX_ALIAS_HOPS {
+        let Some(target) = alias_target(ty, semantic) else {
+            return ty;
+        };
+        ty = target;
+    }
+    ty
+}
+
+/// Whether the callable type `ty` declares a `this` parameter — the contract a
+/// `function` written against it is type-checked by. `Some(true)` for a signature
+/// carrying one (`(this: Ctx) => void`), `Some(false)` for a signature without,
+/// `None` when `ty` is no callable signature this file can read: an interface or
+/// imported alias, a union, `any`.
+fn callable_declares_this<'a>(
+    ty: &TSType<'a>,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<bool> {
+    match resolve_alias(ty, semantic) {
+        TSType::TSFunctionType(func_type) => Some(func_type.this_param.is_some()),
+        TSType::TSTypeLiteral(literal) => literal.members.iter().find_map(|member| match member {
+            oxc_ast::ast::TSSignature::TSCallSignatureDeclaration(sig) => {
+                Some(sig.this_param.is_some())
+            }
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// The `this` contract that the callable type `ty` puts on its parameter at
+/// `index` — [`callable_declares_this`] of that parameter's declared type.
+fn signature_parameter_contract<'a>(
+    ty: &TSType<'a>,
+    index: usize,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<bool> {
+    match resolve_alias(ty, semantic) {
+        TSType::TSFunctionType(func_type) => {
+            callable_declares_this(parameter_type(&func_type.params, index)?, semantic)
+        }
+        TSType::TSTypeLiteral(literal) => literal.members.iter().find_map(|member| match member {
+            oxc_ast::ast::TSSignature::TSCallSignatureDeclaration(sig) => {
+                callable_declares_this(parameter_type(&sig.params, index)?, semantic)
+            }
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// The `this` contract that member `name` of the object type `ty` puts on its
+/// parameter at `index`, covering both spellings of a callable member — the
+/// property signature (`{ on: (e: string, fn: Listener) => void }`) and the
+/// method signature (`{ on(e: string, fn: Listener): void }`).
+fn member_parameter_contract<'a>(
+    ty: &TSType<'a>,
+    name: &str,
+    index: usize,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<bool> {
+    let TSType::TSTypeLiteral(literal) = resolve_alias(ty, semantic) else {
+        return None;
+    };
+    literal.members.iter().find_map(|member| match member {
+        oxc_ast::ast::TSSignature::TSPropertySignature(prop)
+            if prop.key.static_name().as_deref() == Some(name) =>
+        {
+            signature_parameter_contract(
+                &prop.type_annotation.as_ref()?.type_annotation,
+                index,
+                semantic,
+            )
+        }
+        oxc_ast::ast::TSSignature::TSMethodSignature(method)
+            if method.key.static_name().as_deref() == Some(name) =>
+        {
+            callable_declares_this(parameter_type(&method.params, index)?, semantic)
+        }
+        _ => None,
+    })
+}
+
+/// The declared type of parameter `index` of `params`.
+fn parameter_type<'r, 'a>(
+    params: &'r oxc_ast::ast::FormalParameters<'a>,
+    index: usize,
+) -> Option<&'r TSType<'a>> {
+    Some(&params.items.get(index)?.type_annotation.as_ref()?.type_annotation)
+}
+
+/// The `this` contract the callee of `call` declares for its parameter at
+/// `index` — the third place a callable contract reaches a `function`, after the
+/// variable annotation ([`is_typed_callable_binding`]) and the return-type
+/// annotation ([`is_typed_callable_return`]).
+///
+/// `Some(true)` when the parameter's declared type carries a `this` parameter, so
+/// TypeScript types the argument's `this` as that context; `Some(false)` when the
+/// parameter is a callable type declaring none, so the argument's `this` is
+/// genuinely unbound; `None` when the callee's signature is not readable from
+/// this file — it is imported, ambient, or annotated with a type this analysis
+/// does not resolve — and the callee's published contract answers instead.
+///
+/// The callee is read from its declaration: a `function`/`declare function`
+/// statement, a binding annotated with a callable type, or a member of a binding
+/// annotated with an object type (`declare const emitter: { on: (…) => void }`).
+fn callee_parameter_contract<'a>(
+    call: &oxc_ast::ast::CallExpression<'a>,
+    index: usize,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<bool> {
+    match &call.callee {
+        Expression::Identifier(callee) => match resolved_declaration(callee, semantic)? {
+            AstKind::Function(func) => {
+                callable_declares_this(parameter_type(&func.params, index)?, semantic)
+            }
+            AstKind::VariableDeclarator(declarator) => signature_parameter_contract(
+                &declarator.type_annotation.as_ref()?.type_annotation,
+                index,
+                semantic,
+            ),
+            _ => None,
+        },
+        Expression::StaticMemberExpression(member) => {
+            let Expression::Identifier(object) = &member.object else {
+                return None;
+            };
+            let AstKind::VariableDeclarator(declarator) = resolved_declaration(object, semantic)?
+            else {
+                return None;
+            };
+            member_parameter_contract(
+                &declarator.type_annotation.as_ref()?.type_annotation,
+                member.property.name.as_str(),
+                index,
+                semantic,
+            )
+        }
+        _ => None,
+    }
 }
 
 /// True when `arg` is a primitive-literal call argument — a number, string,
@@ -376,24 +591,10 @@ fn is_callback_with_sibling_this_arg(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    let nodes = semantic.nodes();
-    let parent_id = nodes.parent_id(func_id);
-    let call = match nodes.kind(parent_id) {
-        AstKind::CallExpression(call) => call,
-        _ => {
-            let gp_id = nodes.parent_id(parent_id);
-            let AstKind::CallExpression(call) = nodes.kind(gp_id) else {
-                return false;
-            };
-            call
-        }
+    let Some((call_id, callback_index)) = enclosing_call_argument(func_id, semantic) else {
+        return false;
     };
-    let func_span = nodes.kind(func_id).span();
-    let Some(callback_index) = call
-        .arguments
-        .iter()
-        .position(|arg| arg.span() == func_span)
-    else {
+    let Some(call) = call_at(call_id, semantic) else {
         return false;
     };
     // Leading `this` argument (the `Effect.gen(this, fn)` receiver-binding form).
@@ -687,6 +888,98 @@ fn is_this_captured_and_forwarded_as_this_arg(
         .any(|reference| is_receiver_binding_this_arg(reference.node_id(), semantic))
 }
 
+/// Test-runner registration functions. Mocha, Jest, Jasmine and Vitest invoke a
+/// non-arrow callback registered through one of these with `this` bound to the
+/// suite/test context — which is why their type definitions declare the callback
+/// as `(this: Context, …) => void`, and why a hook that calls `this.timeout(…)`
+/// is written `function`, not `=>`.
+const TEST_HOOK_REGISTRATION_FUNCTIONS: &[&str] = &[
+    "describe", "context", "suite", "it", "test", "specify", "before", "after",
+    "beforeEach", "afterEach", "beforeAll", "afterAll", "setup", "teardown",
+    "suiteSetup", "suiteTeardown",
+];
+
+/// The identifier a callee expression is rooted at, seen through member accesses
+/// and calls: `it`, `it.only`, `it.each(table)` and `describe.each(table)(…)` all
+/// root at their bare name, so the member and template forms of a registration
+/// need no enumeration of their own.
+fn callee_root_identifier<'r, 'a>(
+    expr: &'r Expression<'a>,
+) -> Option<&'r oxc_ast::ast::IdentifierReference<'a>> {
+    match expr {
+        Expression::Identifier(ident) => Some(ident),
+        Expression::StaticMemberExpression(member) => callee_root_identifier(&member.object),
+        Expression::CallExpression(call) => callee_root_identifier(&call.callee),
+        _ => None,
+    }
+}
+
+/// True when `func_id` is a `function` passed to a test-runner registration whose
+/// name is bound outside this file — an ambient global (mocha, jasmine) or an
+/// import (`import { it } from 'vitest'`). The runner invokes the callback with
+/// `this` bound to the suite/test context, so `this` in the body is that context.
+///
+/// A callee *declared in this file* is never the framework's: its own signature is
+/// readable, so [`callee_parameter_contract`] answers for it instead — a local
+/// `declare function before(fn: () => void)` keeps flagging its callback's `this`.
+fn is_test_hook_callback(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let Some((call_id, _)) = enclosing_call_argument(func_id, semantic) else {
+        return false;
+    };
+    let Some(call) = call_at(call_id, semantic) else {
+        return false;
+    };
+    let Some(root) = callee_root_identifier(&call.callee) else {
+        return false;
+    };
+    if !TEST_HOOK_REGISTRATION_FUNCTIONS.contains(&root.name.as_str()) {
+        return false;
+    }
+    !matches!(
+        resolved_declaration(root, semantic),
+        Some(AstKind::Function(_) | AstKind::VariableDeclarator(_))
+    )
+}
+
+/// The `this` contract the callee declares for the `function` at `func_id`, when
+/// that function is a call argument and the callee's signature is readable here.
+fn argument_position_contract(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<bool> {
+    let (call_id, index) = enclosing_call_argument(func_id, semantic)?;
+    callee_parameter_contract(call_at(call_id, semantic)?, index, semantic)
+}
+
+/// True when the call that receives the `function` at `func_id` as an argument
+/// binds its `this`.
+///
+/// The callee's declared signature decides whenever this file can read it: a
+/// parameter typed with a callable that carries a `this` parameter supplies the
+/// binding, and one typed with a callable that declares none leaves the callback
+/// genuinely unbound. It is authoritative in both directions — a signature
+/// written for the callee outranks anything inferred from the callee's name.
+///
+/// Only when the signature is out of reach — the callee is imported or ambient —
+/// does the published contract of the library it belongs to answer: Chai plugin
+/// registration, EventEmitter listener registration, or a test-runner hook.
+fn callee_contract_binds_this(
+    func_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    match argument_position_contract(func_id, semantic) {
+        Some(declares_this) => declares_this,
+        None => {
+            is_chai_registration_callback(func_id, semantic)
+                || is_event_emitter_listener_callback(func_id, semantic)
+                || is_test_hook_callback(func_id, semantic)
+        }
+    }
+}
+
 fn is_valid_this_context(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
@@ -755,27 +1048,21 @@ fn is_valid_this_context(
                 if is_method_property_assignment(ancestor.id(), semantic) {
                     return true;
                 }
-                // Chai plugin registration: a `function` passed to a Chai
-                // plugin-registration method (`addMethod`/`addProperty`/
-                // `addChainableMethod`/`overwriteMethod`/`overwriteProperty`/
-                // `overwriteChainableMethod`) on a `chai.Assertion` receiver is
-                // invoked with `this` bound to the Assertion instance — the
-                // documented plugin API — so `this` is valid. The inline form
-                // passes the function directly; the by-reference form passes a
-                // named function declaration by identifier
-                // (`function an() {…}; Assertion.addChainableMethod('an', an)`).
-                if is_chai_registration_callback(ancestor.id(), semantic) {
+                // Callee contract: a `function` passed as a call argument is
+                // type-checked against the callee's declared parameter type, and
+                // that type supplies the `this` binding when it declares a `this`
+                // parameter (`declare function before(fn: (this: Ctx) => void)`).
+                // Where the callee's signature is out of reach the library's
+                // published contract answers instead — Chai plugin registration,
+                // EventEmitter listener registration, a test-runner hook.
+                if callee_contract_binds_this(ancestor.id(), semantic) {
                     return true;
                 }
+                // Chai registration by reference: a named function declaration
+                // passed by identifier (`function an() {…};
+                // Assertion.addChainableMethod('an', an)`) is invoked with `this`
+                // bound to the Assertion instance like the inline form.
                 if is_chai_registration_callback_by_reference(func, semantic) {
-                    return true;
-                }
-                // EventEmitter listener callback: a `function` passed to a
-                // listener-registration call (`emitter.on('e', function () {…})`,
-                // `.once`/`.addListener`/`.prependListener`/`.prependOnceListener`,
-                // and the `EE.prototype.on.call(emitter, …)` form) is invoked by
-                // Node with `this` bound to the emitter, so `this` is valid.
-                if is_event_emitter_listener_callback(ancestor.id(), semantic) {
                     return true;
                 }
                 // Sibling-thisArg callback: a `function` passed to a call that
@@ -1336,6 +1623,99 @@ mod tests {
         // (`addEventListener` is DOM, not EventEmitter; `subscribe` is unrelated)
         // does not bind `this` to a receiver — must still fire.
         let diags = run_on("source.subscribe(function () {\n  return this.x;\n});");
+        assert_eq!(diags.len(), 1);
+    }
+
+    /// The declarations of #8296's repro: a callable contract carrying a `this`
+    /// parameter, the hook that takes it, and an emitter whose listener parameter
+    /// declares none.
+    const HOOK_DECLARATIONS: &str = "type Ctx = { timeout: (ms: number) => void }\ntype Func = (this: Ctx) => void\ndeclare function before(fn: Func): void\ndeclare function it(title: string, fn: Func): void\ndeclare const emitter: { on: (e: string, fn: () => void) => void }\n";
+
+    #[test]
+    fn allows_this_in_callback_whose_parameter_type_declares_this() {
+        // Regression for #8296: `before(function () { this.timeout(1000) })` is
+        // checked against `before`'s parameter type — `(this: Ctx) => void` —
+        // which supplies the `this` binding, exactly as the same contract does
+        // when written on a variable (`const hook: Func = function () {…}`).
+        // The async form is the shape all 41 kysely diagnostics take.
+        let src = format!(
+            "{HOOK_DECLARATIONS}before(async function () {{\n  this.timeout(1000)\n}})\nbefore(function () {{\n  this.timeout(1000)\n}})\nit('does a thing', function () {{\n  this.timeout(1000)\n}})"
+        );
+        assert!(run_on(&src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_callback_whose_parameter_type_declares_no_this() {
+        // Regression for #8296: the resolved contract is authoritative in both
+        // directions. `emitter.on`'s parameter is `() => void`, which declares no
+        // `this`, so the callback really is unbound (TS2683) — the listener-method
+        // name must not exempt it when the signature says otherwise.
+        let src = format!(
+            "{HOOK_DECLARATIONS}emitter.on('data', function () {{\n  this.timeout(1000)\n}})"
+        );
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_standalone_function_beside_typed_hooks() {
+        // Negative-space guard for #8296: a `function` that is never handed to a
+        // callee has no contract to read — its `this` stays unbound and fires.
+        let src = format!("{HOOK_DECLARATIONS}export function loose(): void {{\n  this.timeout(1000)\n}}");
+        assert_eq!(run_on(&src).len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_callback_of_locally_declared_hook_without_this_contract() {
+        // Negative-space guard for #8296: a `before` declared in this file with a
+        // `this`-less callback type is not the test runner's — its own signature
+        // answers, and it declares no receiver.
+        let src = "declare function before(fn: () => void): void\nbefore(function () {\n  return this.x\n})";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_ambient_mocha_hook_callback() {
+        // Regression for #8296: in a mocha suite the hooks are ambient globals
+        // from `@types/mocha`, so no signature is reachable from the file. The
+        // runner's published contract answers: it invokes the callback with
+        // `this` bound to the Context (`test/node/src/replace.test.ts` in kysely).
+        let src = "describe('replace into', () => {\n  before(async function () {\n    ctx = await initTest(this, dialect)\n  })\n  it('works', function () {\n    this.timeout(1000)\n  })\n})";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_ambient_hook_member_and_template_forms() {
+        // Regression for #8296: `it.only`, `it.skip` and `describe.each(table)(…)`
+        // register through the same hook, so they carry the same contract as the
+        // bare call — the callee is read at its root identifier.
+        for callee in ["it.only", "it.skip", "test.each(table)"] {
+            let src = format!("{callee}('x', function () {{\n  this.timeout(1000)\n}})");
+            assert!(run_on(&src).is_empty(), "`{callee}` should be exempt");
+        }
+    }
+
+    #[test]
+    fn allows_this_in_imported_hook_callback() {
+        // Regression for #8296: vitest/jest suites import their hooks, so the
+        // signature still lives outside the file and the runner's contract answers.
+        let src = "import { beforeEach } from 'vitest'\nbeforeEach(function () {\n  this.timeout(1000)\n})";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_in_arrow_passed_to_a_test_hook() {
+        // Negative-space guard for #8296: an arrow has no `this` of its own, so no
+        // callee contract can bind it — `this` inside it reads the enclosing
+        // scope's and must still fire.
+        let diags = run_on("before(() => {\n  this.timeout(1000)\n})");
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn flags_this_in_callback_of_non_hook_callee() {
+        // Negative-space guard for #8296: an ordinary callee outside the runner
+        // and library contracts supplies no receiver — `this` stays unbound.
+        let diags = run_on("schedule('x', function () {\n  return this.timeout;\n});");
         assert_eq!(diags.len(), 1);
     }
 
