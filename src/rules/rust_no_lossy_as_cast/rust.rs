@@ -1973,4 +1973,15 @@ mod tests {
                         fkn as u32 }";
         assert!(run_on(inferred).is_empty());
     }
+
+    #[test]
+    fn repro_7149_fold_item_param_from_filter_map_to_digit_not_flagged() {
+        // rbaumier/comply#7149 — crossterm `src/terminal/sys/unix.rs:282`. Same
+        // hand-off as #7607: this rule shares the `to_digit` bound predicate, so
+        // it does not inherit the span the sibling releases.
+        let src = "fn f(output: Out) -> u16 { output.stdout.into_iter()\n\
+                   .filter_map(|b| char::from(b).to_digit(10))\n\
+                   .fold(0, |v, n| v * 10 + n as u16) }";
+        assert!(run_on(src).is_empty());
+    }
 }

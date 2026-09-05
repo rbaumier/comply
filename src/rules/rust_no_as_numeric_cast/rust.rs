@@ -2964,6 +2964,37 @@ name = "normal_lib"
     }
 
     #[test]
+    fn repro_7149_fold_item_param_from_filter_map_to_digit_not_flagged() {
+        // rbaumier/comply#7149 — crossterm `src/terminal/sys/unix.rs:282`: `n` is
+        // the fold's item parameter, and every item the chain yields is a
+        // `char::to_digit(10)` `Some` value, bounded to `0..10`.
+        let src = "fn f(output: Out) -> u16 { output.stdout.into_iter()\n\
+                   .filter_map(|b| char::from(b).to_digit(10))\n\
+                   .fold(0, |v, n| v * 10 + n as u16) }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7149_fold_item_param_from_unrelated_producer_still_flagged() {
+        // The bound comes from the producing closure, not from the fold shape: a
+        // `filter_map` yielding anything else proves nothing about the item.
+        let src = "fn f(output: Out) -> u16 { output.stdout.into_iter()\n\
+                   .filter_map(|b| parse(b))\n\
+                   .fold(0, |v, n| v * 10 + n as u16) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn repro_7149_shadowed_item_param_still_flagged() {
+        // A `let` inside the fold body rebinds the name, so the cast operand is
+        // no longer the item the chain bounds.
+        let src = "fn f(output: Out) -> u16 { output.stdout.into_iter()\n\
+                   .filter_map(|b| char::from(b).to_digit(10))\n\
+                   .fold(0, |v, n| { let n = width(); v * 10 + n as u16 }) }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
     fn repro_7607_integer_arithmetic_still_flagged() {
         // The exemption follows the operand's type, not its shape: integer
         // arithmetic keeps its diagnostic.
