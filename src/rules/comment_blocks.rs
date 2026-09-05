@@ -19,9 +19,10 @@ pub struct RawComment {
 pub enum LineKind {
     /// Written text — the only kind that reads as sentences.
     Prose,
-    /// A line inside a fenced region: a sample the author transcribed.
+    /// A sample the author transcribed.
+    /// Fenced lines and `@example` bodies hold one.
     Code,
-    /// A fence marker, a section banner or a tool directive.
+    /// A fence, a banner, a directive or a bare tag.
     /// It frames the prose around it and belongs to no sentence.
     Structure,
 }
@@ -138,6 +139,34 @@ pub fn is_tool_directive(body: &str) -> bool {
     TOOL_DIRECTIVES
         .iter()
         .any(|directive| head.starts_with(directive))
+}
+
+/// The tag whose payload JSDoc defines as code.
+const EXAMPLE_TAG: &str = "example";
+
+/// A JSDoc block tag opening a doc comment section.
+pub struct JsdocTag<'a> {
+    /// The tag name, without its `@`.
+    pub name: &'a str,
+    /// What follows the name, empty when the tag stands alone.
+    pub payload: &'a str,
+}
+
+/// The block tag a `text` line opens.
+///
+/// A tag names the section it introduces.
+/// It says nothing and belongs to no sentence.
+/// Matched by shape: the vocabulary is open.
+pub fn jsdoc_block_tag(text: &str) -> Option<JsdocTag<'_>> {
+    let rest = text.strip_prefix('@')?;
+    let name_len = rest
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(rest.len());
+    let (name, payload) = rest.split_at(name_len);
+    (!name.is_empty()).then(|| JsdocTag {
+        name,
+        payload: payload.trim(),
+    })
 }
 
 /// Read one tree-sitter comment node.
@@ -291,11 +320,11 @@ fn marker(raw: &str) -> &'static str {
 /// Fence state opens and closes within the block, never across two.
 fn build_block(run: &[RawComment]) -> CommentBlock {
     let mut lines: Vec<BlockLine> = Vec::new();
-    let mut in_fence = false;
+    let mut reading = Reading::default();
     for comment in run {
         let gap = lines.last().map_or(0..0, |last| last.line + 1..comment.line);
         for line in gap {
-            let kind = classify("", &mut in_fence);
+            let kind = classify("", &mut reading);
             lines.push(BlockLine {
                 line,
                 text: String::new(),
@@ -304,7 +333,7 @@ fn build_block(run: &[RawComment]) -> CommentBlock {
         }
         for (offset, raw_line) in comment.raw.lines().enumerate() {
             let text = strip_markers(raw_line);
-            let kind = classify(&text, &mut in_fence);
+            let kind = classify(&text, &mut reading);
             lines.push(BlockLine {
                 line: comment.line + offset,
                 text,
@@ -319,17 +348,41 @@ fn build_block(run: &[RawComment]) -> CommentBlock {
     }
 }
 
-/// Read what a marker-stripped `text` line holds, advancing `in_fence`.
-fn classify(text: &str, in_fence: &mut bool) -> LineKind {
+/// The regions a block's lines are read through.
+#[derive(Default)]
+struct Reading {
+    /// A Markdown fence is open around a transcribed sample.
+    in_fence: bool,
+    /// An `@example` section is open around its sample.
+    /// The next block tag ends it, as does the block.
+    in_example: bool,
+}
+
+/// Read what a marker-stripped `text` line holds, advancing `reading`.
+fn classify(text: &str, reading: &mut Reading) -> LineKind {
     if opens_or_closes_fence(text) {
-        *in_fence = !*in_fence;
+        reading.in_fence = !reading.in_fence;
         return LineKind::Structure;
     }
-    if *in_fence {
+    if reading.in_fence {
         return LineKind::Code;
     }
     if is_tool_directive(text) || is_banner(text) {
         return LineKind::Structure;
+    }
+    if let Some(tag) = jsdoc_block_tag(text) {
+        reading.in_example = tag.name == EXAMPLE_TAG;
+        if tag.payload.is_empty() {
+            return LineKind::Structure;
+        }
+        return if reading.in_example {
+            LineKind::Code
+        } else {
+            LineKind::Prose
+        };
+    }
+    if reading.in_example {
+        return LineKind::Code;
     }
     LineKind::Prose
 }
@@ -572,8 +625,8 @@ mod tests {
     }
 
     #[test]
-    fn jsdoc_example_bodies_count_like_prose() {
-        let raw = "/**\n * Summary here.\n * @example\n * doSomething();\n */";
+    fn a_bare_block_tag_frames_its_section_and_an_example_body_is_code() {
+        let raw = "/**\n * Summary here.\n * @example\n * doSomething();\n * more();\n */";
         let blocks = merge(
             vec![RawComment {
                 start_byte: 0,
@@ -584,7 +637,52 @@ mod tests {
             }],
             raw,
         );
-        assert_eq!(blocks[0].text(), "Summary here. @example doSomething();");
+        assert_eq!(
+            blocks[0].text(),
+            "Summary here. @example doSomething(); more();"
+        );
+        let kinds: Vec<LineKind> = blocks[0].lines.iter().map(|line| line.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                LineKind::Prose,
+                LineKind::Prose,
+                LineKind::Structure,
+                LineKind::Code,
+                LineKind::Code,
+                LineKind::Code,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_block_tag_ends_the_example_section_before_it() {
+        let raw = "/**\n * @example\n * doSomething();\n * @param value The amount to add.\n */";
+        let blocks = merge(
+            vec![RawComment {
+                start_byte: 0,
+                line: 1,
+                column: 1,
+                raw: raw.into(),
+                is_line: false,
+            }],
+            raw,
+        );
+        assert_eq!(blocks[0].lines[3].kind, LineKind::Prose);
+    }
+
+    #[test]
+    fn block_tags_are_recognized_by_shape() {
+        let tag = jsdoc_block_tag("@param value The amount to add.").expect("a tag");
+        assert_eq!(tag.name, "param");
+        assert_eq!(tag.payload, "value The amount to add.");
+        assert_eq!(jsdoc_block_tag("@example").expect("a tag").payload, "");
+        assert_eq!(
+            jsdoc_block_tag("@typeParam").expect("a tag").name,
+            "typeParam"
+        );
+        assert!(jsdoc_block_tag("Reads the @param tag.").is_none());
+        assert!(jsdoc_block_tag("@ ").is_none());
     }
 
     #[test]

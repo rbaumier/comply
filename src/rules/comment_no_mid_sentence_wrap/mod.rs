@@ -6,7 +6,7 @@ use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;
 use crate::rules::backend::Backend;
-use crate::rules::comment_blocks::{self, RawComment};
+use crate::rules::comment_blocks::{self, BlockLine, LineKind, RawComment};
 use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
@@ -58,10 +58,7 @@ pub(crate) fn flagged_wraps(comments: Vec<RawComment>, source: &str) -> Vec<Flag
         if block.is_license() {
             continue;
         }
-        let wrapped = block
-            .lines
-            .windows(2)
-            .find(|pair| wraps(&pair[0].text, &pair[1].text));
+        let wrapped = block.lines.windows(2).find(|pair| wraps(&pair[0], &pair[1]));
         if let Some(pair) = wrapped {
             flags.push(Flag {
                 line: pair[0].line,
@@ -75,12 +72,22 @@ pub(crate) fn flagged_wraps(comments: Vec<RawComment>, source: &str) -> Vec<Flag
 /// True when `current` breaks somewhere a reader cannot pause.
 /// A line may end on punctuation.
 /// Ending on a bare word means the sentence runs on.
-fn wraps(current: &str, next: &str) -> bool {
-    let both_carry_prose = !current.is_empty() && !next.is_empty();
-    if !both_carry_prose || closes_line(current) {
+fn wraps(current: &BlockLine, next: &BlockLine) -> bool {
+    if !carries_prose(current) || !carries_prose(next) {
         return false;
     }
-    !opens_structure(next)
+    !closes_line(&current.text) && !starts_new_section(&next.text)
+}
+
+/// True when `line` holds prose a sentence can run through.
+/// Samples, banners and block tags stand alone.
+fn carries_prose(line: &BlockLine) -> bool {
+    line.kind == LineKind::Prose && !line.text.is_empty()
+}
+
+/// True when `line` opens a section instead of continuing prose.
+fn starts_new_section(line: &str) -> bool {
+    opens_structure(line) || comment_blocks::jsdoc_block_tag(line).is_some()
 }
 
 /// True when a reader can stop at the end of `line`.
@@ -209,6 +216,83 @@ mod tests {
             ),
             comment(119, 3, "// just read from the wire."),
         ];
+        let source = comment_blocks::source_of(&comments);
+        assert_eq!(flagged_wraps(comments, &source).len(), 1);
+    }
+
+    fn jsdoc(raw: &str) -> Vec<RawComment> {
+        vec![RawComment {
+            start_byte: 0,
+            line: 1,
+            column: 1,
+            raw: raw.into(),
+            is_line: false,
+        }]
+    }
+
+    #[test]
+    fn a_bare_example_tag_does_not_wrap_into_its_sample() {
+        let comments = jsdoc(concat!(
+            "/**\n",
+            " * Parses a header-bearing centrale CSV into keyed records.\n",
+            " * A ragged line is reported, never thrown.\n",
+            " *\n",
+            " * @example\n",
+            " * parseCentraleCsvByHeader(\"A;B\") // => Ok([{ record }])\n",
+            " */"
+        ));
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
+    }
+
+    #[test]
+    fn an_example_tag_right_after_the_summary_does_not_wrap() {
+        let comments = jsdoc(concat!(
+            "/**\n",
+            " * Doubles a number.\n",
+            " * @example\n",
+            " * double(2) // => 4\n",
+            " */"
+        ));
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
+    }
+
+    #[test]
+    fn a_multi_line_example_body_does_not_wrap() {
+        let comments = jsdoc(concat!(
+            "/**\n",
+            " * Month key.\n",
+            " *\n",
+            " * @example\n",
+            " * currentEffectiveMonth()\n",
+            " * previousEffectiveMonth()\n",
+            " */"
+        ));
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
+    }
+
+    #[test]
+    fn a_block_tag_does_not_continue_the_line_above_it() {
+        let comments = jsdoc(concat!(
+            "/**\n",
+            " * Parses a CSV\n",
+            " * @param text The raw text to read.\n",
+            " */"
+        ));
+        let source = comment_blocks::source_of(&comments);
+        assert!(flagged_wraps(comments, &source).is_empty());
+    }
+
+    #[test]
+    fn a_tag_payload_still_flags_a_wrapped_sentence() {
+        let comments = jsdoc(concat!(
+            "/**\n",
+            " * @param text The raw CSV text to parse including\n",
+            " * the header row it opens with.\n",
+            " */"
+        ));
         let source = comment_blocks::source_of(&comments);
         assert_eq!(flagged_wraps(comments, &source).len(), 1);
     }

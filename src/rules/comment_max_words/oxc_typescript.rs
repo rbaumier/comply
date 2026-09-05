@@ -119,13 +119,13 @@ export const b = 2;";
     }
 
     #[test]
-    fn jsdoc_example_bodies_count_too() {
+    fn a_jsdoc_example_body_does_not_spend_the_budget_of_the_prose_above() {
         let src = r#"/**
  * Builds the client.
  * @example
  * const client = build(endpoint, key, timeout, retries, headers, proxy, agent, pool, extra, region, tenant, tracing, backoff, jitter, limits);
  */
 export function build() {}"#;
-        assert_eq!(run(src).len(), 1);
+        assert!(run(src).is_empty());
     }
 }
