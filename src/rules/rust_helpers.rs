@@ -7494,6 +7494,10 @@ fn expr_is_float_rounding_call(node: Node, source: &[u8]) -> bool {
 /// variable radix (`x.to_digit(base)? as u8`) is not statically provable and
 /// stays flagged.
 ///
+/// The operand may also be an iterator closure's item parameter — the `n` of
+/// `.filter_map(|b| char::from(b).to_digit(10)).fold(0, |v, n| v * 10 + n as
+/// u16)` — which carries the bound of the items the chain produces.
+///
 /// Like the rest of this AST-heuristic family, this keys on the method name
 /// `to_digit` with a literal argument; a user type that shadows `to_digit` with
 /// a divergent contract is out of scope. Shared by `rust-no-lossy-as-cast` and
@@ -7528,12 +7532,23 @@ pub fn cast_operand_is_to_digit_bounded(cast: Node, source: &[u8]) -> bool {
 /// `.unwrap_or(_)` / `.unwrap_or_else(_)` receiver is deliberately excluded — its
 /// fallback breaks the bound. The chain must bottom out at `<recv>.to_digit(N)`
 /// whose sole argument is an `integer_literal`; a variable radix yields `None`.
+///
+/// An identifier naming an iterator closure's item parameter carries the bound
+/// too, and is resolved once — to the chain that produces the items, per
+/// [`iterator_item_expression`] — before the peel resumes on it. Once, because
+/// the walk otherwise descends strictly and following a second identifier would
+/// leave it unbounded.
 fn to_digit_radix_literal(value: Node, source: &[u8]) -> Option<u128> {
     let mut node = value;
+    let mut item_resolved = false;
     loop {
         match node.kind() {
             "parenthesized_expression" | "try_expression" => {
                 node = node.named_child(0)?;
+            }
+            "identifier" if !item_resolved => {
+                item_resolved = true;
+                node = iterator_item_expression(node, source)?;
             }
             "call_expression" => {
                 let function = node.child_by_field_name("function")?;
@@ -7551,6 +7566,174 @@ fn to_digit_radix_literal(value: Node, source: &[u8]) -> Option<u128> {
             }
             _ => return None,
         }
+    }
+}
+
+/// The expression producing the items of the iterator whose closure binds the
+/// identifier `node` as its item parameter: `n` in `.filter_map(|b|
+/// char::from(b).to_digit(10)).fold(0, |v, n| v * 10 + n as u16)` resolves to
+/// `char::from(b).to_digit(10)`, so what bounds the items bounds `n`.
+///
+/// Three structural steps, each refusing what it cannot prove: the closure that
+/// binds the name, the adapter that hands that closure an item, and the chain
+/// below it down to the `filter_map` producing the items.
+fn iterator_item_expression<'tree>(node: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+    let var = node.utf8_text(source).ok()?;
+    let closure = item_parameter_closure(node, var, source)?;
+    let receiver = item_adapter_receiver(closure, var, source)?;
+    filter_map_item_expression(receiver, source)
+}
+
+/// The closure whose parameters bind `var` at the use site `node`, when no
+/// nearer scope rebinds the name.
+///
+/// The walk reuses [`binding_site_at`], so the first scope that binds `var`
+/// answers — a `let`, a `for` pattern, an inner closure alike — and any binding
+/// other than a closure parameter ends it, since it names something else.
+fn item_parameter_closure<'tree>(
+    node: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let mut child = node;
+    while let Some(parent) = child.parent() {
+        if child.kind() == "function_item" {
+            return None;
+        }
+        if binding_site_at(parent, child, var, source).is_some() {
+            return (parent.kind() == "closure_expression").then_some(parent);
+        }
+        child = parent;
+    }
+    None
+}
+
+/// The iterator `closure` reads its items from, when `closure` is the argument
+/// of an adapter that hands it one and `var` names the parameter it arrives in.
+///
+/// The item's position comes from the `Iterator` signature the method name
+/// selects: `fold(init, f)`, `try_fold(init, f)` and `scan(init, f)` pass the
+/// item second, after the accumulator; `map(f)`, `filter_map(f)`, `flat_map(f)`
+/// and `for_each(f)` pass it first. The closure has to be the argument that
+/// signature places it at, and to declare exactly the parameters it fills, so
+/// `map_or(default, f)` — which places a value and a closure the same way while
+/// binding `f`'s parameter to something else entirely — resolves to nothing. An
+/// annotated parameter (`|v, n: u32|`) states its own type, which is stronger
+/// than what the chain says and able to contradict it, so it is left to speak.
+fn item_adapter_receiver<'tree>(
+    closure: Node<'tree>,
+    var: &str,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let arguments = closure.parent().filter(|p| p.kind() == "arguments")?;
+    let call = arguments
+        .parent()
+        .filter(|p| p.kind() == "call_expression")?;
+    let function = call
+        .child_by_field_name("function")
+        .filter(|function| function.kind() == "field_expression")?;
+    let method = function
+        .child_by_field_name("field")?
+        .utf8_text(source)
+        .ok()?;
+    let (item_index, argument_count) = match method {
+        "fold" | "try_fold" | "scan" => (1, 2),
+        "map" | "filter_map" | "flat_map" | "for_each" => (0, 1),
+        _ => return None,
+    };
+
+    // Comments are named nodes, so they are filtered out of both lists to keep
+    // the positions the ones the signature talks about.
+    let parameters_node = closure.child_by_field_name("parameters")?;
+    let mut parameter_cursor = parameters_node.walk();
+    let parameters: Vec<Node> = parameters_node
+        .named_children(&mut parameter_cursor)
+        .filter(|parameter| !is_comment_node(*parameter))
+        .collect();
+    // The raw parameter, not its pattern: an annotated one is a `parameter`
+    // node, which `let_pattern_binds` rejects.
+    if parameters.len() != item_index + 1
+        || !let_pattern_binds(*parameters.get(item_index)?, var, source)
+    {
+        return None;
+    }
+
+    let mut argument_cursor = arguments.walk();
+    let call_arguments: Vec<Node> = arguments
+        .named_children(&mut argument_cursor)
+        .filter(|argument| !is_comment_node(*argument))
+        .collect();
+    // Every signature above takes the closure last, after the seed when it has
+    // one.
+    if call_arguments.len() != argument_count || call_arguments.last()?.id() != closure.id() {
+        return None;
+    }
+    function.child_by_field_name("value")
+}
+
+/// The expression each item of `receiver` is the `Some` payload of: the body of
+/// the closure a `.filter_map(..)` in the chain applies.
+///
+/// `filter_map` is the producer resolved here because its item is exactly its
+/// closure's `Option` payload — the shape `char::to_digit(N)` yields. Adapters
+/// that pass the receiver's own items along (a subset, a reordering, a reborrow)
+/// are peeled first, since the item an outer closure receives is still the one
+/// produced below them. Anything else ends the walk: an adapter that builds new
+/// items (`map`, `enumerate`, `zip`) or splices in a second iterator (`chain`)
+/// has an item of its own to prove.
+///
+/// A block-bodied closure ends on statements this walk does not read, so only an
+/// expression body states the item outright.
+fn filter_map_item_expression<'tree>(receiver: Node<'tree>, source: &[u8]) -> Option<Node<'tree>> {
+    const ITEM_PRESERVING_ADAPTERS: &[&str] = &[
+        "by_ref",
+        "filter",
+        "fuse",
+        "peekable",
+        "rev",
+        "skip",
+        "skip_while",
+        "step_by",
+        "take",
+        "take_while",
+    ];
+
+    let mut node = receiver;
+    loop {
+        if node.kind() == "parenthesized_expression" {
+            node = node.named_child(0)?;
+            continue;
+        }
+        if node.kind() != "call_expression" {
+            return None;
+        }
+        let function = node
+            .child_by_field_name("function")
+            .filter(|function| function.kind() == "field_expression")?;
+        let method = function
+            .child_by_field_name("field")?
+            .utf8_text(source)
+            .ok()?;
+        if method == "filter_map" {
+            let arguments = node.child_by_field_name("arguments")?;
+            let mut cursor = arguments.walk();
+            let call_arguments: Vec<Node> = arguments
+                .named_children(&mut cursor)
+                .filter(|argument| !is_comment_node(*argument))
+                .collect();
+            let [closure] = call_arguments.as_slice() else {
+                return None;
+            };
+            if closure.kind() != "closure_expression" {
+                return None;
+            }
+            let body = closure.child_by_field_name("body")?;
+            return (body.kind() != "block").then_some(body);
+        }
+        if !ITEM_PRESERVING_ADAPTERS.contains(&method) {
+            return None;
+        }
+        node = function.child_by_field_name("value")?;
     }
 }
 
