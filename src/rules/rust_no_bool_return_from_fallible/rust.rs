@@ -55,7 +55,11 @@
 //!   no error to hoist into `Result::Err`, so `bool` is correct (generalizes the
 //!   `Some`/`None` case to guard clauses). A body that maps a condition onto
 //!   literals or swallows an operation keeps flagging — that is the rule's real
-//!   target.
+//!   target. Literals produced by an `if`/`match` *value* qualify too when the
+//!   function writes through a caller-supplied `&mut` out-parameter (`fn
+//!   write_usage(&self, out: &mut StyledStr) -> bool`): the content leaves
+//!   through the parameter, so the `bool` reports whether there was content to
+//!   write.
 //! - Test code (`#[cfg(test)]`, `#[test]`, a `tests/` directory): the rule's
 //!   subject is a published contract, and a test helper's only caller is the
 //!   test next to it.
@@ -731,7 +735,10 @@ fn collect_explicit_returns(node: tree_sitter::Node, source: &[u8], returns: &mu
 /// Every condition is required, and each guards a distinct true-positive:
 /// - `saw_non_literal` — a forwarded/computed return is a real value.
 /// - `saw_indirect` — a literal produced by an `if`/`match` *value* is the
-///   `if op() { true } else { false }` collapse the rule exists to flag.
+///   `if op() { true } else { false }` collapse the rule exists to flag, unless
+///   the function writes through a `&mut` out-parameter
+///   (`writes_through_out_parameter`), which makes the literals a report on the
+///   content produced rather than on a condition.
 /// - `body_swallows_operation` — a `?`, `Ok`/`Err`, `.is_ok()`/`.is_err()`, or a
 ///   call result dropped into `let _` is an operation whose failure is dropped.
 fn returns_total_predicate(func: tree_sitter::Node, source: &[u8]) -> bool {
@@ -745,12 +752,80 @@ fn returns_total_predicate(func: tree_sitter::Node, source: &[u8]) -> bool {
     collect_explicit_returns(body, source, &mut returns);
 
     if returns.saw_non_literal
-        || returns.saw_indirect
+        || (returns.saw_indirect && !writes_through_out_parameter(func, source))
         || !(returns.saw_true || returns.saw_false)
     {
         return false;
     }
     !body_swallows_operation(body, source)
+}
+
+/// True if the function produces its output through a caller-supplied `&mut`
+/// out-parameter: a parameter (not `self`) declared `&mut T` that the body then
+/// passes to a call or macro, or calls a method on.
+///
+/// Whatever such a function produces leaves through that parameter, so the
+/// `bool` is the only channel left for "was there anything to produce" — the
+/// buffer-writer idiom (`fn write_usage(&self, out: &mut StyledStr) -> bool`).
+/// It relaxes `saw_indirect` only: the fallibility checks still apply, so a
+/// write that can fail — visible as a `?`, an `Ok`/`Err`, an `.is_ok()`, or a
+/// result dropped into `let _` — keeps the function flagged.
+fn writes_through_out_parameter(func: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(params) = func.child_by_field_name("parameters") else {
+        return false;
+    };
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    let mut cursor = params.walk();
+    params
+        .named_children(&mut cursor)
+        .filter(|param| param.kind() == "parameter")
+        .filter(|param| {
+            param
+                .child_by_field_name("type")
+                .is_some_and(is_mutable_reference_type)
+        })
+        .filter_map(|param| param.child_by_field_name("pattern"))
+        .filter(|pattern| pattern.kind() == "identifier")
+        .filter_map(|pattern| pattern.utf8_text(source).ok())
+        .any(|name| call_mentions_identifier(body, name, source))
+}
+
+/// True if `node` is a `&mut T` type. A `&self` / `&mut self` receiver is a
+/// `self_parameter`, not a typed `parameter`, so it never reaches here — the
+/// receiver is the function's own state, not a buffer the caller handed it.
+fn is_mutable_reference_type(node: tree_sitter::Node) -> bool {
+    if node.kind() != "reference_type" {
+        return false;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| child.kind() == "mutable_specifier")
+}
+
+/// True if some call or macro invocation in `node`'s subtree mentions `name`:
+/// as the receiver of a method call (`out.push_str(..)`), as an argument
+/// (`self.render(out)`), or as a macro operand (`write!(out, "…")`).
+fn call_mentions_identifier(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if matches!(node.kind(), "call_expression" | "macro_invocation")
+        && subtree_references_identifier(node, name, source)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| call_mentions_identifier(child, name, source))
+}
+
+/// True if any `identifier` node in `node`'s subtree is exactly `name`.
+fn subtree_references_identifier(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if node.kind() == "identifier" {
+        return node.utf8_text(source).is_ok_and(|text| text == name);
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| subtree_references_identifier(child, name, source))
 }
 
 /// True if `node`'s subtree performs an operation whose failure a total
@@ -1728,6 +1803,97 @@ mod tests {
                 true\n\
             }";
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "tests/it.rs").is_empty());
+    }
+
+    // --- #3236: clap — the `bool` of a function that writes into a
+    // caller-supplied `&mut` buffer reports content presence, not failure ---
+
+    #[test]
+    fn allows_flat_set_insert_novelty_bool() {
+        // clap `FlatSet::insert` — a guard-clause `return false;` for an
+        // existing value, an infallible `Vec::push`, a `true` tail: the
+        // `HashSet::insert` "was it new?" contract, hand-rolled.
+        let src = "\
+            fn insert(&mut self, value: T) -> bool {\n\
+                for existing in &self.inner {\n\
+                    if *existing == value { return false; }\n\
+                }\n\
+                self.inner.push(value);\n\
+                true\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_write_into_out_parameter_reporting_content() {
+        // clap `Usage::write_usage_no_title` — the usage text leaves through
+        // `styled`, so the `bool` says whether anything was written.
+        let src = "\
+            fn write_usage_no_title(&self, styled: &mut StyledStr, used: &[Id]) -> bool {\n\
+                if let Some(u) = self.cmd.get_overridden_usage() {\n\
+                    styled.push_styled(u);\n\
+                    true\n\
+                } else if used.is_empty() {\n\
+                    self.write_help_usage(styled);\n\
+                    true\n\
+                } else {\n\
+                    false\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_match_writing_into_out_parameter() {
+        // clap `write_dynamic_context` — a `match` over the error kind whose
+        // arms render into `styled` and answer `true`, or find nothing to
+        // render and answer `false`.
+        let src = "\
+            fn write_dynamic_context(error: &Error, styled: &mut StyledStr) -> bool {\n\
+                match error.kind() {\n\
+                    ErrorKind::NoEquals => {\n\
+                        styled.push_str(\"equal sign is needed\");\n\
+                        true\n\
+                    }\n\
+                    ErrorKind::InvalidUtf8 => false,\n\
+                    _ => false,\n\
+                }\n\
+            }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_out_parameter_write_swallowing_error() {
+        // The out-parameter relaxes only the `if`/`match`-literal shape: a
+        // write whose `Result` is observed still collapses a failure.
+        let src = "\
+            fn write_report(&self, out: &mut File) -> bool {\n\
+                if out.write_all(b\"x\").is_err() { false } else { true }\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_literal_collapse_without_out_parameter() {
+        // Same shape, but the buffer is the receiver's own state: nothing
+        // leaves through a caller-supplied parameter, so the literals are the
+        // condition re-encoded.
+        let src = "\
+            fn write_summary(&mut self, used: &[Id]) -> bool {\n\
+                if used.is_empty() { false } else { self.buf.push_str(\"x\"); true }\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_unused_out_parameter_literal_collapse() {
+        // A `&mut` parameter the body never writes through is not an output
+        // channel, so the literals still collapse the condition.
+        let src = "\
+            fn write_entry(&self, out: &mut StyledStr, ok: bool) -> bool {\n\
+                if ok { true } else { false }\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
