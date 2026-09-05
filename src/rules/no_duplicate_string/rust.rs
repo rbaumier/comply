@@ -5,11 +5,14 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
-/// Macros whose first string argument is a compile-time format template or
-/// panic/diagnostic message. `format!`/`panic!`/`unreachable!`/etc. require a
-/// string *literal* — the template cannot be hoisted to a `const &str` and
-/// still expand, and panic-family messages are idiomatically inlined at each
-/// site, so a repeated template/message is not a duplicate worth extracting.
+/// Macros whose first string argument is a message written inline at each
+/// site: `format!`/`write!`/`print!` reject a non-literal template outright,
+/// and `panic!`/`unreachable!`/`todo!`/`assert!` say what went wrong *here*.
+/// A repeated message from one of these is not a duplicate worth extracting.
+///
+/// The list is load-bearing only for the placeholder-free case; a literal
+/// carrying a `{…}` placeholder is a template whatever macro encloses it, and
+/// `has_format_placeholder` recognizes it without consulting a name.
 const FORMAT_MACROS: &[&str] = &[
     "format",
     "write",
@@ -31,12 +34,28 @@ const FORMAT_MACROS: &[&str] = &[
     "format_args",
 ];
 
-/// True when `node` is the format-string argument of a format-like macro
-/// (`format!`, `write!`, `panic!`, …): the first `string_literal` directly
-/// inside the macro's `token_tree`. Such a literal is a compile-time
-/// template and cannot be extracted to a `const`, so it must not count
-/// toward the duplicate tally.
-pub(super) fn is_format_template_arg(node: tree_sitter::Node<'_>, source: &[u8]) -> bool {
+/// True when `node` is the message argument of a macro invocation that cannot
+/// be hoisted: the first `string_literal` directly inside the macro's
+/// `token_tree`, and either
+///
+/// - the literal carries a `{…}` format placeholder, or
+/// - the macro is one of `FORMAT_MACROS`.
+///
+/// A placeholder-bearing literal is a template, not a value: every macro that
+/// routes its first argument through `format_args!` — `format!`, `write!`,
+/// `anyhow::bail!`, `tracing::warn!` and the rest — needs a literal in that
+/// position, and hoisting the template to a `const` either fails to compile or
+/// expands to the placeholder's own text with the named argument left unread.
+/// That is a property of the literal, so it is decided from the literal's
+/// `content` rather than from the macro's name.
+///
+/// Only the first literal is the template; later string arguments (e.g.
+/// `format!("{}", "x")`) are ordinary extractable values and stay counted.
+pub(super) fn is_format_template_arg(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    content: &str,
+) -> bool {
     let Some(token_tree) = node.parent() else {
         return false;
     };
@@ -49,6 +68,17 @@ pub(super) fn is_format_template_arg(node: tree_sitter::Node<'_>, source: &[u8])
     if macro_invocation.kind() != "macro_invocation" {
         return false;
     }
+    let mut cursor = token_tree.walk();
+    let is_first_literal = token_tree
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "string_literal")
+        .is_some_and(|first| first.id() == node.id());
+    if !is_first_literal {
+        return false;
+    }
+    if has_format_placeholder(content) {
+        return true;
+    }
     let Some(macro_name) = macro_invocation.child_by_field_name("macro") else {
         return false;
     };
@@ -56,17 +86,52 @@ pub(super) fn is_format_template_arg(node: tree_sitter::Node<'_>, source: &[u8])
         return false;
     };
     let bare = name.rsplit("::").next().unwrap_or(name);
-    if !FORMAT_MACROS.contains(&bare) {
-        return false;
+    FORMAT_MACROS.contains(&bare)
+}
+
+/// True when `content` carries at least one `format_args!` placeholder — an
+/// unescaped `{…}` run whose body is a placeholder body (`{}`, `{0}`, `{unk}`,
+/// `{x:?}`, `{n:>8}`). `{{` and `}}` are escaped braces and do not open one, so
+/// `"{{literal braces}}"` is an ordinary hoistable value.
+fn has_format_placeholder(content: &str) -> bool {
+    let bytes = content.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'{' {
+            index += 1;
+            continue;
+        }
+        if bytes.get(index + 1) == Some(&b'{') {
+            index += 2;
+            continue;
+        }
+        let body_start = index + 1;
+        let body_end = bytes[body_start..]
+            .iter()
+            .position(|byte| matches!(byte, b'{' | b'}'))
+            .map(|offset| body_start + offset);
+        if let Some(end) = body_end
+            && bytes[end] == b'}'
+            && is_placeholder_body(&content[body_start..end])
+        {
+            return true;
+        }
+        index = body_start;
     }
-    // Only the *first* string literal in the token tree is the format
-    // template; later string arguments (e.g. `format!("{}", "x")`) are
-    // ordinary extractable values.
-    let mut cursor = token_tree.walk();
-    token_tree
-        .named_children(&mut cursor)
-        .find(|child| child.kind() == "string_literal")
-        .is_some_and(|first| first.id() == node.id())
+    false
+}
+
+/// True when `body` — the text between a candidate placeholder's braces — is a
+/// format-argument reference: an optional argument (empty for the next
+/// positional one, an index like `0`, or an identifier like `unk`) followed by
+/// an optional `:`-introduced format spec. Rules out brace runs that are plain
+/// text, such as the `{ "type": "object" }` of an inline JSON snippet.
+fn is_placeholder_body(body: &str) -> bool {
+    let argument = body.split(':').next().unwrap_or(body);
+    argument.is_empty()
+        || argument.bytes().all(|byte| byte.is_ascii_digit())
+        || (argument.starts_with(|c: char| c.is_alphabetic() || c == '_')
+            && argument.chars().all(|c| c.is_alphanumeric() || c == '_'))
 }
 
 /// Macros whose string arguments are compile-time `cfg` predicate tokens
@@ -727,6 +792,110 @@ mod tests {
                     1 => "shared label text",
                     _ => "shared label text",
                 }
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_placeholder_template_in_error_macro() {
+        // The issue's FP (ripgrep): the same `{unk}`-bearing template passed to
+        // `anyhow::bail!` from four independent flag parsers. `bail!` routes its
+        // first argument through `format_args!` exactly as `panic!` does, so
+        // hoisting the template to a `const` expands to the literal text
+        // `choice '{unk}' is unrecognized` with `unk` left unread. The qualified
+        // and unqualified spellings get the same verdict.
+        let src = r#"
+            fn parse_a(v: &str) -> anyhow::Result<u8> {
+                match v {
+                    "path" => Ok(1),
+                    unk => anyhow::bail!("choice '{unk}' is unrecognized here"),
+                }
+            }
+            fn parse_b(v: &str) -> anyhow::Result<u8> {
+                match v {
+                    "none" => Ok(2),
+                    unk => bail!("choice '{unk}' is unrecognized here"),
+                }
+            }
+            fn parse_c(v: &str) -> anyhow::Result<u8> {
+                match v {
+                    "line" => Ok(3),
+                    unk => anyhow::bail!("choice '{unk}' is unrecognized here"),
+                }
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_placeholder_template_in_logging_macro() {
+        // Same property, a different macro family: a `tracing`/`log` template
+        // needs a literal in the same position, so it is not extractable
+        // either.
+        let src = r#"
+            fn a(attempt: u32, max: u32) { tracing::warn!("retrying {attempt} of {max} now"); }
+            fn b(attempt: u32, max: u32) { tracing::warn!("retrying {attempt} of {max} now"); }
+            fn c(attempt: u32, max: u32) { log::info!("retrying {attempt} of {max} now"); }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_escaped_braces_literal_in_ordinary_macro() {
+        // Precision: `{{` / `}}` are escaped braces, not a placeholder, so the
+        // literal is an ordinary hoistable value in a macro with no
+        // format-template contract.
+        let src = r#"
+            fn f() {
+                log_event!("{{literal braces}} in the label");
+                log_event!("{{literal braces}} in the label");
+                log_event!("{{literal braces}} in the label");
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_brace_run_that_is_not_a_placeholder_body() {
+        // Precision: the exemption is a format placeholder, not "contains
+        // braces". An inline JSON payload has a `{ … }` run whose body is not
+        // an argument reference, so it stays an extractable duplicate.
+        let src = r#"
+            fn f() {
+                log_event!("{ \"type\": \"object\" } payload");
+                log_event!("{ \"type\": \"object\" } payload");
+                log_event!("{ \"type\": \"object\" } payload");
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_placeholder_literal_outside_macro_position() {
+        // Precision: a template is unhoistable only where a macro demands a
+        // literal. The same text bound to a variable is an ordinary value.
+        let src = r#"
+            fn f() {
+                let a = "choice '{unk}' is unrecognized here";
+                let b = "choice '{unk}' is unrecognized here";
+                let c = "choice '{unk}' is unrecognized here";
+                let _ = (a, b, c);
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_second_string_arg_carrying_braces() {
+        // Precision: only the *first* literal is the template. A later argument
+        // is an ordinary value even when it happens to carry a placeholder.
+        let src = r#"
+            fn f() {
+                let a = format!("{}", "value {x} in the label");
+                let b = format!("{}", "value {x} in the label");
+                let c = format!("{}", "value {x} in the label");
+                let _ = (a, b, c);
             }
         "#;
         assert_eq!(run(src).len(), 1);
