@@ -51,6 +51,15 @@ enum FnLocation {
     External(std::path::PathBuf, String, usize),
 }
 
+/// One function's participation in a shared parameter subset.
+#[derive(Clone)]
+struct ParamOccurrence {
+    location: FnLocation,
+    /// The function's total identity-carrying parameter count, compared against
+    /// the subset size to tell a strict subset from a saturated signature.
+    param_count: usize,
+}
+
 /// Extract parameter names from a function's formal parameters.
 ///
 /// Two kinds of parameter are dropped because they carry no semantic identity and
@@ -296,43 +305,55 @@ impl OxcCheck for Check {
         }
 
         // For each 3-param subset, count which functions contain it.
-        let mut subset_occurrences: FxHashMap<Vec<String>, Vec<FnLocation>> = FxHashMap::default();
+        let mut subset_occurrences: FxHashMap<Vec<String>, Vec<ParamOccurrence>> =
+            FxHashMap::default();
         for (loc, params) in &fn_params {
             for combo in combinations(params, 3) {
                 if is_framework_middleware_subset(&combo) {
                     continue;
                 }
-                subset_occurrences
-                    .entry(combo)
-                    .or_default()
-                    .push(loc.clone());
+                subset_occurrences.entry(combo).or_default().push(ParamOccurrence {
+                    location: loc.clone(),
+                    param_count: params.len(),
+                });
             }
         }
 
         let mut flagged: FxHashSet<FnLocation> = FxHashSet::default();
         let mut results: Vec<(usize, String)> = Vec::new();
 
-        for (subset, locations) in &subset_occurrences {
-            if locations.len() < 2 {
+        for (subset, occurrences) in &subset_occurrences {
+            if occurrences.len() < 2 {
+                continue;
+            }
+            // A function whose whole parameter list is the subset already is the
+            // shared type; when it participates alongside wider signatures there
+            // is nothing left to extract, only the unrelated advice to pass the
+            // narrower signature's group along.
+            let saturating = occurrences
+                .iter()
+                .filter(|o| o.param_count == subset.len())
+                .count();
+            if saturating > 0 && saturating < occurrences.len() {
                 continue;
             }
 
-            let external_locs: Vec<_> = locations
+            let external_locs: Vec<_> = occurrences
                 .iter()
-                .filter_map(|l| match l {
+                .filter_map(|o| match &o.location {
                     FnLocation::External(path, name, _) => Some((path, name)),
                     _ => None,
                 })
                 .collect();
 
-            for loc in locations {
-                if let FnLocation::Local(line) = loc
-                    && flagged.insert(loc.clone()) {
+            for occurrence in occurrences {
+                if let FnLocation::Local(line) = &occurrence.location
+                    && flagged.insert(occurrence.location.clone()) {
                         let msg = if external_locs.is_empty() {
                             format!(
                                 "Parameters [{}] appear together in {} functions — extract into a type.",
                                 subset.join(", "),
-                                locations.len(),
+                                occurrences.len(),
                             )
                         } else {
                             let ext_names: Vec<_> = external_locs
@@ -734,6 +755,30 @@ export const makeCreate = (service: string) =>
   (target: object, key: string, descriptor: PropertyDescriptor) => descriptor;
 export const makeUpdate = (service: string) =>
   (target: object, key: string, descriptor: PropertyDescriptor) => target;
+"#;
+        assert_eq!(run(src).len(), 2);
+    }
+
+    /// Regression for issue #8157 — the shared triple is `send`'s entire
+    /// parameter list, so the "type" to extract is the signature `send` already
+    /// declares; there is nothing for either function to factor out.
+    #[test]
+    fn no_fp_on_clump_saturating_one_signature_issue_8157() {
+        let src = r#"
+function send(host: string, port: number, proto: string) { return host; }
+function connect(host: string, port: number, proto: string, timeout: number) { return port; }
+"#;
+        assert!(run(src).is_empty());
+    }
+
+    /// Control for the saturation check: when the triple is a strict subset of
+    /// both parameter lists, extracting it leaves both signatures smaller and
+    /// the clump must still be flagged.
+    #[test]
+    fn still_flags_clump_that_saturates_no_signature() {
+        let src = r#"
+function send(host: string, port: number, proto: string, retries: number) { return host; }
+function connect(host: string, port: number, proto: string, timeout: number) { return port; }
 "#;
         assert_eq!(run(src).len(), 2);
     }
