@@ -155,6 +155,11 @@
 //!     (`export * from './m'`, chains included) is public surface in full: the
 //!     wildcard forwards its entire export list across the same package
 //!     boundary. See `ImportIndex::star_reexporters_of`.
+//!   - An export the project's `unplugin-auto-import` configuration lists in its
+//!     `imports:` map is injected at every use site by the bundler, so it is
+//!     deliberately never named by a static import. Read from the configuration
+//!     the project declares, so the module's directory does not matter. See
+//!     `ProjectCtx::auto_imported_names_for_module`.
 //!   - If any file imports the current module via a namespace import
 //!     (`import * as ns from './m'`), `symbol_usages` is intentionally not
 //!     populated for individual names. In that case every export on the
@@ -854,6 +859,14 @@ impl TextCheck for Check {
         // per-barrel scan.
         let mut barrel_forwarded: Option<FxHashSet<String>> = None;
 
+        // Names of this file's exports the project's `unplugin-auto-import`
+        // configuration injects as globals. The plugin rewrites each use site to
+        // add the import at build time, so such an export is deliberately never
+        // named by a static import. Computed lazily: only an export that survived
+        // every cheap check pays for the configuration scan, and only in a
+        // project whose manifest chain declares the plugin.
+        let mut auto_imported: Option<FxHashSet<String>> = None;
+
         // Whether this module is a Cloudflare Worker module-format entry point —
         // an `export default` object carrying a `fetch`/`scheduled`/… lifecycle
         // handler. The Workers runtime resolves the entry from `wrangler.toml`
@@ -1032,6 +1045,11 @@ impl TextCheck for Check {
             let barrel_forwarded = barrel_forwarded
                 .get_or_insert_with(|| collect_barrel_forwarded_names(index, ctx.project, &canon));
             if barrel_forwarded.contains(export.name.as_str()) {
+                continue;
+            }
+            let auto_imported = auto_imported
+                .get_or_insert_with(|| ctx.project.auto_imported_names_for_module(&canon));
+            if auto_imported.contains(export.name.as_str()) {
                 continue;
             }
             diagnostics.push(Diagnostic {
@@ -5346,5 +5364,120 @@ mod tests {
             "a module the barrel does not forward is still dead: {diags:?}"
         );
         assert!(diags[0].message.contains("`helper`"), "{diags:?}");
+    }
+
+    /// #8050's repro, reduced from `yudaocode/yudao-ui-admin-vue3`: the
+    /// `AutoImport({ imports: … })` call lives in `build/vite/index.ts`, a
+    /// directory the file walk excludes, and registers hooks under
+    /// `src/hooks/web/` — no `composables`/`utils` segment anywhere.
+    /// `auto_import_files` are staged on disk without being indexed, exactly as
+    /// the real scan sees them.
+    fn auto_import_files(imports_map: &str) -> Vec<(&'static str, String)> {
+        vec![
+            (
+                "tsconfig.json",
+                r#"{"compilerOptions":{"baseUrl":".","paths":{"@/*":["src/*"]}}}"#.to_string(),
+            ),
+            (
+                "build/vite/index.ts",
+                format!(
+                    "import AutoImport from 'unplugin-auto-import/vite'\n\
+                     export function createVitePlugins() {{\n\
+                     \x20 return [AutoImport({{ imports: ['vue', {imports_map}] }})]\n\
+                     }}\n"
+                ),
+            ),
+        ]
+    }
+
+    fn auto_import_sources() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "src/hooks/web/useTable.ts",
+                "export const useTable = (config: unknown) => ({ config });\n",
+            ),
+            (
+                "src/hooks/web/useCrudSchemas.ts",
+                "export const useCrudSchemas = (schema: unknown) => ({ allSchemas: schema });\n\
+                 export const sortTableColumns = (a: number, b: number) => a - b;\n",
+            ),
+            (
+                "src/views/activity.data.ts",
+                "export const { allSchemas } = useCrudSchemas({ name: 'x' });\n\
+                 export function buildTable() {\n  return useTable({ a: 1 });\n}\n",
+            ),
+            (
+                "src/main.ts",
+                "import { allSchemas, buildTable } from '@/views/activity.data';\n\
+                 console.log(allSchemas, buildTable());\n",
+            ),
+        ]
+    }
+
+    fn run_with_auto_import_config(
+        package_json: &str,
+        imports_map: &str,
+        target_rel: &str,
+    ) -> (TempDir, Vec<Diagnostic>) {
+        let mut extra: Vec<(&str, String)> = auto_import_files(imports_map);
+        extra.push(("package.json", package_json.to_string()));
+        let extra: Vec<(&str, &str)> = extra
+            .iter()
+            .map(|(rel, content)| (*rel, content.as_str()))
+            .collect();
+        run_on_project_with_extra(&extra, &auto_import_sources(), target_rel)
+    }
+
+    const AUTO_IMPORT_PKG: &str = r#"{"name":"admin","private":true,
+        "devDependencies":{"unplugin-auto-import":"^0.16.0","vite":"^4.0.0"}}"#;
+    const YUDAO_IMPORTS_MAP: &str =
+        "{ '@/hooks/web/useTable': ['useTable'], '@/hooks/web/useCrudSchemas': ['useCrudSchemas'] }";
+
+    #[test]
+    fn no_fp_for_config_registered_auto_import_outside_composables_issue_8050() {
+        // The plugin injects `useTable` / `useCrudSchemas` at every call site, so
+        // no static import names them by design. The registration is read from
+        // the configuration, so the hooks' directory does not matter.
+        let (_d0, table) =
+            run_with_auto_import_config(AUTO_IMPORT_PKG, YUDAO_IMPORTS_MAP, "src/hooks/web/useTable.ts");
+        assert!(table.is_empty(), "a registered auto-import is live: {table:?}");
+
+        // Precision: only the names the configuration lists. `sortTableColumns`
+        // sits in a registered module but is not registered itself, so it is not
+        // auto-imported and nothing else references it.
+        let (_d1, schemas) = run_with_auto_import_config(
+            AUTO_IMPORT_PKG,
+            YUDAO_IMPORTS_MAP,
+            "src/hooks/web/useCrudSchemas.ts",
+        );
+        assert_eq!(
+            schemas.len(),
+            1,
+            "only the registered name is exempt: {schemas:?}"
+        );
+        assert!(schemas[0].message.contains("`sortTableColumns`"), "{schemas:?}");
+    }
+
+    #[test]
+    fn auto_import_exemption_needs_the_module_in_the_config_issue_8050() {
+        // The same tree with the plugin configured for a different module: the
+        // exemption is driven by the configuration, not by the directory, so
+        // `useTable` is dead again.
+        let other_module = "{ '@/hooks/web/useMessage': ['useMessage'] }";
+        let (_dir, diags) =
+            run_with_auto_import_config(AUTO_IMPORT_PKG, other_module, "src/hooks/web/useTable.ts");
+        assert_eq!(diags.len(), 1, "an unregistered module stays dead: {diags:?}");
+        assert!(diags[0].message.contains("`useTable`"), "{diags:?}");
+    }
+
+    #[test]
+    fn auto_import_exemption_needs_the_plugin_dependency_issue_8050() {
+        // Without the dependency the `AutoImport` call is not this project's
+        // build step, so the same configuration text confers nothing.
+        let no_plugin = r#"{"name":"admin","private":true,"devDependencies":{"vite":"^4.0.0"}}"#;
+        let (_dir, diags) =
+            run_with_auto_import_config(no_plugin, YUDAO_IMPORTS_MAP, "src/hooks/web/useTable.ts");
+        assert_eq!(diags.len(), 1, "no plugin dependency, no exemption: {diags:?}");
+        assert!(diags[0].message.contains("`useTable`"), "{diags:?}");
     }
 }
