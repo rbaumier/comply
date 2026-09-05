@@ -591,6 +591,17 @@ impl OxcCheck for Check {
                 continue;
             }
 
+            // A tsd/dtslint type-test file has no runtime behaviour: a callback
+            // parameter's declared type *is* the assertion the file exists to
+            // make, so "never read" carries no information and removing the
+            // parameter deletes the assertion. Scoped to parameters — an unused
+            // import or local there is still dead code.
+            if ctx.file.is_type_test_file()
+                && matches!(nodes.kind(decl_node), AstKind::FormalParameter(_))
+            {
+                continue;
+            }
+
             // An ambient `declare const`/`declare let`/`declare var` binding is
             // type-only and erased at compile time, so it can never have a
             // runtime reference — "unused" is meaningless for it (e.g. tsd-style
@@ -766,6 +777,11 @@ mod tests {
 
     fn run_at(s: &str, path: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, s, path)
+    }
+
+    // Builds the real `FileCtx` from `path`, which the type-test-file guard reads.
+    fn run_gated(s: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, s, path)
     }
 
     #[test]
@@ -1938,5 +1954,61 @@ export function increment_pending() {
             diags.iter().any(|d| d.message.contains("`Batch`")),
             "expected nested local `Batch` to still be flagged: {diags:?}"
         );
+    }
+
+    #[test]
+    fn no_fp_on_annotated_callback_params_in_type_test_file() {
+        // In a tsd type-test file the parameter's declared type *is* the
+        // assertion — removing the parameter turns a passing `tsd` run into a
+        // failing one. (Closes #8232)
+        let src = r#"
+import {expectError} from 'tsd';
+import {run} from '../index.js';
+
+await run('unicorns', {verbose: (verboseLine: string, verboseObject: object) => ''});
+expectError(await run('unicorns', {verbose: (verboseLine: boolean, verboseObject: object) => ''}));
+expectError(await run('unicorns', {verbose: (verboseLine: string, verboseObject: object, other: string) => ''}));
+"#;
+        for path in [
+            "test-d/verbose.test-d.ts",
+            "test-d/verbose.ts",
+            "src/verbose.test-d.tsx",
+            "test-tsd/verbose.ts",
+            "dtslint/verbose.ts",
+            "src/addDays/test.tp.ts",
+        ] {
+            assert!(
+                run_gated(src, path).is_empty(),
+                "FP on annotated callback parameters in type-test file {path}: {:?}",
+                run_gated(src, path)
+            );
+        }
+    }
+
+    #[test]
+    fn still_flags_annotated_callback_params_in_ordinary_source() {
+        // Negative space for #8232 — the guard is the file kind. The same
+        // expression in shipped source has runtime semantics, so an ignored
+        // parameter there is still dead code.
+        let src = "function render(verboseLine: string): string { return ''; }\nrender('x');\n";
+        let diags = run_gated(src, "src/verbose.ts");
+        assert!(
+            diags.iter().any(|d| d.message.contains("`verboseLine`")),
+            "expected the parameter to stay flagged in ordinary source: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_import_and_variable_in_type_test_file() {
+        // Negative space for #8232 — the guard covers parameters only. An
+        // unused import or local in a type-test file is still dead code.
+        let src = "import {Unused} from './x.js';\nconst neverRead = 1;\nexport {};\n";
+        let diags = run_gated(src, "test-d/x.test-d.ts");
+        for name in ["Unused", "neverRead"] {
+            assert!(
+                diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "expected `{name}` to stay flagged in a type-test file: {diags:?}"
+            );
+        }
     }
 }
