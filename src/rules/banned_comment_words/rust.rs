@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn anchors_on_the_last_line_of_a_block_comment() {
-        let src = "/* opening line, all clear here\n   second line\n   and here it is just wrong */\nfn f() {}\n";
+        let src = "/* opening line, all clear here\n   second line\n   and here it goes just wrong */\nfn f() {}\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 3);
@@ -357,6 +357,28 @@ mod tests {
         assert!(run(test_fn).is_empty());
         let block = "#[test]\nfn t() {\n    /* this\n       simply works */\n}\n";
         assert!(run(block).is_empty());
+    }
+
+    #[test]
+    fn allows_the_non_hedge_senses_of_just_issue_8310() {
+        let src = "\
+// ripgrep must sniff utf-8 BOM, just like it does with utf-16.
+pub fn a() {}
+
+// We have just enough space.
+pub fn b() {}
+
+// Get a mutable view into the bytes we've just read.
+pub fn c() {}
+
+// If the entire glob is just `**`, then it should match everything.
+pub fn d() {}
+
+// just call foo and it works
+pub fn e() {}
+";
+        let diags = run(src);
+        assert_eq!(diags.iter().map(|d| d.line).collect::<Vec<_>>(), vec![13]);
     }
 
     #[test]

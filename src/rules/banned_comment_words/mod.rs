@@ -7,9 +7,10 @@
 //! the comment or rewrite it to explain the actual subtlety.
 //!
 //! A banned spelling is filler only in the sense its neighbours give it, and
-//! only where no explanation stands beside it: a match inside a negated verb
-//! group, or inside a comment block that already spends more words than
-//! `comment-max-block-words` allows, is left alone.
+//! only where no explanation stands beside it. Three matches are left alone:
+//! one inside a negated verb group, a `just` whose neighbours put it in front
+//! of a noun phrase, a quantity or a comparison, and one inside a comment
+//! block already spending more words than `comment-max-block-words` allows.
 
 mod oxc_typescript;
 mod rust;
@@ -82,7 +83,7 @@ pub(crate) fn find_banned_word(text: &str) -> Option<(&'static str, usize)> {
             if &bytes[i..end] == needle
                 && (i == 0 || !bytes[i - 1].is_ascii_alphabetic())
                 && (end == bytes.len() || !bytes[end].is_ascii_alphabetic())
-                && !is_negated(&lower[..i], &lower[end..])
+                && is_dismissive(word, &lower[..i], &lower[end..])
             {
                 return Some((word, i));
             }
@@ -120,6 +121,58 @@ pub(crate) fn explanation_budget(ctx: &CheckCtx) -> usize {
         crate::rules::comment_max_block_words::META.id,
         "max",
         ctx.lang,
+    )
+}
+
+/// True when the match on `word`, sitting between the lowercased comment text
+/// `before` it and the text `after` it, carries the dismissive sense the rule
+/// targets.
+fn is_dismissive(word: &str, before: &str, after: &str) -> bool {
+    if is_negated(before, after) {
+        return false;
+    }
+    // `just` is the one banned spelling several English words share.
+    word != "just" || !plays_a_non_hedge_role(before, after)
+}
+
+/// True when a `just` match reads in one of the senses that is not a hedge.
+///
+/// A closed-class function word next to the match settles which `just` is
+/// meant. A copula or a perfect auxiliary in front of it makes it predicate or
+/// date something — `is just one literal`, `the bytes we've just read`.
+/// `like` or `as` after it opens a comparison — `just like utf-16`. A
+/// determiner or a degree preposition after it opens a noun phrase or a
+/// quantity — `just a bit`, `just enough space`, `just over the limit`. The
+/// hedge the rule targets modifies a verb phrase (`just call foo`), which none
+/// of those positions leaves room for, and there is no filler to strip: delete
+/// the word and the comparison, the margin or the tense goes with it.
+fn plays_a_non_hedge_role(before: &str, after: &str) -> bool {
+    let previous = preceding_word(before);
+    is_copula(previous)
+        || is_perfect_auxiliary(previous)
+        || opens_a_phrase(following_word(after, 0))
+}
+
+/// True for the copulas a predicate follows, `'s` and `'re` contractions
+/// included.
+fn is_copula(token: &str) -> bool {
+    matches!(token, "is" | "are" | "was" | "were" | "am" | "be" | "been")
+        || token.ends_with("'s")
+        || token.ends_with("'re")
+}
+
+/// True for the auxiliaries a perfect tense is built on, `'ve` and `'d`
+/// contractions included.
+fn is_perfect_auxiliary(token: &str) -> bool {
+    matches!(token, "have" | "has" | "had") || token.ends_with("'ve") || token.ends_with("'d")
+}
+
+/// True for the function words that make the `just` before them open a noun
+/// phrase, a quantity or a comparison instead of modifying a verb.
+fn opens_a_phrase(token: &str) -> bool {
+    matches!(
+        token,
+        "like" | "as" | "a" | "an" | "enough" | "about" | "over" | "under"
     )
 }
 
@@ -214,8 +267,8 @@ mod tests {
         // backends anchor on. A word on the third line of a block comment sits
         // past both newlines.
         assert_eq!(
-            find_banned_word("/* first line\nsecond line\nthird is just wrong */"),
-            Some(("just", 35))
+            find_banned_word("/* first line\nsecond line\nthird line just wrong */"),
+            Some(("just", 37))
         );
     }
 
@@ -252,6 +305,52 @@ mod tests {
             find_banned_word("this does not simply filter the entries"),
             None
         );
+    }
+
+    #[test]
+    fn allows_the_non_hedge_senses_of_just_issue_8310() {
+        // Comparative — strip `just` and the comparison goes with it.
+        assert_eq!(
+            find_banned_word("ripgrep must sniff utf-8 bom, just like it does with utf-16."),
+            None
+        );
+        // Degree — the margin being exact is what the comment says.
+        assert_eq!(find_banned_word("we have just enough space."), None);
+        // Temporal — the ordering the comment exists to establish.
+        assert_eq!(
+            find_banned_word("get a mutable view into the bytes we've just read."),
+            None
+        );
+        // Copular — `just` predicates an identity, not an action.
+        assert_eq!(
+            find_banned_word("if the entire glob is just `**`, then it should match everything."),
+            None
+        );
+    }
+
+    #[test]
+    fn flags_the_hedge_sense_of_just_still_issue_8310() {
+        assert_eq!(
+            find_banned_word("just call foo and it works"),
+            Some(("just", 0))
+        );
+        // Restrictive "merely" in front of a verb is a judgement the rule is
+        // entitled to make, and the sense tests must not sweep it up.
+        assert_eq!(
+            find_banned_word("so we just disable the fast path"),
+            Some(("just", 6))
+        );
+    }
+
+    #[test]
+    fn reads_the_sense_of_just_with_no_preceding_word_issue_8310() {
+        // The lookahead must not need a token in front of the match.
+        assert_eq!(find_banned_word("just like the utf-16 path"), None);
+    }
+
+    #[test]
+    fn reads_the_sense_of_just_case_insensitively_issue_8310() {
+        assert_eq!(find_banned_word("Just enough space."), None);
     }
 
     #[test]

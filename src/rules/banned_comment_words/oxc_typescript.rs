@@ -152,7 +152,7 @@ mod tests {
     fn anchors_block_comment_on_the_word_not_the_opening_line() {
         // Same anchoring the Rust backend applies: the block opens on line 1 and
         // the word sits on line 3, which is the line the message is about.
-        let src = "/* opening line, all clear here\n   second line\n   and here it is just wrong */\n";
+        let src = "/* opening line, all clear here\n   second line\n   and here it goes just wrong */\n";
         let diags = run(src);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].line, 3);
@@ -189,6 +189,31 @@ export const c = 3;
     fn flags_the_same_sentence_on_its_own() {
         // The gate is the block's length, not the sentence's wording.
         assert_eq!(run("// we could just write the shorter form").len(), 1);
+    }
+
+    /// The four senses of `just` reported in #8310, one per comment, closed by
+    /// the hedge the rule targets. Every backend has to read them the same way.
+    const JUST_SENSES: &str = "\
+// ripgrep must sniff utf-8 BOM, just like it does with utf-16.
+export const a = 1;
+
+// We have just enough space.
+export const b = 2;
+
+// Get a mutable view into the bytes we've just read.
+export const c = 3;
+
+// If the entire glob is just `**`, then it should match everything.
+export const d = 4;
+
+// just call foo and it works
+export const e = 5;
+";
+
+    #[test]
+    fn allows_the_non_hedge_senses_of_just_issue_8310() {
+        let diags = run(JUST_SENSES);
+        assert_eq!(diags.iter().map(|d| d.line).collect::<Vec<_>>(), vec![13]);
     }
 
     #[test]
