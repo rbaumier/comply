@@ -85,13 +85,14 @@
 //! (method calls, field accesses, un-annotated bindings), so those are
 //! left alone — suggesting `f64::from(x)` there would not compile.
 //!
-//! Symmetrically, a float-source cast to an integer target — a resolved
-//! `f64`/`f32` operand, or one whose outermost expression is a std float
-//! rounding method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`, inherent to
-//! `f32`/`f64` and returning the same float) — is left alone: std has no
-//! `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer, so `as` is the only
-//! float→integer conversion and both the `from` and `try_from` remediations
-//! would fail to compile. `x.floor() as i32` is the idiomatic truncation.
+//! Symmetrically, a float-source cast to an integer target is left alone: std
+//! has no `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer, so `as` is the
+//! only float→integer conversion and both the `from` and `try_from`
+//! remediations would fail to compile. `x.floor() as i32` is the idiomatic
+//! truncation. The source counts as a float when its type resolves to
+//! `f32`/`f64`, and otherwise when its shape proves it — float arithmetic, a std
+//! rounding method, an `f{32,64}::from`, a same-file function declared `-> f64`,
+//! or an inferred `let` bound to any of those.
 //!
 //! A cast covered by an `#[allow]` / `#[expect]` of one of the clippy lints this
 //! rule re-implements (`cast_possible_truncation`, `cast_sign_loss`,
@@ -107,7 +108,7 @@ use crate::rules::rust_helpers::{
     cast_operand_indexed_element_type, cast_operand_is_ascii_guarded,
     cast_operand_is_assert_bounded, cast_operand_is_bitwise, cast_operand_is_bool,
     cast_operand_is_char, cast_operand_is_collection_size, cast_operand_is_enum_discriminant,
-    cast_operand_is_float_rounding, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
+    cast_operand_is_float, cast_operand_is_for_range_bounded, cast_operand_is_min_clamped,
     cast_operand_is_modulo_bounded, cast_operand_is_modulo_bounded_via_binding,
     cast_operand_is_non_negative_guarded, cast_operand_is_range_guarded,
     cast_operand_is_raw_pointer, cast_operand_is_repr_enum_field,
@@ -370,12 +371,13 @@ pub(crate) fn fires_on_cast(node: tree_sitter::Node, source_bytes: &[u8], ctx: &
         // when `From` is provably available.
         source_type.is_some_and(|src| from_available(src, target_type))
     } else if source_type.is_some_and(|src| src.kind == NumericKind::Float)
-        || cast_operand_is_float_rounding(node, source_bytes)
+        || cast_operand_is_float(node, source_bytes)
     {
         // A float source cast to an integer target — a resolved `f64`/`f32`
-        // operand, or one whose outermost expression is a std float rounding
-        // method (`.floor()`/`.ceil()`/`.round()`/`.trunc()`, defined only on
-        // `f32`/`f64` and returning the same float). Rust std has no
+        // operand, or an expression proven float by its shape: float arithmetic
+        // (`(a + b) as i32`), a std float rounding method, an `f{32,64}::from`,
+        // a same-file function declared `-> f64`, or an inferred `let` bound to
+        // any of those (`let fkn = gamma * f64::from(n); fkn as u32`). Rust std has no
         // `From<f{32,64}>` / `TryFrom<f{32,64}>` for any integer type, so both
         // `<int>::from(x)` and `<int>::try_from(x)?` are uncompilable — the
         // symmetric hole to the float-target branch above, which likewise flags
@@ -2933,5 +2935,41 @@ name = "normal_lib"
         // keeps its diagnostic.
         let src = "fn encode(n: i32) -> u8 { (n + 139) as u8 }";
         assert_eq!(run_on_path("src/lib.rs", src).len(), 1);
+    }
+
+    #[test]
+    fn repro_7607_float_arithmetic_operand_not_flagged() {
+        // rbaumier/comply#7607 — arithmetic over floats is a float, so
+        // `i32::from` / `i32::try_from` do not exist for the operand.
+        assert!(run_on("fn f(a: f64, b: f64) -> i32 { (a + b) as i32 }").is_empty());
+        assert!(run_on("fn f(x: f32) -> u32 { (x * 2.0) as u32 }").is_empty());
+    }
+
+    #[test]
+    fn repro_7607_local_float_returning_call_not_flagged() {
+        // vectordotdev/vector `ddsketch.rs:140` — the callee is declared `-> f64`
+        // in the same file.
+        let src = "fn round_to_even(v: f64) -> f64 { v }\n\
+                   impl S { fn f(&self, v: f64) -> i32 { round_to_even(self.log_gamma(v)) as i32 } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7607_inferred_float_binding_not_flagged() {
+        // vectordotdev/vector `ddsketch.rs:589` — the `let` carries no
+        // annotation, so its type comes from the float expression it binds.
+        let src = "fn f(count: u32, gamma: f64) -> u32 { let fkn = gamma * f64::from(count); \
+                   fkn as u32 }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn repro_7607_integer_arithmetic_still_flagged() {
+        // The exemption follows the operand's type, not its shape: integer
+        // arithmetic keeps its diagnostic.
+        assert_eq!(
+            run_on("fn f(a: i64, b: i64) -> i32 { (a + b) as i32 }").len(),
+            1
+        );
     }
 }
