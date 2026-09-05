@@ -35,9 +35,11 @@
 //! The parameter is also moved out when it is returned by value: a bare
 //! `identifier` that is the operand of a `return` (`return name;`) or the tail
 //! expression the function body evaluates to — reached through the tail of any
-//! `if`/`else`/`match`/`if let` that itself flows to the return. Returning the
-//! owned value by name hands the caller's allocation straight back; an `&str`
-//! parameter would force a `.to_owned()` in that branch, so `String` is correct.
+//! `if`/`else`/`match`/`if let` that itself flows to the return, through an
+//! `unsafe` or parenthesized wrapper, or as the `break` value of a tail `loop`.
+//! Returning the owned value by name hands the caller's allocation straight
+//! back; an `&str` parameter would force a `.to_owned()` in that branch, so
+//! `String` is correct.
 //!
 //! A function whose name is referenced as a bare value elsewhere in the file
 //! (e.g. `Some(gdbus_parse_color)` stored in a `fn(String) -> …` field, or
@@ -256,17 +258,28 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
 
 /// Whether `param_name` is moved out as the function's return value by being the
 /// bare `identifier` the body evaluates to. Descends only *tail* positions from
-/// the body block: a block's trailing expression, and the arms of an
-/// `if`/`else`/`match`/`if let` that is itself in tail position (`if let` is an
-/// `if_expression` whose condition is a `let_condition`). Only positions whose
-/// value flows to the return count, so a bare identifier used elsewhere
-/// (`s.len()`, `println!("{}", s)`) is not treated as a move here.
+/// the body block: a block's trailing expression, the inside of a tail
+/// `unsafe`/parenthesized wrapper, the `break` values of a tail `loop`, and the
+/// arms of an `if`/`else`/`match`/`if let` that is itself in tail position
+/// (`if let` is an `if_expression` whose condition is a `let_condition`). Only
+/// positions whose value flows to the return count, so a bare identifier used
+/// elsewhere (`s.len()`, `println!("{}", s)`) is not treated as a move here.
 fn tail_expr_moves_param(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
     match node.kind() {
         "identifier" => node.utf8_text(source) == Ok(param_name),
         "block" => {
             block_tail_expr(node).is_some_and(|tail| tail_expr_moves_param(tail, source, param_name))
         }
+        // `unsafe { … }` and `( … )` wrap an expression without changing the
+        // value it yields, so the wrapped expression is in tail position too.
+        "unsafe_block" | "parenthesized_expression" => node
+            .named_child(0)
+            .is_some_and(|inner| tail_expr_moves_param(inner, source, param_name)),
+        // A `loop` yields the value of the `break` that leaves it, so every
+        // `break <expr>` bound to this loop is in tail position.
+        "loop_expression" => node
+            .child_by_field_name("body")
+            .is_some_and(|body| break_value_moves_param(body, source, param_name)),
         "if_expression" => {
             // An `if` yields a value only with an `else`; then both the
             // consequence and the alternative are in tail position.
@@ -291,6 +304,31 @@ fn tail_expr_moves_param(node: tree_sitter::Node, source: &[u8], param_name: &st
         }),
         _ => false,
     }
+}
+
+/// Whether a `break` bound to the enclosing `loop` yields `param_name` by value,
+/// i.e. `break <param>` appears anywhere in the loop's `body`. A `break` value
+/// leaves the loop as the loop's own value regardless of where in the body it
+/// sits, so the scan is subtree-wide — except that it does not descend into a
+/// nested `loop`/`while`/`for`, whose `break`s bind to that inner loop instead.
+///
+/// The value is the `break_expression`'s last named child: `break;` has none and
+/// `break 'label;` leaves only the `loop_label`, neither of which is a bare
+/// `identifier`, so neither counts as a move.
+fn break_value_moves_param(node: tree_sitter::Node, source: &[u8], param_name: &str) -> bool {
+    if node.kind() == "break_expression" {
+        let mut cursor = node.walk();
+        return is_param_identifier(node.named_children(&mut cursor).last(), source, param_name);
+    }
+    if matches!(
+        node.kind(),
+        "loop_expression" | "while_expression" | "for_expression"
+    ) {
+        return false;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| break_value_moves_param(child, source, param_name))
 }
 
 /// The trailing expression a `block` evaluates to, or `None` when it evaluates
@@ -951,6 +989,55 @@ mod tests {
         assert!(
             run("#[expect(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_from_unsafe_block_tail() {
+        // Repro of #7482: an `unsafe` block's tail is the fn's return value.
+        assert!(run("pub fn f(s: String) -> String { unsafe { s } }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_via_loop_break() {
+        // Repro of #7482: `loop { break s; }` in tail position yields `s` as the
+        // fn's return value.
+        assert!(run("pub fn f(s: String) -> String { loop { break s; } }").is_empty());
+    }
+
+    #[test]
+    fn allows_param_returned_by_value_in_parenthesized_tail() {
+        // Repro of #7482: parentheses do not change the tail's value.
+        assert!(run("pub fn f(s: String) -> String { (s) }").is_empty());
+    }
+
+    #[test]
+    fn flags_param_only_borrowed_in_unsafe_block_tail() {
+        // Control: the `unsafe` tail borrows rather than moves the param.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { unsafe { s.len() } }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_broken_out_of_a_nested_loop() {
+        // Control: `break s` binds to the *inner* loop, so it is not the tail
+        // loop's value; what the fn returns only borrows the param, so `&str`
+        // would compile and the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { loop { g(loop { break s; }); break s.len(); } }")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_borrowed_in_a_loop_break_value() {
+        // Control: the `break` value borrows rather than moves the param.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { loop { break s.len(); } }").len(),
+            1
         );
     }
 
