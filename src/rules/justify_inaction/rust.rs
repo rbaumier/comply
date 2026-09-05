@@ -3,7 +3,12 @@
 //! Flags empty control-flow blocks that have no comment inside
 //! explaining why. Targets:
 //!
-//! - `if_expression.consequence` — empty `if cond { }`.
+//! - `if_expression.consequence` — empty `if cond { }`. A *pattern assertion*
+//!   (`if let PATTERN = expr { } else { panic!(…) }`, per the shared
+//!   [`crate::rules::rust_helpers::if_let_is_pattern_assertion`]) is exempt: the
+//!   empty block is the branch that runs when the pattern matched — the demanded
+//!   outcome — and the `else` handles every other one. `no-empty-catch` reads the
+//!   same predicate, so both rules return one verdict on the construct.
 //! - `else_clause`'s `block` child — empty `else { }`.
 //! - `match_arm.value` when the value is an empty `block` AND the
 //!   pattern is an error-ignoring `Err(…)` — silently swallowing an
@@ -80,11 +85,10 @@
 //! would be pure noise.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{block_diverges, node_diverges, tuple_struct_pattern_binds_const};
-
-fn block_is_empty(node: tree_sitter::Node) -> bool {
-    node.kind() == "block" && node.named_child_count() == 0
-}
+use crate::rules::rust_helpers::{
+    block_diverges, block_is_empty, if_let_is_pattern_assertion, node_diverges,
+    tuple_struct_pattern_binds_const,
+};
 
 fn match_arm_needs_justification(arm: tree_sitter::Node, source: &[u8]) -> bool {
     let Some(pattern) = arm.child_by_field_name("pattern") else {
@@ -377,9 +381,10 @@ fn flag_empty(
 crate::ast_check! { on ["if_expression", "else_clause", "match_arm", "for_expression", "while_expression", "loop_expression"] => |node, _source, ctx, diagnostics|
 match node.kind() {
         "if_expression" => {
-            if let Some(cons) = node.child_by_field_name("consequence") {
-                flag_empty(node, cons, "if", ctx, diagnostics);
-            }
+            if let Some(cons) = node.child_by_field_name("consequence")
+                && !if_let_is_pattern_assertion(node, _source) {
+                    flag_empty(node, cons, "if", ctx, diagnostics);
+                }
         }
         "else_clause" => {
             let mut cursor = node.walk();
@@ -470,6 +475,71 @@ mod tests {
     fn does_not_flag_else_if_chain() {
         let src = "fn f(x: i32) { if x == 1 { a(); } else if x == 2 { b(); } }";
         assert!(run_on(src).is_empty());
+    }
+
+    // -- pattern assertion: `if let P = e {} else { panic!() }` (issue #8269) --
+
+    #[test]
+    fn allows_empty_if_let_with_panicking_else_issue_8269() {
+        // The empty block is the branch that runs when the pattern matched — the
+        // outcome the test demands — and the `else` panics. The explanation is
+        // the panic message, not a comment restating "the assertion held".
+        let src = "fn t() {\n    if let Err(CapacityOverflow) = try_reserve(usize::MAX) {\n    } else {\n        panic!(\"usize::MAX should trigger an overflow!\");\n    }\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_with_retrying_else_issue_8269() {
+        // The `else` retries before asserting: its tail is another pattern
+        // assertion, so neither the outer nor the inner empty block is inaction.
+        let src = "fn t() {\n    if let Err(AllocError { .. }) = try_reserve(10) {\n    } else {\n        let _ = try_reserve(20);\n        if let Err(AllocError { .. }) = try_reserve(40) {\n        } else {\n            panic!(\"should trigger an OOM!\");\n        }\n    }\n}\n";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_ok_with_panicking_else_issue_8269() {
+        // Same assertion on the `Ok` side — the pattern, not the variant, is what
+        // makes the empty block the matched branch.
+        let src = "fn t() { if let Ok(v) = f() { } else { panic!(\"expected success\"); } }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_empty_if_let_with_returning_else_issue_8269() {
+        let src = "fn t() -> Result<(), E> { if let Err(_) = f() { } else { return Err(E); } Ok(()) }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_with_continuing_else_issue_8269() {
+        // Narrowness guard: the `else` neither aborts nor re-asserts, so nothing
+        // is being asserted — the empty block is unexplained inaction.
+        let src = "fn f() { if let Err(_e) = try_reserve(10) { } else { println!(\"ok\"); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_without_else_issue_8269() {
+        // Narrowness guard: no `else` at all — no branch handles the other case.
+        let src = "fn f() { if let Err(_e) = try_reserve(10) { } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_boolean_if_with_panicking_else_issue_8269() {
+        // Narrowness guard: a boolean condition tests no pattern, so the empty
+        // block names no matched outcome — `assert!(ready)` is the idiom there.
+        let src = "fn f(ready: bool) { if ready { } else { panic!(\"not ready\"); } }";
+        assert_eq!(run_on(src).len(), 1, "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn flags_empty_if_let_with_else_if_chain_issue_8269() {
+        // Narrowness guard: an `else if` chain is not a failure branch — the
+        // outer empty block still needs a justification, and so does the empty
+        // `else if` body.
+        let src = "fn f() { if let Err(_) = g() { } else if cond { } else { panic!(); } }";
+        assert_eq!(run_on(src).len(), 2, "{:?}", run_on(src));
     }
 
     // -- match arms --
