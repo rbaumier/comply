@@ -1,6 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    has_outer_attribute_path, is_in_test_context, is_in_trait_definition, is_in_trait_impl,
+    enclosing_inherent_impl_type, has_outer_attribute_path, is_in_test_context,
+    is_in_trait_definition, is_in_trait_impl, type_has_inherent_method,
 };
 
 crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, ctx, diagnostics|
@@ -109,15 +110,23 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
         return;
     }
 
-    if sibling_method_named(node, &name[4..], source) { return; }
-
-    // A `get_$X` method paired with a `set_$X` method in the same impl block is
-    // an accessor pair, not an infallible C-GETTER. The pair follows the
-    // get/set convention (mandated verbatim by scripting-engine property
-    // registration APIs such as Rhai's `register_get_set`/`with_get_set`, which
-    // bind `Type::get_x`/`Type::set_x` by name), so the `get_` prefix is part of
-    // the contract and renaming would desync the pair.
-    if sibling_method_named(node, &format!("set_{}", &name[4..]), source) { return; }
+    // The rename must land on a free name. Rust's inherent-method namespace is
+    // per type — `E0592` rejects two same-named methods on one type however many
+    // `impl` blocks they are spread across — so both collision checks below are
+    // scoped to the type, not to the enclosing block:
+    //
+    //   * `$X` already taken (e.g. a builder-pattern `fn years(self, …) -> Span`
+    //     alongside the accessor `get_years`): the prefix is the only legal
+    //     disambiguation, and the suggested rename would not compile.
+    //   * `set_$X` present: a get/set accessor pair, the naming mandated verbatim
+    //     by scripting-engine property registration APIs such as Rhai's
+    //     `with_get_set("x", Self::get_x, Self::set_x)`, which bind
+    //     `Type::get_x`/`Type::set_x` by name — renaming would desync the pair.
+    if let Some(self_type) = enclosing_inherent_impl_type(node, source) {
+        let bare = &name[4..];
+        if type_has_inherent_method(node, source, self_type, bare) { return; }
+        if type_has_inherent_method(node, source, self_type, &format!("set_{bare}")) { return; }
+    }
 
     // A `get_`-prefixed method whose body is a thin safe wrapper delegating to a
     // foreign function (an `unsafe` call qualified by an FFI/`-sys` module path,
@@ -134,28 +143,6 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
         format!("Accessor `{name}` uses `get_` prefix — rename to `{}`. Reserve `get` for fallible operations.", &name[4..]),
         Severity::Error,
     ));
-}
-
-/// True when a method named `bare_name` is defined alongside this
-/// `get_`-prefixed accessor in the same impl block. Rust permits only one
-/// method per name per impl, so when `foo` already exists (e.g. a
-/// builder-pattern setter that consumes `self`), the getter is forced to
-/// be `get_foo` — the prefix is the only legal disambiguation, not a smell.
-fn sibling_method_named(func: tree_sitter::Node, bare_name: &str, source: &[u8]) -> bool {
-    let Some(body) = func.parent() else { return false };
-    if body.kind() != "declaration_list" {
-        return false;
-    }
-    let mut cursor = body.walk();
-    for child in body.children(&mut cursor) {
-        if child.kind() == "function_item"
-            && let Some(n) = child.child_by_field_name("name")
-            && n.utf8_text(source) == Ok(bare_name)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// True when the method body contains an `unsafe` block that delegates to a
@@ -824,6 +811,63 @@ mod tests {
         // `get_output_file` strips to `output_file`, a valid identifier — the
         // digit guard must not relax the ordinary getter, which still flags.
         let src = "impl HtmlConfig {\n    pub fn get_output_file(&self) -> String { String::new() }\n}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_when_sibling_is_in_another_impl_block_issue_8237() {
+        // jiff splits `impl Span` into seven blocks, so the builder `years` and
+        // the accessor `get_years` land in different ones. Rust resolves inherent
+        // methods per type (`E0592`), so `years` is taken either way and the
+        // suggested rename would not compile.
+        let src = "impl Span {\n\
+            pub fn years(self, years: i16) -> Span { Span { years } }\n\
+        }\n\
+        impl Span {\n\
+            pub fn get_years(&self) -> i16 { self.years }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_across_impl_blocks_split_by_trait_impl_and_cfg_issue_8237() {
+        // Neither an interleaved `impl Trait for Type` nor a `#[cfg]` gate changes
+        // the type's inherent-method namespace, so neither may change the verdict.
+        let src = "impl Span {\n\
+            pub fn months(self, months: i16) -> Span { Span { months } }\n\
+        }\n\
+        impl core::fmt::Display for Span {\n\
+            fn fmt(&self, f: &mut Formatter) -> Result { Ok(()) }\n\
+        }\n\
+        #[cfg(feature = \"serde\")]\n\
+        impl Span {\n\
+            pub fn get_months(&self) -> i16 { self.months }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_set_pair_split_across_impl_blocks_issue_8237() {
+        // The get/set pair exemption is scoped to the type too.
+        let src = "impl Vec3 {\n\
+            fn set_x(&mut self, x: INT) { self.x = x }\n\
+        }\n\
+        impl Vec3 {\n\
+            fn get_x(&mut self) -> INT { self.x }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_when_same_named_method_belongs_to_another_type_issue_8237() {
+        // The namespace is per type: `Other::years` does not collide with
+        // `Span::get_years`, so the rename is free and the accessor still flags.
+        let src = "impl Other {\n\
+            pub fn years(self) -> i16 { 0 }\n\
+        }\n\
+        impl Span {\n\
+            pub fn get_years(&self) -> i16 { self.years }\n\
+        }";
         assert_eq!(run(src).len(), 1);
     }
 }
