@@ -1,6 +1,15 @@
 //! no-side-effects-in-initialization OxcCheck backend — flag module-level
 //! expression statements whose expression is a call or `new` expression.
 //!
+//! The report presupposes a module graph: something imports the file, and a
+//! bundler cannot drop what runs on that import. So the backend first checks the
+//! file is in one (`program_is_module`) — any ESM `import`/`export`, dynamic
+//! `import(...)`, `import.meta`, TypeScript `export =` / `import x = require()`,
+//! CommonJS `require("…")`, or `module.exports`/`exports.<x>` assignment. A file
+//! with none of them is a classic script (a `<script src>` target, a TypeScript
+//! global script): it exports nothing to import, no bundler builds a graph over
+//! it, and its top level is its program, so nothing is reported.
+//!
 //! Exemptions:
 //! - demonstration scripts under a relaxed directory (`examples/`, `example/`,
 //!   `demo/`, `demos/`, `samples/`, …): the rule is gated off there via
@@ -2459,6 +2468,62 @@ fn assignment_target_is_commonjs_export(target: &AssignmentTarget) -> bool {
     }
 }
 
+/// True when the file participates in a module graph — the premise this rule
+/// reports on. A file is a module when it carries any of:
+/// - ESM syntax: an `import`/`export` declaration, a dynamic `import(...)`, or an
+///   `import.meta` reference;
+/// - TypeScript module syntax: `export = …`, `import x = require(...)`, or
+///   `export as namespace …`;
+/// - CommonJS syntax: a `require("…")` load, or an assignment to
+///   `module.exports` / `exports.<x>`.
+///
+/// A file carrying none of them is a classic script — the form a `<script src>`
+/// tag loads, and what TypeScript calls a global script. It exports no binding
+/// for anyone to import, so nothing "executes on import"; no bundler builds a
+/// graph over it, so there is nothing to tree-shake; and its top level *is* its
+/// program, so there is no function to move the work into. Both halves of the
+/// diagnostic and both remediations presuppose the module graph such a file is
+/// not in.
+///
+/// The top-level statement scan comes first because nearly every module declares
+/// its ESM syntax there; the whole-tree walk is the fallback for the CommonJS and
+/// dynamic forms, which are ordinary expressions that may sit at any depth.
+fn program_is_module(program: &Program, semantic: &oxc_semantic::Semantic) -> bool {
+    use oxc_ast::AstKind;
+
+    let has_top_level_esm = program.body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            Statement::ImportDeclaration(_)
+                | Statement::ExportNamedDeclaration(_)
+                | Statement::ExportDefaultDeclaration(_)
+                | Statement::ExportAllDeclaration(_)
+                | Statement::TSExportAssignment(_)
+                | Statement::TSImportEqualsDeclaration(_)
+                | Statement::TSNamespaceExportDeclaration(_)
+        )
+    });
+    if has_top_level_esm {
+        return true;
+    }
+    semantic.nodes().iter().any(|node| match node.kind() {
+        AstKind::ImportDeclaration(_)
+        | AstKind::ImportExpression(_)
+        | AstKind::ExportNamedDeclaration(_)
+        | AstKind::ExportDefaultDeclaration(_)
+        | AstKind::ExportAllDeclaration(_)
+        | AstKind::TSExportAssignment(_)
+        | AstKind::TSImportEqualsDeclaration(_)
+        | AstKind::TSNamespaceExportDeclaration(_) => true,
+        AstKind::MetaProperty(meta) => meta.meta.name == "import",
+        AstKind::CallExpression(call) => require_call_specifier(call).is_some(),
+        AstKind::AssignmentExpression(assign) => {
+            assignment_target_is_commonjs_export(&assign.left)
+        }
+        _ => false,
+    })
+}
+
 /// True when `path` is the conventional root entry file of its package directory:
 /// it has the `index` or `main` stem and sits directly in the directory of its
 /// nearest `package.json` (not a subdirectory of it). This is the Node
@@ -2558,6 +2623,12 @@ impl OxcCheck for Check {
         }
 
         let program = semantic.nodes().program();
+
+        // Nothing imports a classic script and no bundler builds a graph over
+        // one, so neither half of the diagnostic applies to it.
+        if !program_is_module(program, semantic) {
+            return Vec::new();
+        }
 
         if is_test_setup_path(ctx.path)
             || is_cli_entry(ctx.path, ctx.source)
@@ -2674,18 +2745,25 @@ impl crate::rules::test_helpers::RunRule for Check {
 }
 #[cfg(test)]
 mod tests {
+    //! Fixtures carry an `export {}` (or an `import`/`require`) so they are
+    //! modules: the rule reports only on files that participate in a module
+    //! graph ([`program_is_module`]), so a snippet with no module syntax is a
+    //! classic script and exempt wholesale, which would leave every other
+    //! exemption these tests exercise unreached.
+    //! [`skips_classic_script_with_no_module_syntax`] is where that gate itself
+    //! is pinned.
+
     use super::*;
-    
 
     #[test]
     fn flags_top_level_bare_call() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "doThing();", "t.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "doThing();\nexport {};", "t.ts");
         assert_eq!(diags.len(), 1);
     }
 
     #[test]
     fn flags_top_level_new_expression() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "new EventEmitter();", "t.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "new EventEmitter();\nexport {};", "t.ts");
         assert_eq!(diags.len(), 1);
     }
 
@@ -2734,7 +2812,7 @@ mod tests {
             "Object.defineProperty on an imported binding must still flag"
         );
 
-        let global = "Object.defineProperty(globalThis, 'x', { value: 1 });\n";
+        let global = "Object.defineProperty(globalThis, 'x', { value: 1 });\nexport {};\n";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, global, "src/core.ts").len(),
             1,
@@ -2787,14 +2865,14 @@ mod tests {
         // `defineProperties`/`defineProperty` on a non-prototype global is external
         // state and must still flag, as must an unrelated top-level call.
         let on_window =
-            "Object.defineProperties(window, { x: { value: 1 } });\n";
+            "Object.defineProperties(window, { x: { value: 1 } });\nexport {};\n";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, on_window, "src/app.ts").len(),
             1,
             "Object.defineProperties on a non-prototype global must still flag"
         );
 
-        let bare_call = "doSomething();\n";
+        let bare_call = "doSomething();\nexport {};\n";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, bare_call, "src/app.ts").len(),
             1,
@@ -2810,7 +2888,7 @@ mod tests {
         // shared across modules — a globally observable side effect — so it must
         // still flag.
         let builtin =
-            "Object.defineProperty(Array.prototype, 'flat', { value() {} });\n";
+            "Object.defineProperty(Array.prototype, 'flat', { value() {} });\nexport {};\n";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, builtin, "src/polyfill.ts").len(),
             1,
@@ -2851,7 +2929,7 @@ mod tests {
         // tree-shaken — and *requires* the processor to be registered at module
         // top level, whether via `registerProcessor(...)` or a library wrapper
         // such as Tone.js's `addToWorklet(src)`.
-        let src = "const delayLine = `class DelayLine {}`;\naddToWorklet(delayLine);\n";
+        let src = "const delayLine = `class DelayLine {}`;\naddToWorklet(delayLine);\nexport {};\n";
         for path in [
             "Tone/core/worklet/DelayLine.worklet.ts",
             "src/audio/gain-processor.worklet.js",
@@ -2864,7 +2942,7 @@ mod tests {
         // A native `registerProcessor` registration in a worklet file is exempt too.
         let register = crate::rules::test_helpers::run_rule(
             &Check,
-            "registerProcessor('gain', GainProcessor);",
+            "registerProcessor('gain', GainProcessor);\nexport {};",
             "src/audio/gain.worklet.ts",
         );
         assert!(register.is_empty(), "registerProcessor in a worklet file must be exempt");
@@ -2878,11 +2956,11 @@ mod tests {
         // file — are still flagged.
         let prod = crate::rules::test_helpers::run_rule(
             &Check,
-            "registerProcessor('gain', GainProcessor);",
+            "registerProcessor('gain', GainProcessor);\nexport {};",
             "src/audio/registry.ts",
         );
         assert_eq!(prod.len(), 1, "registerProcessor in a non-worklet module must flag");
-        let bare = crate::rules::test_helpers::run_rule(&Check, "addToWorklet(x);", "src/worklet.ts");
+        let bare = crate::rules::test_helpers::run_rule(&Check, "addToWorklet(x);\nexport {};", "src/worklet.ts");
         assert_eq!(bare.len(), 1, "bare worklet.ts (no leading dot) must still flag");
     }
 
@@ -2906,7 +2984,7 @@ precacheAndRoute(entries)
 cleanupOutdatedCaches()
 registerRoute(new NavigationRoute(handler))
 self.addEventListener('push', onPush)
-";
+\nexport {};";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app/entry.ts");
         assert!(diags.is_empty(), "service worker module must be exempt, got {diags:?}");
     }
@@ -2917,7 +2995,7 @@ self.addEventListener('push', onPush)
         let directive_only = "\
 /// <reference lib=\"webworker\" />
 self.addEventListener('install', () => {})
-";
+\nexport {};";
         assert!(
             crate::rules::test_helpers::run_rule(&Check, directive_only, "src/a.ts").is_empty(),
             "webworker reference directive alone must exempt"
@@ -2925,7 +3003,7 @@ self.addEventListener('install', () => {})
         let type_ref_only = "\
 declare const self: ServiceWorkerGlobalScope
 self.addEventListener('install', () => {})
-";
+\nexport {};";
         assert!(
             crate::rules::test_helpers::run_rule(&Check, type_ref_only, "src/b.ts").is_empty(),
             "ServiceWorkerGlobalScope type reference alone must exempt"
@@ -2941,6 +3019,7 @@ self.addEventListener('install', () => {})
         let src = "\
 self.addEventListener('message', () => {})
 precacheAndRoute(entries)
+export {};
 ";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app/entry.ts");
         assert_eq!(
@@ -2952,7 +3031,7 @@ precacheAndRoute(entries)
 
     #[test]
     fn allows_pure_annotated_call() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "/*#__PURE__*/ registerSomething();", "t.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "/*#__PURE__*/ registerSomething();\nexport {};", "t.ts");
         assert!(diags.is_empty());
     }
 
@@ -2968,7 +3047,7 @@ precacheAndRoute(entries)
         // compile-time type assertions; the top-level expressions never run at
         // runtime, so the tree-shaking concern does not apply.
         let src = "const recycleScroller = useRecycleScroller();\n\
-                   recycleScroller.getViewStyle(recycleScroller.pool.value[0]);";
+                   recycleScroller.getViewStyle(recycleScroller.pool.value[0]);\nexport {};";
         assert!(
             crate::rules::test_helpers::run_rule(
                 &Check,
@@ -2994,7 +3073,7 @@ precacheAndRoute(entries)
         // Issue #5053: vue/test-utils's `test-dts/` directory and `.d-test.ts`
         // files hold compile-time `expectType` assertions that never run at
         // runtime, so the tree-shaking concern does not apply.
-        let src = "expectType<string>(shallowMount(App, { props: { a: 'x' } }).vm.a);";
+        let src = "expectType<string>(shallowMount(App, { props: { a: 'x' } }).vm.a);\nexport {};";
         assert!(
             crate::rules::test_helpers::run_rule(&Check, src, "test-dts/shallowMount.d-test.ts")
                 .is_empty()
@@ -3021,7 +3100,7 @@ precacheAndRoute(entries)
         // they never run at runtime, so the tree-shaking concern does not apply.
         let src = "const someContext: KeystoneContext = undefined!;\n\
                    someContext.query.Singleton.findOne({});\n\
-                   someContext.query.List.findOne({ where: { id: '1' } });";
+                   someContext.query.List.findOne({ where: { id: '1' } });\nexport {};";
         assert!(
             crate::rules::test_helpers::run_rule(
                 &Check,
@@ -3083,7 +3162,7 @@ precacheAndRoute(entries)
                        it('should validate the form', () => {\n\
                            cy.visit('http://localhost:3000/manual-register-form');\n\
                        });\n\
-                   });";
+                   });\nexport {};";
         for path in [
             "cypress/e2e/manualRegisterForm.cy.ts",
             "cypress/e2e/manualRegisterForm.cy.js",
@@ -3095,7 +3174,7 @@ precacheAndRoute(entries)
         }
         // The `.cy.` infix is what grants the exemption: the same top-level
         // call in a genuine production module still flags.
-        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
+        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});\nexport {};", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
     }
 
@@ -3125,7 +3204,7 @@ precacheAndRoute(entries)
         }
         // The `.unit.` infix is what grants the exemption: the same top-level
         // call in a genuine production module still flags.
-        let prod = crate::rules::test_helpers::run_rule(&Check, "test('x', () => {});", "src/index.ts");
+        let prod = crate::rules::test_helpers::run_rule(&Check, "test('x', () => {});\nexport {};", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
     }
 
@@ -3153,7 +3232,7 @@ precacheAndRoute(entries)
         }
         // The `_spec.` infix is what grants the exemption: the same top-level
         // call in a genuine production module still flags.
-        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});", "src/index.ts");
+        let prod = crate::rules::test_helpers::run_rule(&Check, "describe('x', () => {});\nexport {};", "src/index.ts");
         assert_eq!(prod.len(), 1, "production src/index.ts must still flag");
     }
 
@@ -3217,7 +3296,7 @@ precacheAndRoute(entries)
         // the import, so we drop it here to isolate the extension signal).
         let prod_src = "\
             describe('RoutePattern.href() — static path', () => {});\n\
-            describe('RoutePattern.href() — single param', () => {});\n";
+            describe('RoutePattern.href() — single param', () => {});\nexport {};\n";
         let prod = crate::rules::test_helpers::run_rule(&Check, prod_src, "src/href.ts");
         assert_eq!(prod.len(), 2, "production src/href.ts must still flag both describe calls");
     }
@@ -3244,7 +3323,7 @@ precacheAndRoute(entries)
         // Negative-space guard: a top-level `describe(...)` in a non-bench `.ts`
         // module WITHOUT a `vitest` import is not a benchmark registration — the
         // content-shape exemption requires the import gate — so it is still flagged.
-        let src = "describe('x', () => {});";
+        let src = "describe('x', () => {});\nexport {};";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
         assert_eq!(diags.len(), 1, "describe without a vitest import must still flag");
     }
@@ -3302,7 +3381,7 @@ precacheAndRoute(entries)
         // signal. A `.css.ts` file that does NOT import the vanilla-extract API is
         // not a vanilla-extract module, so a genuine top-level side effect in it is
         // still flagged.
-        let src = "initSentry();";
+        let src = "initSentry();\nexport {};";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/styles.css.ts");
         assert_eq!(diags.len(), 1, ".css.ts without a vanilla-extract import must still flag");
     }
@@ -3311,7 +3390,7 @@ precacheAndRoute(entries)
     fn still_flags_real_side_effect_without_vanilla_extract_import() {
         // Negative-space guard: a genuine top-level side effect in a normal `.ts`
         // module with no vanilla-extract import is still flagged.
-        let src = "initSentry();\nconsole.log('boot');";
+        let src = "initSentry();\nconsole.log('boot');\nexport {};";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
         assert_eq!(diags.len(), 2, "real side effects without a vanilla-extract import must still flag");
     }
@@ -3335,32 +3414,32 @@ precacheAndRoute(entries)
     // contract — the runner imports it to run exactly those effects.
     #[test]
     fn allows_vitest_setup_file_at_root() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "ensureWorkerDatabase();", "vitest.setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "ensureWorkerDatabase();\nexport {};", "vitest.setup.ts");
         assert!(diags.is_empty(), "vitest.setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn allows_jest_setup_file() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();", "jest.setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();\nexport {};", "jest.setup.ts");
         assert!(diags.is_empty(), "jest.setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn allows_bare_setup_file() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "provisionDb();", "test/setup.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "provisionDb();\nexport {};", "test/setup.ts");
         assert!(diags.is_empty(), "setup.ts should be exempt, got {diags:?}");
     }
 
     #[test]
     fn still_flags_regular_module_with_setup_in_name() {
         // `setupRouter.ts` is an ordinary module, not a runner setup file.
-        let diags = crate::rules::test_helpers::run_rule(&Check, "buildRouter();", "src/setupRouter.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "buildRouter();\nexport {};", "src/setupRouter.ts");
         assert_eq!(diags.len(), 1, "setupRouter.ts must still be flagged, got {diags:?}");
     }
 
     #[test]
     fn allows_setup_tests_file() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();", "src/setupTests.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "installMatchers();\nexport {};", "src/setupTests.ts");
         assert!(diags.is_empty(), "setupTests.ts should be exempt, got {diags:?}");
     }
 
@@ -3405,7 +3484,7 @@ precacheAndRoute(entries)
         // `index.ts` is only exempt under a `playwright/` directory, not blanket.
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "setProjectAnnotations([sbAnnotations]);",
+            "setProjectAnnotations([sbAnnotations]);\nexport {};",
             "src/foo.ts",
         );
         assert_eq!(
@@ -3415,7 +3494,7 @@ precacheAndRoute(entries)
         );
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "registerSideEffect();",
+            "registerSideEffect();\nexport {};",
             "src/index.ts",
         );
         assert_eq!(
@@ -3446,7 +3525,7 @@ precacheAndRoute(entries)
         // shape check treats it as a user function, not an injected hook.
         let src = "\
             function beforeAll(fn: () => void) { fn(); }\n\
-            beforeAll(() => someSideEffect());\n";
+            beforeAll(() => someSideEffect());\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts");
         assert_eq!(
             diags.len(),
@@ -3459,7 +3538,7 @@ precacheAndRoute(entries)
     fn still_flags_when_content_mixes_hooks_with_other_calls() {
         let src = "\
             beforeAll(() => { boot(); });\n\
-            someOtherCall();\n";
+            someOtherCall();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/some/file.ts");
         assert_eq!(
             diags.len(),
@@ -3510,7 +3589,7 @@ precacheAndRoute(entries)
 
     #[test]
     fn allows_tanstack_router_entry() {
-        let src = "createRouter({ routeTree, defaultPreload: 'intent' });\n";
+        let src = "createRouter({ routeTree, defaultPreload: 'intent' });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "src/app/router.tsx", &crate::project::ProjectCtx::for_test_with_framework("tanstack-router"), crate::rules::file_ctx::default_static_file_ctx());
         assert!(diags.is_empty(), "router.tsx entry should be exempt");
     }
@@ -3537,7 +3616,7 @@ precacheAndRoute(entries)
     // exemption stays depth-aware via `is_tanstack_start_entry`.
     #[test]
     fn flags_server_ts_outside_app_dir_in_tanstack_project_issue_6026() {
-        let src = "initZodLocale();\n";
+        let src = "initZodLocale();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             src,
@@ -3563,7 +3642,7 @@ precacheAndRoute(entries)
             crate::frameworks::get_framework("tanstack-router").unwrap(),
             crate::frameworks::get_framework("express").unwrap(),
         ];
-        let src = "initZodLocale();\n";
+        let src = "initZodLocale();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             src,
@@ -3585,7 +3664,7 @@ precacheAndRoute(entries)
     // wrongly be flagged. Mirrors `allows_tanstack_start_client_entry`.
     #[test]
     fn allows_tanstack_start_ssr_entry_issue_6026() {
-        let src = "initZodLocale();\n";
+        let src = "initZodLocale();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             src,
@@ -3604,7 +3683,7 @@ precacheAndRoute(entries)
     // like `flags_client_tsx_outside_app_dir`.
     #[test]
     fn flags_ssr_tsx_outside_app_dir_issue_6026() {
-        let src = "initZodLocale();\n";
+        let src = "initZodLocale();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule_with_ctx(
             &Check,
             src,
@@ -3629,7 +3708,7 @@ precacheAndRoute(entries)
         let src = "\
             Array.from(document.getElementsByTagName(\"pre\")).forEach((element) => {\n\
                 element.setAttribute(\"tabindex\", \"0\");\n\
-            });\n";
+            });\nexport {};\n";
         for path in [
             "www/public/makeScrollableCodeFocusable.js",
             "static/analytics.js",
@@ -3648,7 +3727,7 @@ precacheAndRoute(entries)
         // `publicApi/` is not the `public/` asset directory — segment, not
         // substring, matching keeps an ordinary library module flagged.
         let diags =
-            crate::rules::test_helpers::run_rule(&Check, "registerWidget();", "src/publicApi/index.ts");
+            crate::rules::test_helpers::run_rule(&Check, "registerWidget();\nexport {};", "src/publicApi/index.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -3697,7 +3776,7 @@ precacheAndRoute(entries)
 
     #[test]
     fn still_flags_bare_start_transition_identifier_without_import() {
-        let src = "startTransition(() => { boot(); });\n";
+        let src = "startTransition(() => { boot(); });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "t.ts");
         assert_eq!(
             diags.len(),
@@ -3710,7 +3789,7 @@ precacheAndRoute(entries)
 
     #[test]
     fn allows_config_file_with_side_effects() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "setEnvVariablesThatAreUsedBeforeSetup();", "vitest.config.mts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "setEnvVariablesThatAreUsedBeforeSetup();\nexport {};", "vitest.config.mts");
         assert!(diags.is_empty(), "config files should be exempt, got {diags:?}");
     }
 
@@ -3738,7 +3817,7 @@ precacheAndRoute(entries)
             fastify.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));\n\
             fastify.addHook('preHandler', authenticateTeamId);\n\
             fastify.get('/v8/artifacts/status', async (_req, reply) => reply.send({ status: 'enabled' }));\n\
-            fastify.listen({ port: 3000 });\n";
+            fastify.listen({ port: 3000 });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.ts");
         assert!(
             diags.is_empty(),
@@ -3752,7 +3831,7 @@ precacheAndRoute(entries)
             const app = express();\n\
             app.use(cors());\n\
             app.get('/health', (_req, res) => res.send('ok'));\n\
-            app.listen(8080);\n";
+            app.listen(8080);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "server.ts");
         assert!(diags.is_empty(), "express app.listen() entry point is exempt, got {diags:?}");
     }
@@ -3761,7 +3840,7 @@ precacheAndRoute(entries)
     fn allows_bare_listen_server_entry_point() {
         let src = "\
             registerRoutes(server);\n\
-            listen(server, 3000);\n";
+            listen(server, 3000);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/main.ts");
         assert!(diags.is_empty(), "a bare listen() call marks a server entry point, got {diags:?}");
     }
@@ -3773,7 +3852,7 @@ precacheAndRoute(entries)
         let src = "\
             register('widget');\n\
             doSideEffect();\n\
-            new EventEmitter();\n";
+            new EventEmitter();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
         assert_eq!(
             diags.len(),
@@ -3799,7 +3878,7 @@ precacheAndRoute(entries)
             }\n\
             httpServer.on('request', (req) => {});\n\
             process.on('SIGTERM', graceful_shutdown);\n\
-            process.on('SIGINT', graceful_shutdown);\n";
+            process.on('SIGINT', graceful_shutdown);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/index.js");
         assert!(
             diags.is_empty(),
@@ -3817,7 +3896,7 @@ precacheAndRoute(entries)
             if (featureEnabled) {\n\
                 registerWidget('toolbar');\n\
             }\n\
-            doSideEffect();\n";
+            doSideEffect();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
         assert_eq!(
             diags.len(),
@@ -3835,7 +3914,7 @@ precacheAndRoute(entries)
         let src = "\
             const app = fastify({ logger: true });\n\
             app.get('/', schema, async (req, reply) => ({ hello: 'world' }));\n\
-            app.listen({ port: 3000 }).catch(console.error);\n";
+            app.listen({ port: 3000 }).catch(console.error);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "examples/simple.mjs");
         assert!(
             diags.is_empty(),
@@ -3847,7 +3926,7 @@ precacheAndRoute(entries)
     fn allows_listen_then_chained_server_entry_point() {
         let src = "\
             app.register(routes);\n\
-            app.listen({ port: 3000 }).then(() => log('up')).catch(console.error);\n";
+            app.listen({ port: 3000 }).then(() => log('up')).catch(console.error);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "server.mjs");
         assert!(
             diags.is_empty(),
@@ -3861,7 +3940,7 @@ precacheAndRoute(entries)
         // top-level side effect: unwrapping the chain must not exempt it.
         let src = "\
             register('widget');\n\
-            startSomething().catch(console.error);\n";
+            startSomething().catch(console.error);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
         assert_eq!(
             diags.len(),
@@ -3895,7 +3974,7 @@ precacheAndRoute(entries)
                 fetch(req) {\n\
                     return new Response('ok');\n\
                 },\n\
-            });\n";
+            });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/server.ts");
         assert!(diags.is_empty(), "Bun.serve() is a server entry point, got {diags:?}");
     }
@@ -3920,7 +3999,7 @@ precacheAndRoute(entries)
         // ordinary `foo.serve()` side effect must still be flagged.
         let src = "\
             register('widget');\n\
-            foo.serve();\n";
+            foo.serve();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/util.ts");
         assert_eq!(
             diags.len(),
@@ -3995,7 +4074,7 @@ precacheAndRoute(entries)
         // ordinary module's top-level side effect still blocks tree-shaking.
         let src = "\
             template.render(data);\n\
-            doSideEffect();\n";
+            doSideEffect();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
         assert_eq!(
             diags.len(),
@@ -4173,7 +4252,7 @@ precacheAndRoute(entries)
     fn still_flags_unrelated_top_level_side_effect_call() {
         // A genuine top-level side-effect call unrelated to any framework
         // bootstrap must still be flagged, regardless of file name.
-        let diags = crate::rules::test_helpers::run_rule(&Check, "registerGlobals();", "src/main.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "registerGlobals();\nexport {};", "src/main.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -4208,7 +4287,7 @@ precacheAndRoute(entries)
     fn allows_bin_mts_cli_entry() {
         let src = "\
             process.stdin.pipe(formatter()).pipe(process.stdout);\n\
-            process.on('SIGINT', () => {});\n";
+            process.on('SIGINT', () => {});\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/logFormatter/bin.mts");
         assert!(
             diags.is_empty(),
@@ -4325,7 +4404,7 @@ precacheAndRoute(entries)
         // surface failures; unwrapping the continuation recovers the `main` call.
         let src = "\
             const main = async () => { await run(); };\n\
-            main().catch((err) => { console.error(err); process.exit(1); });\n";
+            main().catch((err) => { console.error(err); process.exit(1); });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/cli.ts");
         assert!(
             diags.is_empty(),
@@ -4357,7 +4436,7 @@ precacheAndRoute(entries)
         // self-invoked local function.
         let src = "\
             function boot() { registerGlobals(); }\n\
-            boot();\n";
+            boot();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
         assert_eq!(
             diags.len(),
@@ -4420,7 +4499,7 @@ precacheAndRoute(entries)
         // "profile", it is not a `profile-*` harness — so its accidental
         // top-level side effect still blocks tree-shaking.
         let diags =
-            crate::rules::test_helpers::run_rule(&Check, "loadProfiles();", "src/profileService.ts");
+            crate::rules::test_helpers::run_rule(&Check, "loadProfiles();\nexport {};", "src/profileService.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -4624,7 +4703,7 @@ precacheAndRoute(entries)
             const svg_attribute_lookup = new Map();\n\
             svg_attributes.forEach((name) => {\n\
               svg_attribute_lookup.set(name.toLowerCase(), name);\n\
-            });\n";
+            });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/fix-attribute-casing.js");
         assert!(
             diags.is_empty(),
@@ -4638,7 +4717,7 @@ precacheAndRoute(entries)
         let src = "\
             const items = getItems();\n\
             const seen = new Set();\n\
-            items.forEach((it) => seen.add(it.id));\n";
+            items.forEach((it) => seen.add(it.id));\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lookup.ts");
         assert!(
             diags.is_empty(),
@@ -4652,7 +4731,7 @@ precacheAndRoute(entries)
         let src = "\
             const entries = [['a', 1], ['b', 2]];\n\
             const lookup = {};\n\
-            entries.forEach(([k, v]) => { lookup[k] = v; });\n";
+            entries.forEach(([k, v]) => { lookup[k] = v; });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/lookup.ts");
         assert!(
             diags.is_empty(),
@@ -4665,7 +4744,7 @@ precacheAndRoute(entries)
         // The callback invokes a free function — a genuine side effect.
         let src = "\
             const items = getItems();\n\
-            items.forEach((it) => { registerSideEffect(it); });\n";
+            items.forEach((it) => { registerSideEffect(it); });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
         assert_eq!(
             diags.len(),
@@ -4697,7 +4776,7 @@ precacheAndRoute(entries)
         let src = "\
             const items = getItems();\n\
             const lookup = new Map();\n\
-            items.forEach((it) => { lookup.set(it.k, sideEffectfulCompute(it)); });\n";
+            items.forEach((it) => { lookup.set(it.k, sideEffectfulCompute(it)); });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/effect.ts");
         assert_eq!(
             diags.len(),
@@ -4734,7 +4813,7 @@ precacheAndRoute(entries)
             const invisibleLayer = new THREE.Layers();\n\
             invisibleLayer.set(4);\n\
             const group = new THREE.Group();\n\
-            group.add(mesh);\n";
+            group.add(mesh);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/demos/Layers.tsx");
         assert!(
             diags.is_empty(),
@@ -4747,7 +4826,7 @@ precacheAndRoute(entries)
         let src = "\
             const dracoLoader = new DRACOLoader();\n\
             dracoLoader.setDecoderPath('https://x');\n\
-            dracoLoader.preload();\n";
+            dracoLoader.preload();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/demos/Activity.tsx");
         assert!(
             diags.is_empty(),
@@ -4776,7 +4855,7 @@ precacheAndRoute(entries)
         // shared/external instance, so the mutation stays flagged.
         let src = "\
             const x = getThing();\n\
-            x.mutate();\n";
+            x.mutate();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
         assert_eq!(
             diags.len(),
@@ -4834,7 +4913,7 @@ precacheAndRoute(entries)
         let src = "\
             const express = getFramework();\n\
             const router = express.Router();\n\
-            router.get('/x', handler);\n";
+            router.get('/x', handler);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/widget.ts");
         assert_eq!(
             diags.len(),
@@ -4845,7 +4924,7 @@ precacheAndRoute(entries)
 
     #[test]
     fn still_flags_bare_top_level_side_effect_call() {
-        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobalState();", "src/widget.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobalState();\nexport {};", "src/widget.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -4928,7 +5007,7 @@ precacheAndRoute(entries)
     fn still_flags_object_assign_onto_global() {
         // Mutating a global (`window`) is a genuine side effect — `window` is
         // not a re-exported binding, so the call stays flagged.
-        let src = "Object.assign(window, { __APP__: true });\n";
+        let src = "Object.assign(window, { __APP__: true });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/boot.ts");
         assert_eq!(
             diags.len(),
@@ -5050,7 +5129,7 @@ precacheAndRoute(entries)
         // still flagged — the relaxed-dir gate only covers demonstration dirs.
         let diags = crate::rules::test_helpers::run_rule_gated(
             &Check,
-            "console.log('loaded');\n",
+            "console.log('loaded');\nexport {};\n",
             "src/index.ts",
         );
         assert_eq!(
@@ -5137,7 +5216,7 @@ precacheAndRoute(entries)
         // repeated same-callee top-level calls are still flagged.
         let src = "\
             run(1);\n\
-            run(2);\n";
+            run(2);\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/utils/generate.ts");
         assert_eq!(
             diags.len(),
@@ -5280,7 +5359,7 @@ precacheAndRoute(entries)
     #[test]
     fn still_flags_bare_builder_call_without_argument() {
         // A bare top-level call with no arguments cannot be a mixin builder.
-        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobals();", "src/index.ts");
+        let diags = crate::rules::test_helpers::run_rule(&Check, "initGlobals();\nexport {};", "src/index.ts");
         assert_eq!(
             diags.len(),
             1,
@@ -5513,7 +5592,11 @@ precacheAndRoute(entries)
     // declares no exports of its own.
     #[test]
     fn still_flags_library_root_entry_with_side_effect_issue5735() {
-        let src = "registerGlobals();\n";
+        // The side-effect import makes this a module without giving it an
+        // export, so `is_application_root_entry`'s "declares no exports" arm
+        // still holds and the published-library manifest is what keeps the call
+        // flagged.
+        let src = "import './polyfill';\nregisterGlobals();\n";
         let (_dir, project, paths) = project_rooted_at_tempdir(&[
             ("package.json", r#"{"name":"mylib","main":"./dist/index.js"}"#),
             ("index.ts", src),
@@ -5574,7 +5657,7 @@ precacheAndRoute(entries)
     fn allows_process_signal_handler_registration() {
         let src = "\
             process.on('SIGINT', () => process.exit(0));\n\
-            process.on('SIGTERM', () => process.exit(0));\n";
+            process.on('SIGTERM', () => process.exit(0));\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/server.ts");
         assert!(
             diags.is_empty(),
@@ -5589,7 +5672,7 @@ precacheAndRoute(entries)
         // remains a side effect.
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "process.on('exit', () => flush());",
+            "process.on('exit', () => flush());\nexport {};",
             "src/index.ts",
         );
         assert_eq!(
@@ -5606,7 +5689,7 @@ precacheAndRoute(entries)
         // shape.
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "emitter.on('SIGINT', () => shutdown());",
+            "emitter.on('SIGINT', () => shutdown());\nexport {};",
             "src/index.ts",
         );
         assert_eq!(
@@ -5658,7 +5741,7 @@ precacheAndRoute(entries)
         // exemption precise.
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "registry.command('install').describe('x');",
+            "registry.command('install').describe('x');\nexport {};",
             "src/index.ts",
         );
         assert_eq!(
@@ -5674,7 +5757,7 @@ precacheAndRoute(entries)
         // commander subcommand-registration shape.
         let diags = crate::rules::test_helpers::run_rule(
             &Check,
-            "queue.enqueue(job).action(() => run());",
+            "queue.enqueue(job).action(() => run());\nexport {};",
             "src/index.ts",
         );
         assert_eq!(
@@ -5777,13 +5860,13 @@ precacheAndRoute(entries)
     #[test]
     fn still_flags_non_registration_member_calls() {
         let analytics =
-            crate::rules::test_helpers::run_rule(&Check, "analytics.track('load');", "src/a.ts");
+            crate::rules::test_helpers::run_rule(&Check, "analytics.track('load');\nexport {};", "src/a.ts");
         assert_eq!(analytics.len(), 1, "analytics.track must still flag, got {analytics:?}");
 
-        let db = crate::rules::test_helpers::run_rule(&Check, "db.connect();", "src/b.ts");
+        let db = crate::rules::test_helpers::run_rule(&Check, "db.connect();\nexport {};", "src/b.ts");
         assert_eq!(db.len(), 1, "db.connect must still flag, got {db:?}");
 
-        let app = crate::rules::test_helpers::run_rule(&Check, "app.use(mw);", "src/c.ts");
+        let app = crate::rules::test_helpers::run_rule(&Check, "app.use(mw);\nexport {};", "src/c.ts");
         assert_eq!(app.len(), 1, "app.use(mw) must still flag, got {app:?}");
     }
 
@@ -5817,7 +5900,7 @@ precacheAndRoute(entries)
     fn still_flags_non_vue_watch_and_side_effects() {
         let local_watch = "\
             function watch(x, cb) { cb(); }\n\
-            watch(state, () => {});\n";
+            watch(state, () => {});\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, local_watch, "src/local.ts");
         assert_eq!(diags.len(), 1, "local watch() must still flag, got {diags:?}");
 
@@ -5827,7 +5910,7 @@ precacheAndRoute(entries)
         let diags = crate::rules::test_helpers::run_rule(&Check, other_watch, "src/fswatch.ts");
         assert_eq!(diags.len(), 1, "non-vue watch() must still flag, got {diags:?}");
 
-        let fetch = crate::rules::test_helpers::run_rule(&Check, "fetchData();", "src/d.ts");
+        let fetch = crate::rules::test_helpers::run_rule(&Check, "fetchData();\nexport {};", "src/d.ts");
         assert_eq!(fetch.len(), 1, "fetchData() must still flag, got {fetch:?}");
     }
 
@@ -5845,7 +5928,7 @@ precacheAndRoute(entries)
               Object.defineProperty(obj, name, { configurable: true, enumerable: true, get: getter });\n\
             }\n\
             defineGetter(req, 'query', function query() { return 1; });\n\
-            defineGetter(req, 'protocol', function protocol() { return 'https'; });\n";
+            defineGetter(req, 'protocol', function protocol() { return 'https'; });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/request.js");
         assert!(
             diags.is_empty(),
@@ -5862,7 +5945,7 @@ precacheAndRoute(entries)
         let src = "\
             methods.forEach(function (method) {\n\
               app[method] = function (path) { return path; };\n\
-            });\n";
+            });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/application.js");
         assert!(
             diags.is_empty(),
@@ -5876,7 +5959,7 @@ precacheAndRoute(entries)
         let src = "\
             keys.forEach(function (key) {\n\
               Object.defineProperty(target, key, { get: function () { return key; } });\n\
-            });\n";
+            });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/proto.js");
         assert!(
             diags.is_empty(),
@@ -5891,7 +5974,7 @@ precacheAndRoute(entries)
         // a genuine side effect and must still fire.
         let src = "\
             function doSideEffect() { fetch('/x'); }\n\
-            doSideEffect();\n";
+            doSideEffect();\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/boot.ts");
         assert_eq!(
             diags.len(),
@@ -5904,7 +5987,7 @@ precacheAndRoute(entries)
     fn still_flags_foreach_callback_with_real_side_effect() {
         // Negative-space guard: a forEach whose callback calls a free function
         // (`fetch`) is a genuine side effect, not property registration.
-        let src = "arr.forEach(function (x) { fetch(x); });\n";
+        let src = "arr.forEach(function (x) { fetch(x); });\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/load.ts");
         assert_eq!(
             diags.len(),
@@ -5992,7 +6075,7 @@ precacheAndRoute(entries)
         // stays flagged.
         let src = "\
             const parentPort = makeThing();\n\
-            parentPort.on('message', () => {});\n";
+            parentPort.on('message', () => {});\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
         assert_eq!(
             diags.len(),
@@ -6032,7 +6115,7 @@ precacheAndRoute(entries)
         // so it stays flagged.
         let src = "\
             function register(x) { configure(x); }\n\
-            register('./hooks.mjs');\n";
+            register('./hooks.mjs');\nexport {};\n";
         let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/app.ts");
         assert_eq!(
             diags.len(),
@@ -6054,6 +6137,71 @@ precacheAndRoute(entries)
             diags.len(),
             1,
             "a non-register top-level side effect must still flag, got {diags:?}"
+        );
+    }
+
+    /// The docsify dark-theme toggle from `moment/luxon`'s `site/plugins/`
+    /// (issue #8174): a classic `<script src>` file, no module syntax at all.
+    const CLASSIC_SCRIPT: &str = "(() => {\n\
+         const plugin = (hook) => {\n\
+           hook.mounted(() => {\n\
+             document.body.setAttribute(\"data-theme\", \"dark\");\n\
+           });\n\
+         };\n\
+         window.$docsify = window.$docsify || {};\n\
+         window.$docsify.plugins = [plugin];\n\
+         })();\n";
+
+    #[test]
+    fn skips_classic_script_with_no_module_syntax() {
+        // Issue #8174: nothing can import a file with no exports, and no bundler
+        // ever sees a script the HTML loads with `<script src>`, so neither half
+        // of the diagnostic holds and neither remediation is possible. The IIFE
+        // is what keeps `plugin` off the global object — the construct that makes
+        // the file well-behaved.
+        let diags = crate::rules::test_helpers::run_rule(
+            &Check,
+            CLASSIC_SCRIPT,
+            "site/plugins/dark-theme-toggle.js",
+        );
+        assert!(diags.is_empty(), "a classic script must be exempt, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_the_same_script_once_it_becomes_a_module() {
+        // The gate is the module system, not the IIFE: one `export` puts the file
+        // in a module graph, where the tree-shaking premise holds again.
+        let esm = format!("export const themed = true;\n{CLASSIC_SCRIPT}");
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, &esm, "site/plugins/toggle.js").len(),
+            1,
+            "an exported binding makes the file a module and the IIFE flaggable"
+        );
+
+        // CommonJS is importable too, so a `require`/`module.exports` file stays
+        // covered.
+        let cjs = "const y = require('./y');\ndoSideEffect();\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, cjs, "lib/x.js").len(),
+            1,
+            "a CommonJS module must stay covered"
+        );
+
+        // A dynamic `import()` is module syntax: the file participates in the
+        // graph even without a static import or export.
+        let dynamic = "await import('./x');\ninitialize();\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, dynamic, "src/boot.mjs").len(),
+            1,
+            "a module whose only module syntax is a dynamic import must stay covered"
+        );
+
+        // And the plain true positive the rule exists for.
+        let library = "export function f() {}\ninitialize();\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, library, "src/lib.ts").len(),
+            1,
+            "an ESM library module's top-level call must still flag"
         );
     }
 
@@ -6115,7 +6263,7 @@ precacheAndRoute(entries)
 
         let local_bootstrap = "\
             function bootstrapApplication(x) { start(x); }\n\
-            bootstrapApplication(app);\n";
+            bootstrapApplication(app);\nexport {};\n";
         assert_eq!(
             crate::rules::test_helpers::run_rule(&Check, local_bootstrap, "src/boot.ts").len(),
             1,

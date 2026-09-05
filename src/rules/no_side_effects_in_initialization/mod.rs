@@ -11,6 +11,11 @@
 //! Declarations (const/let/var/function/class) and imports are fine —
 //! only raw `expression_statement`s containing a call or `new` at module
 //! scope are flagged.
+//!
+//! Only files that participate in a module graph are checked: a file with no
+//! ESM `import`/`export`, no dynamic `import()`, no CommonJS
+//! `require`/`module.exports` is a classic script, so nothing imports it and no
+//! bundler tree-shakes it.
 
 mod oxc_typescript;
 
