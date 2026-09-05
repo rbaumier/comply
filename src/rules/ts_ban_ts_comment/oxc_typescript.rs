@@ -2,36 +2,15 @@
 //! @ts-expect-error via semantic comments. Test files are exempt from the
 //! `@ts-expect-error` description requirement: test dirs/suffixes (`.test.`,
 //! `.spec.`, `tests/`, `__tests__/`, …) plus tsd/dtslint type-test files
-//! (`test-d/` or `dtslint/` directories, `*.test-d.{ts,tsx}`,
-//! `*.types-test.{ts,tsx}`). There a bare directive is a type-level assertion
-//! documented by the enclosing `it()`/`describe()` name. `@ts-ignore` and
-//! `@ts-nocheck` remain banned everywhere, including test files.
+//! ([`crate::rules::file_ctx::FileCtx::is_type_test_file`]). There a bare
+//! directive is a type-level assertion documented by the enclosing
+//! `it()`/`describe()` name. `@ts-ignore` and `@ts-nocheck` remain banned
+//! everywhere, including test files.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
-
-/// True when `path` is a tsd/dtslint type-level test file, where a bare
-/// `@ts-expect-error` is the conventional assertion that an expression is a
-/// type error. Conventions: files under a `test-d/` (tsd) or `dtslint/`
-/// directory, or named `*.test-d.{ts,tsx}` / `*.types-test.{ts,tsx}`.
-fn is_type_test_file(path: &std::path::Path) -> bool {
-    if path
-        .components()
-        .any(|c| c.as_os_str() == "test-d" || c.as_os_str() == "dtslint")
-    {
-        return true;
-    }
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| {
-            name.ends_with(".test-d.ts")
-                || name.ends_with(".test-d.tsx")
-                || name.ends_with(".types-test.ts")
-                || name.ends_with(".types-test.tsx")
-        })
-}
 
 pub struct Check;
 
@@ -53,12 +32,12 @@ impl OxcCheck for Check {
         // The `@ts-expect-error` description requirement is waived in test
         // files: there a bare directive is a type-level assertion documented
         // by the enclosing `it()`/`describe()`. tsd/dtslint type-test files
-        // (incl. `*.test-d.ts` / `*.types-test.ts` suffixes not covered by
-        // `in_test_dir`) keep their existing exemption. `@ts-ignore` and
+        // (whose `test-d/` directory and `*.test-d.`/`*.types-test.` infixes
+        // are not covered by `in_test_dir`) are exempt too. `@ts-ignore` and
         // `@ts-nocheck` remain banned everywhere — this gate touches only the
         // `@ts-expect-error` branch below.
         let expect_error_exempt =
-            is_type_test_file(ctx.path) || ctx.file.path_segments.in_test_dir;
+            ctx.file.is_type_test_file() || ctx.file.path_segments.in_test_dir;
 
         for comment in semantic.comments() {
             // OXC comment spans INCLUDE the `//` or `/* */` markers
