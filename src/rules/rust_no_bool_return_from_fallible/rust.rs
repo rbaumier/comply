@@ -815,14 +815,26 @@ fn discards_call_result(let_decl: tree_sitter::Node, source: &[u8]) -> bool {
 /// `.is_ok()`/`.is_err()` method (the callee is a `field_expression` whose
 /// `field` is `is_ok`/`is_err`), or an `Ok(..)`/`Err(..)` construction (the
 /// callee path ends in `Ok`/`Err`).
+///
+/// A turbofished callee (`Err::<(), E>(x)`) is a `generic_function` wrapping the
+/// path in its `function` field; its own text ends in the type arguments, so the
+/// wrapper is unwrapped before either check.
 fn call_is_fallible(function: tree_sitter::Node, source: &[u8]) -> bool {
-    if function.kind() == "field_expression" {
-        return function
+    let callee = if function.kind() == "generic_function" {
+        match function.child_by_field_name("function") {
+            Some(inner) => inner,
+            None => return false,
+        }
+    } else {
+        function
+    };
+    if callee.kind() == "field_expression" {
+        return callee
             .child_by_field_name("field")
             .and_then(|f| f.utf8_text(source).ok())
             .is_some_and(|f| f == "is_ok" || f == "is_err");
     }
-    path_tail_is_result_variant(function, source)
+    path_tail_is_result_variant(callee, source)
 }
 
 /// True if a path node's final `::`-segment names a `Result` variant — `Ok` or
@@ -1716,6 +1728,19 @@ mod tests {
                 true\n\
             }";
         assert!(crate::rules::test_helpers::run_rule(&Check, src, "tests/it.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_total_shape_constructing_turbofished_err() {
+        // `Err::<(), E>(x)` parses with a `generic_function` callee, so the
+        // `Ok`/`Err` path check has to look past the type arguments.
+        let src = "\
+            fn apply_event(&self, x: &str) -> bool {\n\
+                if x.is_empty() { return false; }\n\
+                let _pending = Err::<(), Error>(x);\n\
+                true\n\
+            }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     // --- #7642: a `macro_invocation` tail forwards a computed bool the same way
