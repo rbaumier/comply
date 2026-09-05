@@ -9129,7 +9129,7 @@ fn let_binds_zero(let_node: Node, var: &str, source: &[u8]) -> bool {
 /// enclosing scope, is an in-memory buffer — a `Vec` or a `String`. Used to
 /// recognize the infallible `io::Write`-into-`Vec<u8>` / `fmt::Write`-into-
 /// `String` idiom (those impls never return `Err`).
-pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
+fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
     let mut child = node;
     while let Some(parent) = child.parent() {
         let mut cursor = parent.walk();
@@ -9146,6 +9146,186 @@ pub fn local_let_binds_buffer(node: Node, var: &str, source: &[u8]) -> bool {
         child = parent;
     }
     false
+}
+
+/// Whether a binding named `var`, visible at `node`, holds an in-memory buffer.
+/// A declared type settles it outright — a parameter's annotation
+/// (`out: &mut String`) needs no inference at all — and an un-annotated `let` is
+/// settled by the shape of its initializer.
+pub fn binding_is_buffer(node: Node, var: &str, source: &[u8]) -> bool {
+    if find_identifier_type(node, var, source).is_some_and(|ty| type_text_is_buffer(&ty)) {
+        return true;
+    }
+    local_let_binds_buffer(node, var, source)
+}
+
+/// Whether `ty` — a declared type's source text — names an in-memory buffer whose
+/// std `fmt::Write`/`io::Write` impl never returns `Err`: a `String` or a `Vec`,
+/// through any leading `&`/`&mut`/lifetime and any path qualification
+/// (`std::string::String`). A fallible writer (`File`, `BufWriter`, `TcpStream`)
+/// or a generic one (`W`, `impl io::Write`) does not match.
+pub fn type_text_is_buffer(ty: &str) -> bool {
+    let mut base = ty.trim();
+    // Peel the borrow spelling one token at a time: `&`, `'a`, `mut`.
+    while let Some(rest) = base
+        .strip_prefix('&')
+        .or_else(|| base.strip_prefix("mut "))
+        .or_else(|| {
+            base.strip_prefix('\'')
+                .map(|name| name.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_'))
+        })
+    {
+        base = rest.trim_start();
+    }
+    let head = base.split('<').next().unwrap_or(base).trim();
+    matches!(head.rsplit("::").next().unwrap_or(head).trim(), "String" | "Vec")
+}
+
+/// Whether the `.unwrap()`/`.expect()` receiver of `field_expr` is a write into an
+/// in-memory buffer, whose std `Write` impls have no failing path:
+/// `impl fmt::Write for String` pushes and returns `Ok(())`. The `Result` is there
+/// because `write!` is generic over the writer, not because writing to a heap
+/// buffer can fail, so there is no `Err` arm to unwrap.
+///
+/// Two shapes qualify, both requiring the write target to be a `String`/`Vec`
+/// binding per [`binding_is_buffer`]:
+/// - a call passing the buffer by `&mut`, or a `Write` method on it:
+///   `x.serialize(&mut buf).unwrap()`, `buf.write_all(b"…").unwrap()`;
+/// - a `write!`/`writeln!` macro whose writer is the buffer, spelled either
+///   `write!(buf, …)` or `write!(&mut buf, …)` — the macro borrows it either way.
+///
+/// A `File`, `Stdout`, `Formatter` or generic `W: io::Write` target resolves to
+/// none of those types, and writing there really can fail.
+pub fn is_infallible_buffer_write(field_expr: Node, source: &[u8]) -> bool {
+    let Some(receiver) = field_expr.child_by_field_name("value") else {
+        return false;
+    };
+    match receiver.kind() {
+        "call_expression" => call_writes_to_buffer(receiver, source),
+        "macro_invocation" => macro_writes_to_buffer(receiver, source),
+        _ => false,
+    }
+}
+
+/// True when `call` writes into an in-memory buffer: either an argument is
+/// `&mut <buf>`, or the method receiver is `<buf>` and the method is a `Write`
+/// method (`write`/`write_all`/`write_fmt`).
+fn call_writes_to_buffer(call: Node, source: &[u8]) -> bool {
+    if let Some(args) = call.child_by_field_name("arguments") {
+        let mut cursor = args.walk();
+        for arg in args.named_children(&mut cursor) {
+            if let Some(name) = mut_ref_buffer_ident(arg, source)
+                && binding_is_buffer(call, name, source)
+            {
+                return true;
+            }
+        }
+    }
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let method = function
+        .child_by_field_name("field")
+        .and_then(|n| n.utf8_text(source).ok());
+    if !matches!(method, Some("write" | "write_all" | "write_fmt")) {
+        return false;
+    }
+    let Some(method_receiver) = function.child_by_field_name("value") else {
+        return false;
+    };
+    if method_receiver.kind() != "identifier" {
+        return false;
+    }
+    let Ok(name) = method_receiver.utf8_text(source) else {
+        return false;
+    };
+    binding_is_buffer(call, name, source)
+}
+
+/// True when `mac` is a `write!`/`writeln!` whose writer is an in-memory buffer.
+fn macro_writes_to_buffer(mac: Node, source: &[u8]) -> bool {
+    if !matches!(
+        macro_last_name_segment(mac, source),
+        Some("write" | "writeln")
+    ) {
+        return false;
+    }
+    let Some(writer) = macro_token_tree(mac).and_then(|tt| macro_writer_identifier(tt, source))
+    else {
+        return false;
+    };
+    let Ok(name) = writer.utf8_text(source) else {
+        return false;
+    };
+    binding_is_buffer(mac, name, source)
+}
+
+/// If `arg` is `&mut <ident>` (a `reference_expression` with the `mut` mutable
+/// specifier over a plain identifier), return the identifier's text.
+fn mut_ref_buffer_ident<'a>(arg: Node, source: &'a [u8]) -> Option<&'a str> {
+    if arg.kind() != "reference_expression" {
+        return None;
+    }
+    if !arg
+        .utf8_text(source)
+        .is_ok_and(|t| t.trim_start().starts_with("&mut"))
+    {
+        return None;
+    }
+    let value = arg.child_by_field_name("value")?;
+    if value.kind() != "identifier" {
+        return None;
+    }
+    value.utf8_text(source).ok()
+}
+
+/// The last segment of a macro invocation's name — `writeln` for both `writeln!`
+/// and a qualified `std::writeln!`.
+pub fn macro_last_name_segment<'a>(mac: Node, source: &'a [u8]) -> Option<&'a str> {
+    let name = mac.child_by_field_name("macro")?.utf8_text(source).ok()?;
+    Some(name.rsplit("::").next().unwrap_or(name))
+}
+
+/// A macro invocation's token tree — an unnamed child, so no field name reaches
+/// it.
+pub fn macro_token_tree(mac: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = mac.walk();
+    mac.children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
+}
+
+/// The writer of a `write!`/`writeln!` `token_tree` when it is a bare identifier,
+/// borrowed or not (`buf`, `&mut buf`). tree-sitter parses a macro body as an
+/// opaque token stream, so the writer is the run of tokens up to the first
+/// top-level `,`; that run must reduce to the identifier alone, so a `self.buf` /
+/// `stdout()` writer spans more tokens and is not resolved here. Only the token
+/// tree's direct children are read, so a `,` nested deeper does not end the run
+/// early.
+pub fn macro_writer_identifier<'tree>(
+    token_tree: Node<'tree>,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    let mut cursor = token_tree.walk();
+    let mut writer: Option<Node<'tree>> = None;
+    let mut token_count = 0usize;
+    for child in token_tree.children(&mut cursor) {
+        match child.kind() {
+            "(" | ")" | "[" | "]" | "{" | "}" => {}
+            "," => break,
+            // `write!(&mut buf, …)` and `write!(buf, …)` name the same writer:
+            // the macro takes the mutable borrow either way.
+            _ if writer.is_none() && matches!(child.utf8_text(source), Ok("&" | "mut")) => {}
+            "identifier" => {
+                token_count += 1;
+                writer = Some(child);
+            }
+            _ => token_count += 1,
+        }
+    }
+    if token_count == 1 { writer } else { None }
 }
 
 /// The expression a local binding for `var`, visible at `node`, takes its value

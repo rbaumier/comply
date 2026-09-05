@@ -44,11 +44,10 @@
 //! accepts a lint false-negative for this idiom rather than the false-positive
 //! it produced before.
 //! A `.unwrap()` / `.expect()` whose receiver is a write/serialize into an
-//! in-memory `Vec<u8>` / `String` buffer is also skipped: `std::io::Write` for
-//! `Vec<u8>` and `std::fmt::Write` for `String` never return `Err` (they just
-//! grow the heap buffer), so the unwrap on `buf.write_all(…)`,
-//! `x.serialize(&mut buf)`, or `write!(&mut buf, …)` — where `buf` is a local
-//! `Vec`/`String` — cannot panic at runtime.
+//! in-memory `Vec<u8>` / `String` buffer is also skipped, per
+//! [`is_infallible_buffer_write`][crate::rules::rust_helpers::is_infallible_buffer_write]:
+//! `std::io::Write` for `Vec<u8>` and `std::fmt::Write` for `String` never
+//! return `Err` (they just grow the heap buffer).
 //! A `.unwrap()` / `.expect()` whose receiver is `<recv>.downcast::<T>()`
 //! (or `downcast_ref`/`downcast_mut`) is also skipped when the call sits in the
 //! consequence of an enclosing `if <recv>.is::<T>()` guard with the same
@@ -84,7 +83,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     enclosing_block_statement, has_clippy_allow, has_panics_doc_section,
-    is_under_cfg_debug_assertions, local_let_binds_buffer, preceded_by_nullity_guard,
+    is_infallible_buffer_write, is_under_cfg_debug_assertions, preceded_by_nullity_guard,
 };
 
 const KINDS: &[&str] = &["impl_item"];
@@ -652,133 +651,6 @@ fn is_nonzero_int_literal(node: tree_sitter::Node, source: &[u8]) -> bool {
         .or_else(|| cleaned.strip_prefix("0B"))
         .unwrap_or(cleaned);
     !body.is_empty() && body.bytes().any(|b| b != b'0')
-}
-
-/// True when the `.unwrap()`/`.expect()` receiver is a write/serialize into an
-/// in-memory `Vec<u8>`/`String` buffer, whose std `io::Write`/`fmt::Write` impls
-/// never return `Err`. `field_expr` is the `<receiver>.unwrap` field_expression.
-///
-/// Two shapes are recognized, both requiring the buffer to be a local `Vec`/
-/// `String`/`vec![]` binding in the enclosing scope:
-///   - a method/function call passing the buffer by `&mut`:
-///     `x.serialize(&mut buf).unwrap()`, `buf.write_all(b"…").unwrap()`;
-///   - a `write!`/`writeln!` macro writing into the buffer:
-///     `write!(&mut buf, "…").unwrap()`.
-fn is_infallible_buffer_write(field_expr: tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(receiver) = field_expr.child_by_field_name("value") else {
-        return false;
-    };
-    match receiver.kind() {
-        "call_expression" => call_writes_to_buffer(receiver, source),
-        "macro_invocation" => macro_writes_to_buffer(receiver, source),
-        _ => false,
-    }
-}
-
-/// True when `call` writes into a local `Vec`/`String` buffer: either an
-/// argument is `&mut <buf>`, or the method receiver is `<buf>` and the method is
-/// a known `Write` method (`write`/`write_all`/`write_fmt`).
-fn call_writes_to_buffer(call: tree_sitter::Node, source: &[u8]) -> bool {
-    // Shape 1: any argument is `&mut <buffer-local>`.
-    if let Some(args) = call.child_by_field_name("arguments") {
-        let mut cursor = args.walk();
-        for arg in args.named_children(&mut cursor) {
-            if let Some(name) = mut_ref_buffer_ident(arg, source)
-                && local_let_binds_buffer(call, name, source)
-            {
-                return true;
-            }
-        }
-    }
-    // Shape 2: `<buffer-local>.write_all(…)` / `.write(…)` / `.write_fmt(…)`.
-    let Some(function) = call.child_by_field_name("function") else {
-        return false;
-    };
-    if function.kind() != "field_expression" {
-        return false;
-    }
-    let method = function
-        .child_by_field_name("field")
-        .and_then(|n| n.utf8_text(source).ok());
-    if !matches!(method, Some("write" | "write_all" | "write_fmt")) {
-        return false;
-    }
-    let Some(method_receiver) = function.child_by_field_name("value") else {
-        return false;
-    };
-    if method_receiver.kind() != "identifier" {
-        return false;
-    }
-    let Ok(name) = method_receiver.utf8_text(source) else {
-        return false;
-    };
-    local_let_binds_buffer(call, name, source)
-}
-
-/// True when `mac` is a `write!`/`writeln!` invocation whose first token group
-/// writes into a local `Vec`/`String` buffer passed as `&mut <buf>`.
-fn macro_writes_to_buffer(mac: tree_sitter::Node, source: &[u8]) -> bool {
-    let name = mac
-        .child_by_field_name("macro")
-        .and_then(|n| n.utf8_text(source).ok());
-    if !matches!(name, Some("write" | "writeln")) {
-        return false;
-    }
-    // The token tree holds the raw args; find the first `&mut <ident>` and check
-    // it resolves to a buffer local. `write!`'s first arg is the writer.
-    let mut cursor = mac.walk();
-    for child in mac.named_children(&mut cursor) {
-        if child.kind() != "token_tree" {
-            continue;
-        }
-        if let Some(name) = first_mut_ref_ident_in_tokens(child, source) {
-            return local_let_binds_buffer(mac, name, source);
-        }
-    }
-    false
-}
-
-/// If `arg` is `&mut <ident>` (a `reference_expression` with the `mut` mutable
-/// specifier over a plain identifier), return the identifier's text.
-fn mut_ref_buffer_ident<'a>(arg: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    if arg.kind() != "reference_expression" {
-        return None;
-    }
-    if !arg
-        .utf8_text(source)
-        .map(|t| t.trim_start().starts_with("&mut"))
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    let value = arg.child_by_field_name("value")?;
-    if value.kind() != "identifier" {
-        return None;
-    }
-    value.utf8_text(source).ok()
-}
-
-/// Scan a macro `token_tree` for the first `& mut <identifier>` token sequence
-/// and return the identifier's text. Macro contents are unparsed tokens, so this
-/// walks the raw `&`, `mut`, identifier token run.
-fn first_mut_ref_ident_in_tokens<'a>(
-    token_tree: tree_sitter::Node,
-    source: &'a [u8],
-) -> Option<&'a str> {
-    let mut cursor = token_tree.walk();
-    let children: Vec<_> = token_tree.children(&mut cursor).collect();
-    for window in children.windows(3) {
-        let [amp, mut_kw, ident] = window else {
-            continue;
-        };
-        if amp.utf8_text(source).ok() == Some("&")
-            && mut_kw.utf8_text(source).ok() == Some("mut")
-            && ident.kind() == "identifier"
-        {
-            return ident.utf8_text(source).ok();
-        }
-    }
-    None
 }
 
 /// True when the `.unwrap()`/`.expect()` receiver is `<Type>::try_from(<ident>)`
@@ -1695,6 +1567,22 @@ impl From<&str> for Id {
             run_on(source).is_empty(),
             "write! into a String buffer initialized via .to_string() is infallible"
         );
+    }
+
+    /// Both unwrap rules read one `is_infallible_buffer_write`, so the verdict on
+    /// a write into a `String` does not depend on whether a `From` impl happens
+    /// to enclose it — including for the bare-identifier writer, the spelling
+    /// `write!` takes when the macro does the borrowing.
+    #[test]
+    fn allows_unwrap_on_write_macro_with_bare_identifier_writer() {
+        let source = r#"impl From<&Config> for String {
+            fn from(c: &Config) -> String {
+                let mut out = String::new();
+                writeln!(out, "{}", c.name).unwrap();
+                out
+            }
+        }"#;
+        assert!(run_on(source).is_empty());
     }
 
     /// A genuine fallible `.unwrap()` in a `From` impl — not a buffer write — must

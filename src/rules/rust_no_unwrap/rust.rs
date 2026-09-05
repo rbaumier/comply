@@ -67,6 +67,13 @@
 //! literal range (`a[5..2]`) is also suppressed; a dynamic-length receiver
 //! (`chunk`, `a[i..i+4]`, `a[4..]`) still flags.
 //!
+//! A write into an in-memory buffer is exempted — `write!`/`writeln!` into a
+//! `String`/`Vec` binding, `buf.write_all(…)`, `x.serialize(&mut buf)`: the std
+//! `fmt::Write`/`io::Write` impls for those types have no failing path, so the
+//! `Result` carries no runtime condition (the buffer is settled by a declared
+//! type or a `let` initializer). A `File`, `Stdout`, `fmt::Formatter` or generic
+//! `W: io::Write` target keeps flagging — writing there really can fail.
+//!
 //! A guarded receiver is exempted — an earlier early-return `if` guard in the
 //! same block whose consequence diverges and whose condition tests the receiver
 //! for emptiness (`if x.is_none() { return … }`, including as one `||` disjunct)
@@ -113,8 +120,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::rust_helpers::{
-    is_in_const_initializer, is_in_index_trait_impl, is_in_test_context, is_under_tests_dir,
-    preceded_by_nullity_guard,
+    is_in_const_initializer, is_in_index_trait_impl, is_in_test_context, is_infallible_buffer_write,
+    is_under_tests_dir, preceded_by_nullity_guard,
 };
 
 const KINDS: &[&str] = &["call_expression"];
@@ -229,6 +236,12 @@ impl AstCheck for Check {
         // control reaches the call only when the guard fell through, so there is
         // no runtime condition left to turn into a panic.
         if preceded_by_nullity_guard(node, function, source_bytes) {
+            return;
+        }
+        // Skip a write into an in-memory `String`/`Vec` buffer — the std `Write`
+        // impls have no failing path, so the `Result` carries no runtime
+        // condition. A `File`/`Stdout`/generic writer keeps flagging.
+        if is_infallible_buffer_write(function, source_bytes) {
             return;
         }
         // Skip lock operations and constant-bounds `try_into()` — both call the
@@ -1458,6 +1471,102 @@ proc-macro = true
         log("empty");
     }
     self.store.as_ref().unwrap().len()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// Closes #8309, reduced from `BurntSushi/ripgrep`'s `flags/doc/version.rs`:
+    /// `impl fmt::Write for String` returns `Ok(())` unconditionally, so a
+    /// `writeln!` into a local `String` has no `Err` arm to unwrap. The writer is
+    /// the bare identifier `out`, the form `write!` takes when the macro does the
+    /// borrowing.
+    #[test]
+    fn allows_writeln_into_local_string_buffer() {
+        let source = r#"pub fn generate_long(features: &[String]) -> String {
+    let mut out = String::new();
+    writeln!(out, "ripgrep 14.0.0").unwrap();
+    writeln!(out, "features:{}", features.join(",")).unwrap();
+    out
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// The `&mut buf` spelling of the same write, over the `String::with_capacity`
+    /// initializer of ripgrep's `globset/src/glob.rs`.
+    #[test]
+    fn allows_write_into_mut_borrowed_string_buffer() {
+        let source = r#"fn bytes_to_escaped_literal(bs: &[u8]) -> String {
+    let mut s = String::with_capacity(bs.len());
+    for &b in bs {
+        write!(&mut s, "\\x{:02x}", b).unwrap();
+    }
+    s
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// A `&mut String` parameter is a buffer by its annotation — a cheaper proof
+    /// than the `let` case, which infers from the initializer.
+    #[test]
+    fn allows_write_into_string_parameter() {
+        let source = r#"pub fn generate_flag(name: &str, out: &mut String) {
+    write!(out, "--{}", name).unwrap();
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// `io::Write for Vec<u8>` is equally infallible.
+    #[test]
+    fn allows_writeln_into_local_vec_buffer() {
+        let source = r#"pub fn render() -> Vec<u8> {
+    let mut buf = Vec::new();
+    writeln!(buf, "line").unwrap();
+    buf
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// `.expect("…")` on the same write is the same infallible expression.
+    #[test]
+    fn allows_expect_on_write_into_string_buffer() {
+        let source = r#"pub fn render() -> String {
+    let mut out = String::new();
+    writeln!(out, "line").expect("writing to a String is infallible");
+    out
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// SOUNDNESS: a `File` sink really can fail — creating it and writing to it
+    /// both stay flagged.
+    #[test]
+    fn flags_write_into_file_sink() {
+        let source = r#"pub fn dump(path: &std::path::Path, body: &str) {
+    let mut f = std::fs::File::create(path).unwrap();
+    writeln!(f, "{}", body).unwrap();
+}"#;
+        assert_eq!(run_on(source).len(), 2);
+    }
+
+    /// SOUNDNESS: a generic `impl io::Write` sink is whatever the caller passed,
+    /// so its write is fallible.
+    #[test]
+    fn flags_write_into_generic_writer_parameter() {
+        let source = r#"pub fn render(out: &mut impl std::io::Write) {
+    writeln!(out, "line").unwrap();
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS: a `fmt::Formatter` write can fail — the enclosing `fmt` returns
+    /// `fmt::Result`, where `?` is the remedy.
+    #[test]
+    fn flags_write_into_formatter() {
+        let source = r#"impl fmt::Display for X {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0).unwrap();
+        Ok(())
+    }
 }"#;
         assert_eq!(run_on(source).len(), 1);
     }
