@@ -1,9 +1,11 @@
 //! max-params — enforce a maximum number of parameters in function definitions.
 //!
-//! Native implementation. TS/JS/TSX use the OXC AST so the rule can exempt
-//! callbacks whose signatures are dictated by third-party library types
-//! (TanStack Query's `useMutation({ onError: (e, v, c, m) => … })` and
-//! friends). Rust delegation to clippy's `too_many_arguments` is unchanged.
+//! Native implementation. TS/JS/TSX use the OXC AST so the rule can tell
+//! positional arguments from parameters the language or a framework fills in
+//! (TS parameter properties, decorated DI parameters) and exempt callbacks
+//! whose signatures are dictated by third-party library types (TanStack
+//! Query's `useMutation({ onError: (e, v, c, m) => … })` and friends). Rust
+//! delegates to clippy's `too_many_arguments`.
 
 mod oxc_typescript;
 

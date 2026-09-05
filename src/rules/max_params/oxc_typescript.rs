@@ -1,9 +1,11 @@
 //! max-params OXC backend.
 //!
 //! Reads its threshold from `[rules.max-params]` and applies to TS/JS/TSX
-//! uniformly. Skips function expressions / arrow functions passed as
-//! fixed-signature library callbacks (TanStack Query `onError` / `queryFn` /
-//! etc.) since the user has no control over those arities.
+//! uniformly. Counts only the parameters a caller passes positionally: the TS
+//! `this` parameter, parameter properties and decorated parameters are
+//! declarations, not arguments. Skips function expressions / arrow functions
+//! passed as fixed-signature library callbacks (TanStack Query `onError` /
+//! `queryFn` / etc.) since the user has no control over those arities.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, is_fixed_signature_library_callback};
@@ -14,19 +16,24 @@ use std::sync::Arc;
 pub struct Check;
 
 fn count_params(params: &oxc_ast::ast::FormalParameters) -> usize {
-    params
-        .items
-        .iter()
-        .filter(|p| {
-            // Skip TS `this` parameter
-            if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
-                && id.name.as_str() == "this"
-            {
-                return false;
-            }
-            true
-        })
-        .count()
+    params.items.iter().filter(|p| is_positional(p)).count()
+}
+
+/// True when the parameter is a value the caller passes positionally.
+///
+/// The TS `this` parameter types the receiver and is never passed. A parameter
+/// property (`private readonly dep: Dep`) is shorthand for a field declaration
+/// plus its assignment, and a decorated parameter (`@InjectDataSource() ds:
+/// DataSource`, `@Body() body: Dto`) is resolved by the framework's container
+/// from its token — neither is a positional argument, so neither counts toward
+/// the maximum.
+fn is_positional(param: &oxc_ast::ast::FormalParameter) -> bool {
+    if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &param.pattern
+        && id.name.as_str() == "this"
+    {
+        return false;
+    }
+    !param.has_modifier() && param.decorators.is_empty()
 }
 
 fn func_name<'a>(func: &'a oxc_ast::ast::Function<'a>) -> &'a str {
@@ -328,6 +335,80 @@ mod oxc_tests {
             }
         "#;
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_di_constructor_of_parameter_properties_issue_8089() {
+        // Regression for rbaumier/comply#8089 — `twentyhq/twenty`
+        // `database/commands/cron-register-all.command.ts` shape: every
+        // constructor parameter is a TS parameter property (a field
+        // declaration + assignment resolved by the DI container), not a
+        // positional argument.
+        let src = r"
+            class CronRegisterAllCommand {
+                constructor(
+                    private readonly a: A,
+                    private readonly b: B,
+                    private readonly c: C,
+                    private readonly d: D,
+                    private readonly e: E,
+                ) {}
+            }
+        ";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_di_constructor_with_parameter_decorator_issue_8089() {
+        // Same repo, `database/commands/run-instance-commands.command.ts` —
+        // an injected parameter carrying `@InjectDataSource()`.
+        let src = r"
+            class RunInstanceCommandsCommand {
+                constructor(
+                    @InjectDataSource()
+                    private readonly dataSource: DataSource,
+                    private readonly b: B,
+                    private readonly c: C,
+                    private readonly d: D,
+                    private readonly e: E,
+                ) {}
+            }
+        ";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_constructor_positional_params_issue_8089() {
+        // Control: a constructor is judged on its real positional parameters —
+        // parameter properties drop out, plain parameters keep counting.
+        let src = r"
+            class Point {
+                constructor(
+                    private readonly origin: Origin,
+                    a: number,
+                    b: number,
+                    c: number,
+                    d: number,
+                    e: number,
+                ) {}
+            }
+        ";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_mixed_constructor_within_max_issue_8089() {
+        let src = r"
+            class Point {
+                constructor(
+                    private readonly a: A,
+                    private readonly b: B,
+                    x: number,
+                    y: number,
+                ) {}
+            }
+        ";
+        assert!(run(src).is_empty(), "{:?}", run(src));
     }
 
     #[test]
