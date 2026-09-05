@@ -499,6 +499,53 @@ fn module_top_level_value_bindings(program: &Program) -> FxHashSet<String> {
     out
 }
 
+/// True when `expr` roots at a CommonJS module load — `require("stream")`,
+/// `require("stream").Readable`, `require("a").b.c`. Such an expression yields a
+/// value another module owns, so a binding initialized from it is an alias of a
+/// foreign value, not a declaration of this module.
+fn expression_roots_at_require(expr: &Expression) -> bool {
+    let mut current = expr;
+    loop {
+        match current {
+            Expression::CallExpression(call) => {
+                if require_call_specifier(call).is_some() {
+                    return true;
+                }
+                current = &call.callee;
+            }
+            Expression::StaticMemberExpression(m) => current = &m.object,
+            Expression::ComputedMemberExpression(m) => current = &m.object,
+            Expression::ParenthesizedExpression(p) => current = &p.expression,
+            Expression::TSAsExpression(cast) => current = &cast.expression,
+            Expression::TSNonNullExpression(cast) => current = &cast.expression,
+            _ => return false,
+        }
+    }
+}
+
+/// Names bound by top-level declarations this module makes *itself*: the
+/// [`module_top_level_value_bindings`] set minus every binding whose initializer
+/// roots at a CommonJS `require("…")` load
+/// (`const Readable = require("stream").Readable`). Such a binding aliases a
+/// value another module owns — the CommonJS counterpart of an ESM import
+/// specifier, which that collector already leaves out — so an object reached
+/// through it is shared across modules, not module-local.
+fn module_declared_value_bindings(program: &Program) -> FxHashSet<String> {
+    let mut out = module_top_level_value_bindings(program);
+    for stmt in &program.body {
+        let Statement::VariableDeclaration(decl) = stmt else { continue };
+        for declarator in &decl.declarations {
+            let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                continue;
+            };
+            if declarator.init.as_ref().is_some_and(expression_roots_at_require) {
+                out.remove(id.name.as_str());
+            }
+        }
+    }
+    out
+}
+
 /// True when the program is a test-runner setup file by content shape: it has at
 /// least one top-level lifecycle-hook call statement and every top-level
 /// call/`new` statement is such a hook (see `is_test_runner_hook_call`). Covers
@@ -955,6 +1002,18 @@ fn is_preact_entry_shape(program: &Program) -> bool {
 
 const GULP_REGISTRATION_IDENTS: &[&str] = &["task", "series", "parallel", "watch"];
 
+/// Specifier of a CommonJS module load: the string argument of a bare
+/// `require("…")` call. `None` for any other callee or a non-literal argument.
+fn require_call_specifier<'a>(call: &'a oxc_ast::ast::CallExpression) -> Option<&'a str> {
+    if !matches!(&call.callee, Expression::Identifier(id) if id.name == "require") {
+        return None;
+    }
+    match call.arguments.first() {
+        Some(Argument::StringLiteral(s)) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
 /// True when the program imports the `gulp` module at the top level, in any
 /// form: an ESM `import` from `"gulp"` (or a `"gulp/"` sub-path), or a
 /// `require("gulp")` / `require("gulp/...")` call in a top-level declaration.
@@ -966,11 +1025,7 @@ fn has_gulp_import(program: &Program) -> bool {
         Statement::ImportDeclaration(import) => is_gulp_specifier(import.source.value.as_str()),
         Statement::VariableDeclaration(decl) => decl.declarations.iter().any(|d| {
             let Some(Expression::CallExpression(call)) = &d.init else { return false };
-            let Expression::Identifier(id) = &call.callee else { return false };
-            if id.name != "require" {
-                return false;
-            }
-            matches!(call.arguments.first(), Some(Argument::StringLiteral(s)) if is_gulp_specifier(s.value.as_str()))
+            require_call_specifier(call).is_some_and(is_gulp_specifier)
         }),
         _ => false,
     })
@@ -1782,20 +1837,24 @@ fn is_direct_define_property_on_exported_binding(
 
 /// True when `call` is `Object.defineProperty(<Ctor>.prototype, …)` or
 /// `Object.defineProperties(<Ctor>.prototype, …)` where `<Ctor>` is a constructor
-/// declared in this module (`locals`). Defining properties on the prototype of a
+/// this module declares (`declared_locals`, see
+/// [`module_declared_value_bindings`]). Defining properties on the prototype of a
 /// module-local constructor is the pre-class setup idiom — the CommonJS
 /// `function Reply(){}; Object.defineProperties(Reply.prototype, {…})` pattern:
 /// the call assembles the constructor's public contract once on module load, fully
 /// before any consumer that imports the constructor can observe it — module
 /// initialization, not externally observable state. Generalises across ESM and
-/// CommonJS and across the singular and plural forms. The module-local requirement
-/// keeps it sound: patching the prototype of a *builtin*
-/// (`Object.defineProperty(Array.prototype, …)`) or an *imported* class is a
-/// globally observable mutation and stays flagged, as does a non-`.prototype`
-/// target.
+/// CommonJS and across the singular and plural forms.
+///
+/// The declared-locally requirement keeps it sound: patching the prototype of a
+/// constructor this module does not own is a globally observable mutation and
+/// stays flagged — a *builtin* (`Object.defineProperty(Array.prototype, …)`), an
+/// *ESM-imported* class, or a *CommonJS require alias*
+/// (`const Readable = require("stream").Readable`). A non-`.prototype` target
+/// stays flagged too.
 fn is_define_property_on_local_prototype(
     call: &oxc_ast::ast::CallExpression,
-    locals: &FxHashSet<String>,
+    declared_locals: &FxHashSet<String>,
 ) -> bool {
     if !is_define_property_call(call) {
         return false;
@@ -1807,7 +1866,7 @@ fn is_define_property_on_local_prototype(
         return false;
     };
     m.property.name == "prototype"
-        && matches!(&m.object, Expression::Identifier(id) if locals.contains(id.name.as_str()))
+        && matches!(&m.object, Expression::Identifier(id) if declared_locals.contains(id.name.as_str()))
 }
 
 /// Name of the identifier reached by peeling TypeScript casts (`as`,
@@ -2517,7 +2576,7 @@ impl OxcCheck for Check {
         builder_base_locals.extend(express_factory_const_bindings(program));
         let exported_locals = module_exported_local_bindings(program);
         let exported_bindings = module_exported_bindings(program);
-        let top_level_locals = module_top_level_value_bindings(program);
+        let declared_locals = module_declared_value_bindings(program);
 
         let mut diagnostics = Vec::new();
         for stmt in &program.body {
@@ -2539,7 +2598,7 @@ impl OxcCheck for Check {
                     || is_define_property_wrapper_call(call, program)
                     || is_local_const_config_call(call, &builder_base_locals)
                     || is_export_object_assign(call, &exported_locals)
-                    || is_define_property_on_local_prototype(call, &top_level_locals)
+                    || is_define_property_on_local_prototype(call, &declared_locals)
                     || is_direct_define_property_on_exported_binding(call, &exported_bindings)
                     || is_exported_builder_call(call, &exported_bindings)
                     || is_export_patching_foreach(call, &module_locals, &exported_bindings))
@@ -5969,4 +6028,54 @@ precacheAndRoute(entries)
             "a non-register top-level side effect must still flag, got {diags:?}"
         );
     }
+
+
+
+    #[test]
+    fn flags_define_property_on_require_aliased_prototype() {
+        // Issue #6913: `const Readable = require('stream').Readable` aliases a
+        // class another module owns — the CommonJS counterpart of
+        // `import { Readable } from 'stream'`. Patching its prototype is a
+        // globally observable mutation, so the module-local prototype exemption
+        // must not cover it.
+        let aliased = "\
+            const Readable = require('stream').Readable;\n\
+            Object.defineProperty(Readable.prototype, 'foo', { value() {} });\n\
+            module.exports = {};\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, aliased, "lib/patch.js").len(),
+            1,
+            "patching a require-aliased class's prototype must flag"
+        );
+
+        // The plain module-load alias (`const stream = require('stream')`) and
+        // the deep form root at the same `require(…)`, so both stay flagged.
+        let deep = "\
+            const stream = require('stream');\n\
+            Object.defineProperties(stream.Readable.prototype, { foo: { value: 1 } });\n\
+            module.exports = {};\n";
+        assert_eq!(
+            crate::rules::test_helpers::run_rule(&Check, deep, "lib/patch.js").len(),
+            1,
+            "patching a prototype reached through a require alias must flag"
+        );
+    }
+
+    #[test]
+    fn skips_define_properties_on_locally_declared_constructor_prototype() {
+        // Negative space of #6913: a constructor the module itself declares keeps
+        // the exemption, in a CommonJS file that also requires other modules.
+        let src = "\
+            const util = require('util');\n\
+            function Reply(res) {}\n\
+            Object.defineProperties(Reply.prototype, { elapsedTime: { get() { return 1; } } });\n\
+            module.exports = Reply;\n";
+        let diags = crate::rules::test_helpers::run_rule(&Check, src, "lib/reply.js");
+        assert!(
+            diags.is_empty(),
+            "a locally declared constructor's prototype must stay exempt, got {diags:?}"
+        );
+    }
+
+
 }
