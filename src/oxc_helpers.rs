@@ -5308,6 +5308,27 @@ pub fn is_rtk_reducer_draft_param(
     false
 }
 
+/// How many leading arguments a callable binds to *positional* parameters, as
+/// far as its formal parameter list makes statically visible.
+///
+/// `Some(0)` when it declares no positional parameter — including a lone rest
+/// (`(...args)`), a sink that never names one; `Some(n)` for `n` positional
+/// parameters and no rest. `None` when a rest *follows* positional parameters
+/// (`(x, ...rest)`), because `rest` absorbs every further argument, and for a
+/// parameter list longer than `u8::MAX`.
+///
+/// A caller that passes extra arguments a callee is not written for — an
+/// array-iterator method injecting `index`/`array` after the per-iteration
+/// values — uses this to tell "the callee silently drops them" from "an extra
+/// argument lands in a declared parameter".
+#[must_use]
+pub fn bound_positional_params(params: &oxc_ast::ast::FormalParameters) -> Option<u8> {
+    if params.items.is_empty() {
+        return Some(0);
+    }
+    params.rest.is_none().then(|| u8::try_from(params.items.len()).ok())?
+}
+
 /// True when `decl_node_id` is the declaration of a function's first formal
 /// parameter (the parameter chain reaches a `FormalParameters` whose first item
 /// spans the declaration before any enclosing function boundary).

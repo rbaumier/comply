@@ -6,17 +6,20 @@
 //! explicit `thisArg`) are exempt. Calls whose receiver is a namespace-import
 //! binding (`import * as O from 'fp-ts/Option'; O.some(n)`) are also exempt:
 //! those are data-library combinators, never `Array.prototype.<method>`.
-//! Bare references to a local callee — or a parameter/variable typed as a
-//! single-arity function (`scale: (x: number) => number`), including one
-//! destructured from a typed params object (`{ scale }: Params`) — that binds
-//! only the `element` argument are exempt: passing them directly is identical to
-//! wrapping them in an arrow. A `this.method` reference is likewise exempt when
-//! `method` is an arrow-function class property (auto-bound to `this`) declaring
-//! at most one parameter. An argument that resolves to a `for...in` loop
-//! variable is exempt too: such a key is always a `string`, never a function.
-//! A callee imported from a sibling module is exempt when the cross-file import
-//! graph resolves it to an exported callable that binds at most the first
-//! argument (`ExportedSymbol::binds_at_most_one_param`) — the same single-arity
+//! How many parameters a callee may declare before `index` reaches one depends
+//! on the method: a `map`-family callback is `(element, index, array)`, a
+//! `reduce`/`reduceRight` callback is `(accumulator, currentValue, index,
+//! array)` (see `ITERATOR_METHODS`). Bare references to a local callee — or a
+//! parameter/variable typed as a function (`scale: (x: number) => number`),
+//! including one destructured from a typed params object (`{ scale }: Params`)
+//! — that binds only those leading value arguments are exempt: passing them
+//! directly is identical to wrapping them in an arrow. A `this.method`
+//! reference is likewise exempt when `method` is an arrow-function class
+//! property (auto-bound to `this`) within that same budget. An argument that
+//! resolves to a `for...in` loop variable is exempt too: such a key is always a
+//! `string`, never a function. A callee imported from a sibling module is
+//! exempt when the cross-file import graph resolves it to an exported callable
+//! within the same budget (`ExportedSymbol::binds_at_most`) — the same
 //! exemption, extended across the module boundary; an import that cannot be
 //! resolved (external package, re-export chain) has unknown arity and stays
 //! flagged.
@@ -31,72 +34,77 @@ use oxc_ast::ast::{
 use std::sync::Arc;
 
 /// Returns `true` when a callee's formal parameter list cannot bind the extra
-/// `(index, array)` arguments an iterator method injects after `element` to a
-/// *positional* parameter — so passing it bare is identical to wrapping it:
-///   - zero positional params with a rest (`(...rest) => …`) is a sink that
-///     ignores everything (#825);
-///   - zero positional params (`() => x`) ignore every argument;
-///   - one positional param and no rest (`(str) => …`) binds only `element`
-///     and silently drops `index`/`array`, so `arr.map(f)` is identical to
-///     `arr.map(e => f(e))` (#3901).
-/// A positional parameter *followed* by a rest (`(x, ...rest)`) captures
-/// `index` in `rest`, and two or more positional params expose the genuine
-/// `parseInt(string, radix)` footgun where `index` becomes the second
-/// argument — neither is exempt.
-fn callee_ignores_extra_args(params: &FormalParameters) -> bool {
-    match params.items.len() {
-        0 => true,
-        1 => params.rest.is_none(),
-        _ => false,
-    }
+/// `(index, array)` arguments an iterator method injects after the
+/// per-iteration values to a *positional* parameter — so passing it bare is
+/// identical to wrapping it. `value_params` is how many leading arguments the
+/// method fills with those values before `index` (see [`ITERATOR_METHODS`]).
+///
+/// A callee declaring at most that many positional parameters, and no rest to
+/// absorb the remainder, silently drops `index`/`array`, so `arr.map(f)` is
+/// identical to `arr.map(e => f(e))` (#825, #3901). A positional parameter
+/// *followed* by a rest (`(x, ...rest)`) captures `index` in `rest`, and one
+/// more positional parameter exposes the genuine `parseInt(string, radix)`
+/// footgun where `index` becomes an argument the callee reads — neither is
+/// exempt.
+fn callee_ignores_extra_args(params: &FormalParameters, value_params: u8) -> bool {
+    crate::oxc_helpers::bound_positional_params(params)
+        .is_some_and(|bound| bound <= value_params)
 }
 
 /// Returns `true` when a type annotation is a function type that ignores the
-/// extra iterator arguments — i.e. its declared signature binds only `element`
-/// (see [`callee_ignores_extra_args`]). A parameter or variable typed
-/// `(value: number) => string` is statically known to receive at most one
-/// argument, so passing it bare to `.map`/`.filter` is type-safe. Parenthesized
-/// types (`((x: T) => R)`) are unwrapped. Opaque type references
-/// (`Scale<number, number>`) carry no visible arity and are not exempt here.
-fn is_low_arity_function_type(ty: &TSType) -> bool {
+/// extra iterator arguments — i.e. its declared signature binds only the
+/// method's per-iteration values (see [`callee_ignores_extra_args`]). A
+/// parameter or variable typed `(value: number) => string` is statically known
+/// to receive at most one argument, so passing it bare to `.map`/`.filter` is
+/// type-safe. Parenthesized types (`((x: T) => R)`) are unwrapped. Opaque type
+/// references (`Scale<number, number>`) carry no visible arity and are not
+/// exempt here.
+fn is_low_arity_function_type(ty: &TSType, value_params: u8) -> bool {
     match ty {
-        TSType::TSFunctionType(f) => callee_ignores_extra_args(&f.params),
-        TSType::TSParenthesizedType(p) => is_low_arity_function_type(&p.type_annotation),
+        TSType::TSFunctionType(f) => callee_ignores_extra_args(&f.params, value_params),
+        TSType::TSParenthesizedType(p) => {
+            is_low_arity_function_type(&p.type_annotation, value_params)
+        }
         _ => false,
     }
 }
 
 /// Returns `true` when an object-type member list declares `binding_name` as a
-/// single-arity function — covering both `{ f: (x) => y }`
+/// function that ignores the extra iterator arguments (see
+/// [`callee_ignores_extra_args`]) — covering both `{ f: (x) => y }`
 /// (`TSPropertySignature`) and the method-shorthand `{ f(x): y }`
 /// (`TSMethodSignature`).
-fn members_declare_low_arity(members: &[TSSignature], binding_name: &str) -> bool {
+fn members_declare_low_arity(
+    members: &[TSSignature],
+    binding_name: &str,
+    value_params: u8,
+) -> bool {
     members.iter().any(|member| match member {
         TSSignature::TSPropertySignature(prop) => {
             prop.key.static_name().as_deref() == Some(binding_name)
-                && prop
-                    .type_annotation
-                    .as_ref()
-                    .is_some_and(|a| is_low_arity_function_type(&a.type_annotation))
+                && prop.type_annotation.as_ref().is_some_and(|a| {
+                    is_low_arity_function_type(&a.type_annotation, value_params)
+                })
         }
         TSSignature::TSMethodSignature(method) => {
             method.key.static_name().as_deref() == Some(binding_name)
-                && callee_ignores_extra_args(&method.params)
+                && callee_ignores_extra_args(&method.params, value_params)
         }
         _ => false,
     })
 }
 
 /// Returns `true` when a named type reference (`Params` in `{ scale }: Params`)
-/// resolves to a `type`/`interface` declaration whose `binding_name` member is a
-/// single-arity function. The declaration is matched by name across the module —
-/// the established resolution shape in this codebase (see
-/// `ts_no_enum_object_literal_pattern`). Generic type references carrying their
-/// own arguments are skipped: the member type may depend on a type parameter
-/// whose arity is not statically visible here.
+/// resolves to a `type`/`interface` declaration whose `binding_name` member
+/// ignores the extra iterator arguments (see [`callee_ignores_extra_args`]). The
+/// declaration is matched by name across the module — the established resolution
+/// shape in this codebase (see `ts_no_enum_object_literal_pattern`). Generic type
+/// references carrying their own arguments are skipped: the member type may
+/// depend on a type parameter whose arity is not statically visible here.
 fn named_type_member_is_low_arity<'a>(
     type_ref: &oxc_ast::ast::TSTypeReference<'a>,
     binding_name: &str,
+    value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     if type_ref.type_arguments.is_some() {
@@ -107,32 +115,36 @@ fn named_type_member_is_low_arity<'a>(
     semantic.nodes().iter().any(|node| match node.kind() {
         AstKind::TSTypeAliasDeclaration(alias) if alias.id.name.as_str() == type_name => {
             matches!(&alias.type_annotation, TSType::TSTypeLiteral(lit)
-                if members_declare_low_arity(&lit.members, binding_name))
+                if members_declare_low_arity(&lit.members, binding_name, value_params))
         }
         AstKind::TSInterfaceDeclaration(iface) if iface.id.name.as_str() == type_name => {
-            members_declare_low_arity(&iface.body.body, binding_name)
+            members_declare_low_arity(&iface.body.body, binding_name, value_params)
         }
         _ => false,
     })
 }
 
 /// Returns `true` when a parameter's type annotation declares `binding_name` as
-/// a single-arity function. Covers a direct annotation (`scale: (x) => y`), the
-/// destructured inline-object case (`{ scale }: { scale: (x) => y }`), and the
-/// destructured named-type case (`{ scale }: Params`) — the common D3/charting
-/// shape where scales and formatters are destructured from a typed params
-/// object.
+/// a function that ignores the extra iterator arguments (see
+/// [`callee_ignores_extra_args`]). Covers a direct annotation
+/// (`scale: (x) => y`), the destructured inline-object case
+/// (`{ scale }: { scale: (x) => y }`), and the destructured named-type case
+/// (`{ scale }: Params`) — the common D3/charting shape where scales and
+/// formatters are destructured from a typed params object.
 fn param_binding_is_low_arity<'a>(
     ann: &TSTypeAnnotation<'a>,
     binding_name: &str,
+    value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     match &ann.type_annotation {
-        TSType::TSTypeLiteral(lit) => members_declare_low_arity(&lit.members, binding_name),
-        TSType::TSTypeReference(type_ref) => {
-            named_type_member_is_low_arity(type_ref, binding_name, semantic)
+        TSType::TSTypeLiteral(lit) => {
+            members_declare_low_arity(&lit.members, binding_name, value_params)
         }
-        ty => is_low_arity_function_type(ty),
+        TSType::TSTypeReference(type_ref) => {
+            named_type_member_is_low_arity(type_ref, binding_name, value_params, semantic)
+        }
+        ty => is_low_arity_function_type(ty, value_params),
     }
 }
 
@@ -167,8 +179,8 @@ fn is_provably_non_callable_init(expr: &Expression) -> bool {
 /// Returns `true` when a variable initializer provably ignores the extra
 /// iterator arguments, so a bare reference to the binding is identical to
 /// wrapping it in an arrow. This holds when the initializer is:
-///   - a single-arity arrow/function expression that binds only `element`
-///     (see [`callee_ignores_extra_args`]);
+///   - an arrow/function expression that binds only the method's per-iteration
+///     values (see [`callee_ignores_extra_args`]);
 ///   - a value that can never be a function (see
 ///     [`is_provably_non_callable_init`]); or
 ///   - a `ConditionalExpression` (`cond ? a : b`) or short-circuiting
@@ -181,15 +193,19 @@ fn is_provably_non_callable_init(expr: &Expression) -> bool {
 /// Recursion resolves nested ternaries (`cond ? a : cond2 ? b : c`) and peels
 /// parentheses off every branch. It terminates because each recursive call
 /// descends into a strict sub-expression of a finite AST.
-fn init_ignores_extra_args<'a>(expr: &'a Expression<'a>) -> bool {
+fn init_ignores_extra_args<'a>(expr: &'a Expression<'a>, value_params: u8) -> bool {
     match peel_parens(expr) {
-        Expression::ArrowFunctionExpression(f) => callee_ignores_extra_args(&f.params),
-        Expression::FunctionExpression(f) => callee_ignores_extra_args(&f.params),
+        Expression::ArrowFunctionExpression(f) => {
+            callee_ignores_extra_args(&f.params, value_params)
+        }
+        Expression::FunctionExpression(f) => callee_ignores_extra_args(&f.params, value_params),
         Expression::ConditionalExpression(cond) => {
-            init_ignores_extra_args(&cond.consequent) && init_ignores_extra_args(&cond.alternate)
+            init_ignores_extra_args(&cond.consequent, value_params)
+                && init_ignores_extra_args(&cond.alternate, value_params)
         }
         Expression::LogicalExpression(logical) => {
-            init_ignores_extra_args(&logical.left) && init_ignores_extra_args(&logical.right)
+            init_ignores_extra_args(&logical.left, value_params)
+                && init_ignores_extra_args(&logical.right, value_params)
         }
         inner => is_provably_non_callable_init(inner),
     }
@@ -198,12 +214,12 @@ fn init_ignores_extra_args<'a>(expr: &'a Expression<'a>) -> bool {
 /// Returns `true` when `ident` resolves to a locally-declared function whose
 /// formal parameter list ignores the extra iterator arguments
 /// (see [`callee_ignores_extra_args`]), or to a parameter/variable whose type
-/// annotation is a single-arity function type (see
-/// [`is_low_arity_function_type`]). Cross-file imports do not resolve here
-/// (`symbol_id() == None`) and stay flagged, matching the rule's conservative
-/// default.
+/// annotation is such a function type (see [`is_low_arity_function_type`]).
+/// Cross-file imports do not resolve here (`symbol_id() == None`) and stay
+/// flagged, matching the rule's conservative default.
 fn is_low_arity_local<'a>(
     ident: &oxc_ast::ast::IdentifierReference<'a>,
+    value_params: u8,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
     let Some(ref_id) = ident.reference_id.get() else { return false };
@@ -231,7 +247,7 @@ fn is_low_arity_local<'a>(
                 return true;
             }
             if let Some(ann) = decl.type_annotation.as_ref()
-                && is_low_arity_function_type(&ann.type_annotation)
+                && is_low_arity_function_type(&ann.type_annotation, value_params)
             {
                 return true;
             }
@@ -240,16 +256,17 @@ fn is_low_arity_local<'a>(
             // provably-non-callable value, or a ternary/logical selection whose
             // every branch is itself arity-safe (see [`init_ignores_extra_args`]).
             match decl.init.as_ref() {
-                Some(init) => init_ignores_extra_args(init),
+                Some(init) => init_ignores_extra_args(init, value_params),
                 None => false,
             }
         }
-        AstKind::Function(f) => callee_ignores_extra_args(&f.params),
+        AstKind::Function(f) => callee_ignores_extra_args(&f.params, value_params),
         // A function parameter resolves to its `BindingIdentifier` (or, for a
         // bare param, the `FormalParameter` itself); the enclosing
         // `FormalParameter` carries the type annotation. A parameter typed as a
-        // single-arity function (`scale: (x: number) => number`), directly or as
-        // a destructured property of a typed params object, is safe to pass bare.
+        // function that binds only the method's per-iteration values
+        // (`scale: (x: number) => number`), directly or as a destructured
+        // property of a typed params object, is safe to pass bare.
         _ => {
             let binding_name = scoping.symbol_name(sym_id);
             std::iter::once(nodes.kind(decl_node_id))
@@ -257,7 +274,7 @@ fn is_low_arity_local<'a>(
                 .any(|kind| match kind {
                     AstKind::FormalParameter(param) => {
                         param.type_annotation.as_ref().is_some_and(|ann| {
-                            param_binding_is_low_arity(ann, binding_name, semantic)
+                            param_binding_is_low_arity(ann, binding_name, value_params, semantic)
                         })
                     }
                     _ => false,
@@ -268,15 +285,15 @@ fn is_low_arity_local<'a>(
 
 /// Returns `true` when `name` is a named/default import whose source module,
 /// resolved through the cross-file import graph, exports a callable that binds
-/// only the first argument (`ExportedSymbol::binds_at_most_one_param`) — the
-/// cross-file extension of [`is_low_arity_local`]. Passing such an imported
+/// at most the method's per-iteration values (`ExportedSymbol::binds_at_most`) —
+/// the cross-file extension of [`is_low_arity_local`]. Passing such an imported
 /// callee bare to an array-iterator method drops the injected `index`/`array`
-/// exactly as a locally-declared single-arity function does, so `arr.map(f)` is
-/// identical to `arr.map(e => f(e))`. Imports whose specifier does not resolve
-/// to an indexed source file — external packages, unresolved re-export chains —
-/// carry no visible arity and stay flagged, matching the rule's conservative
-/// default for callees of unknown arity.
-fn is_low_arity_imported(name: &str, ctx: &CheckCtx) -> bool {
+/// exactly as a locally-declared one does, so `arr.map(f)` is identical to
+/// `arr.map(e => f(e))`. Imports whose specifier does not resolve to an indexed
+/// source file — external packages, unresolved re-export chains — carry no
+/// visible arity and stay flagged, matching the rule's conservative default for
+/// callees of unknown arity.
+fn is_low_arity_imported(name: &str, value_params: u8, ctx: &CheckCtx) -> bool {
     let index = ctx.project.import_index();
     for imp in index.get_imports(ctx.path) {
         if imp.local_name != name {
@@ -288,7 +305,7 @@ fn is_low_arity_imported(name: &str, ctx: &CheckCtx) -> bool {
         return index
             .get_exports(src_path)
             .iter()
-            .any(|export| export.name == imp.imported_name && export.binds_at_most_one_param);
+            .any(|export| export.name == imp.imported_name && export.binds_at_most(value_params));
     }
     false
 }
@@ -316,13 +333,14 @@ fn is_namespace_import_binding(
 /// formal parameter list ignores the extra iterator arguments
 /// (see [`callee_ignores_extra_args`]). An arrow class property
 /// (`private m = (x) => …`) is auto-bound to `this` at construction, so passing
-/// `this.m` bare keeps `this`; a single declared parameter then drops the
-/// injected `index`/`array`, making `arr.map(this.m)` identical to
-/// `arr.map(e => this.m(e))`. A normal (non-arrow) method loses `this` when
-/// passed bare, and a multi-arity arrow exposes the extra-args footgun — neither
-/// is exempt. This mirrors [`is_low_arity_local`] for the `this.method` form.
+/// `this.m` bare keeps `this`; declaring only the method's per-iteration values
+/// then drops the injected `index`/`array`, making `arr.map(this.m)` identical
+/// to `arr.map(e => this.m(e))`. A normal (non-arrow) method loses `this` when
+/// passed bare, and a wider arrow exposes the extra-args footgun — neither is
+/// exempt. This mirrors [`is_low_arity_local`] for the `this.method` form.
 fn is_low_arity_bound_class_property<'a>(
     member: &StaticMemberExpression<'a>,
+    value_params: u8,
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
@@ -339,7 +357,7 @@ fn is_low_arity_bound_class_property<'a>(
                         && matches!(
                             prop.value.as_ref(),
                             Some(Expression::ArrowFunctionExpression(f))
-                                if callee_ignores_extra_args(&f.params)
+                                if callee_ignores_extra_args(&f.params, value_params)
                         )
                 }
                 _ => false,
@@ -364,20 +382,35 @@ fn is_pascal_case(name: &str) -> bool {
 
 pub struct Check;
 
-const ITERATOR_METHODS: &[&str] = &[
-    "every",
-    "filter",
-    "find",
-    "findLast",
-    "findIndex",
-    "findLastIndex",
-    "flatMap",
-    "forEach",
-    "map",
-    "reduce",
-    "reduceRight",
-    "some",
+/// The array-iterator methods this rule inspects, each paired with how many
+/// leading arguments the method fills with per-iteration *values* before it
+/// injects `index`. A `map`-family callback is `(element, index, array)` — one
+/// value argument; a `reduce`/`reduceRight` callback is
+/// `(accumulator, currentValue, index, array)` — two, so the `index` footgun
+/// needs one more declared parameter there than elsewhere.
+const ITERATOR_METHODS: &[(&str, u8)] = &[
+    ("every", 1),
+    ("filter", 1),
+    ("find", 1),
+    ("findLast", 1),
+    ("findIndex", 1),
+    ("findLastIndex", 1),
+    ("flatMap", 1),
+    ("forEach", 1),
+    ("map", 1),
+    ("reduce", 2),
+    ("reduceRight", 2),
+    ("some", 1),
 ];
+
+/// How many leading arguments `method_name`'s callback receives before `index`,
+/// or `None` when `method_name` is not an array-iterator method this rule
+/// inspects (see [`ITERATOR_METHODS`]).
+fn value_params_before_index(method_name: &str) -> Option<u8> {
+    ITERATOR_METHODS
+        .iter()
+        .find_map(|(name, value_params)| (*name == method_name).then_some(*value_params))
+}
 
 const IGNORED_IDENTIFIERS: &[&str] = &["Boolean", "String", "Number", "BigInt", "Symbol"];
 
@@ -402,9 +435,9 @@ impl OxcCheck for Check {
             return;
         };
         let method_name = member.property.name.as_str();
-        if !ITERATOR_METHODS.contains(&method_name) {
+        let Some(value_params) = value_params_before_index(method_name) else {
             return;
-        }
+        };
 
         // `import * as O from 'fp-ts/Option'; O.some(n)` is `Option.some` — a
         // constructor wrapping `n`, not `Array.prototype.some`. A receiver that
@@ -443,13 +476,13 @@ impl OxcCheck for Check {
                 if is_pascal_case(name) {
                     return;
                 }
-                if is_low_arity_local(ident, semantic) {
+                if is_low_arity_local(ident, value_params, semantic) {
                     return;
                 }
                 // The callee may be imported from a sibling module: resolve its
                 // arity through the cross-file import graph and apply the same
-                // single-arity exemption as a locally-declared callee.
-                if is_low_arity_imported(name, ctx) {
+                // low-arity exemption as a locally-declared callee.
+                if is_low_arity_imported(name, value_params, ctx) {
                     return;
                 }
                 let (line, column) =
@@ -474,9 +507,10 @@ impl OxcCheck for Check {
                     return;
                 }
                 // `this.method` where `method` is an auto-bound arrow class
-                // property declaring at most one parameter keeps `this` and
-                // drops the injected `index`/`array`, so passing it bare is safe.
-                if is_low_arity_bound_class_property(inner_member, node, semantic) {
+                // property declaring only the method's per-iteration values
+                // keeps `this` and drops the injected `index`/`array`, so
+                // passing it bare is safe.
+                if is_low_arity_bound_class_property(inner_member, value_params, node, semantic) {
                     return;
                 }
                 let text = &ctx.source
@@ -1250,6 +1284,104 @@ mod tests {
             (
                 "consumer.ts",
                 "import combine from './combine';\nconst nums: number[] = [];\nexport const out = nums.map(combine);",
+            ),
+        ];
+        assert_eq!(run_on_project(files, "consumer.ts").len(), 1);
+    }
+
+    // #8137 repro (lucaong/minisearch `results.reduce(combinator)`): a `reduce`
+    // callback is `(accumulator, currentValue, index, array)`, so a two-parameter
+    // reducer binds exactly the two values and drops `index`/`array` — passing it
+    // bare is identical to `xs.reduce((a, b) => sum(a, b))`. Must not flag.
+    #[test]
+    fn allows_two_param_reducer_on_reduce() {
+        assert!(run_on(
+            "const sum = (acc: number, cur: number): number => acc + cur; const xs: number[] = []; xs.reduce(sum);"
+        )
+        .is_empty());
+    }
+
+    // #8137: `reduceRight` has the same accumulator-first callback signature.
+    #[test]
+    fn allows_two_param_reducer_on_reduce_right() {
+        assert!(run_on(
+            "const sum = (acc: number, cur: number): number => acc + cur; const xs: number[] = []; xs.reduceRight(sum);"
+        )
+        .is_empty());
+    }
+
+    // #8137: the type-annotation exemption path uses the same per-method budget,
+    // so a binding typed as a two-parameter function is exempt on `reduce`.
+    #[test]
+    fn allows_two_arity_typed_binding_on_reduce() {
+        assert!(run_on(
+            "const f: (a: number, b: number) => number = getReducer(); const xs: number[] = []; xs.reduce(f);"
+        )
+        .is_empty());
+    }
+
+    // #8137 negative space: a *three*-parameter reducer reads `index` as its
+    // third argument — the genuine footgun on `reduce` — so it stays flagged.
+    #[test]
+    fn flags_three_param_reducer_on_reduce() {
+        assert_eq!(
+            run_on(
+                "const f = (a: number, b: number, i: number): number => a + b + i; const xs: number[] = []; xs.reduce(f);"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // #8137 negative space: the widened budget is `reduce`-only — a
+    // two-parameter callee on `map` still receives `index` as its second
+    // argument and stays flagged.
+    #[test]
+    fn flags_two_param_callee_on_map_after_reduce_budget() {
+        assert_eq!(
+            run_on(
+                "const scale = (x: number, factor: number): number => x * factor; const xs: number[] = []; xs.map(scale);"
+            )
+            .len(),
+            1
+        );
+    }
+
+    // #8137 negative space: a seeded `reduce` is a two-argument call, already
+    // outside the single-argument footgun — it must stay silent.
+    #[test]
+    fn allows_seeded_reduce_call() {
+        assert!(run_on(
+            "const sum = (acc: number, cur: number): number => acc + cur; const xs: number[] = []; xs.reduce(sum, 0);"
+        )
+        .is_empty());
+    }
+
+    // #8137: the cross-file arity resolver applies the same per-method budget —
+    // an imported two-parameter reducer is exempt on `reduce`…
+    #[test]
+    fn allows_imported_two_param_reducer_on_reduce() {
+        let files = &[
+            ("combine.ts", "export const combine = (a: number, b: number): number => a + b;"),
+            (
+                "consumer.ts",
+                "import { combine } from './combine';\nconst nums: number[] = [];\nexport const out = nums.reduce(combine);",
+            ),
+        ];
+        assert!(run_on_project(files, "consumer.ts").is_empty());
+    }
+
+    // #8137 negative space: …and an imported *three*-parameter reducer is not.
+    #[test]
+    fn flags_imported_three_param_reducer_on_reduce() {
+        let files = &[
+            (
+                "combine.ts",
+                "export const combine = (a: number, b: number, i: number): number => a + b + i;",
+            ),
+            (
+                "consumer.ts",
+                "import { combine } from './combine';\nconst nums: number[] = [];\nexport const out = nums.reduce(combine);",
             ),
         ];
         assert_eq!(run_on_project(files, "consumer.ts").len(), 1);

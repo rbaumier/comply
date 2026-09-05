@@ -143,20 +143,19 @@ pub struct ExportedSymbol {
     /// `false` for any other export shape (destructuring binding, function, class,
     /// non-factory or compound initializer, re-export, type).
     pub is_pinia_store_factory: bool,
-    /// `true` when this export is a callable — a `function` declaration or a
-    /// `const`/`let`/`var` binding initialized directly with an arrow or
-    /// function expression — whose formal parameter list binds at most the first
-    /// argument passed to it: zero or one parameters total, a lone rest
-    /// (`(...args)`) counting as the single sink parameter. Passing such a callee
-    /// bare to an array-iterator method (`arr.map(f)`) binds only `element` and
-    /// drops the injected `index`/`array`, so it is identical to
-    /// `arr.map(e => f(e))` — the cross-file analogue of
-    /// `no_array_callback_reference::callee_ignores_extra_args`. `false` for a
-    /// multi-parameter callable (including `(x, ...rest)`, where `rest` captures
-    /// `index`) and for every non-callable export (class, type, enum, re-export,
-    /// non-function binding), where the extra-args footgun may apply or arity is
-    /// unknown.
-    pub binds_at_most_one_param: bool,
+    /// How many leading arguments this export binds to *positional* parameters,
+    /// when it is a callable whose parameter list is statically visible — a
+    /// `function` declaration, or a `const`/`let`/`var` binding initialized
+    /// directly with an arrow or function expression. `Some(0)` when it declares
+    /// no positional parameter, including a lone rest (`(...args)`), a sink that
+    /// never names one; `Some(n)` for `n` positional parameters and no rest.
+    /// `None` for every non-callable export (class, type, enum, re-export,
+    /// non-function binding) and when a rest *follows* positional parameters
+    /// (`(x, ...rest)`, where `rest` absorbs every further argument) — arity is
+    /// then unknown or unbounded. The cross-file analogue of
+    /// `oxc_helpers::bound_positional_params`; read it through
+    /// [`ExportedSymbol::binds_at_most`].
+    pub bound_positional_params: Option<u8>,
     /// `true` when this is a single `const` binding whose initializer is a string
     /// literal or a substitution-free template literal (`export const X = "lit"`).
     /// The exported value is then a compile-time-fixed string — the cross-file
@@ -166,6 +165,19 @@ pub struct ExportedSymbol {
     /// number/boolean literals, matching that rule's stricter "provably-static
     /// string pattern" contract. `false` for every other export shape.
     pub is_string_literal_const: bool,
+}
+
+impl ExportedSymbol {
+    /// `true` when this export is a callable whose positional parameters absorb
+    /// at most the first `n` arguments passed to it, so a caller supplying more
+    /// than `n` — an array-iterator method injecting `index`/`array` after the
+    /// per-iteration values — cannot land one in a declared parameter. `false`
+    /// when the export is not a statically-visible callable: unknown arity is
+    /// never a bound.
+    #[must_use]
+    pub fn binds_at_most(&self, n: u8) -> bool {
+        self.bound_positional_params.is_some_and(|bound| bound <= n)
+    }
 }
 
 /// Kind of an imported symbol.
@@ -1710,7 +1722,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
-            binds_at_most_one_param: false,
+            bound_positional_params: None,
             is_string_literal_const: false,
         });
     }
@@ -2557,7 +2569,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
             return;
@@ -2573,7 +2585,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
-            binds_at_most_one_param: false,
+            bound_positional_params: None,
             is_string_literal_const: false,
         });
         return;
@@ -2619,7 +2631,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -2642,7 +2654,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
-            binds_at_most_one_param: default_export_binds_low_arity(node, source),
+            bound_positional_params: default_export_bound_positional_params(node, source),
             is_string_literal_const: false,
         });
         return;
@@ -2681,7 +2693,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             is_primitive_literal: false,
                             is_vue_ref_factory: false,
                             is_pinia_store_factory: false,
-                            binds_at_most_one_param: fn_binds_at_most_one_param(inner),
+                            bound_positional_params: fn_bound_positional_params(inner),
                             is_string_literal_const: false,
                         });
                     }
@@ -2733,7 +2745,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: fn_binds_at_most_one_param(child),
+                    bound_positional_params: fn_bound_positional_params(child),
                     is_string_literal_const: false,
                 });
             }
@@ -2754,7 +2766,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -2786,7 +2798,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     && declarator_binds_vue_ref_factory(decl, source);
                 let is_pinia_store_factory = name_node.kind() == "identifier"
                     && declarator_binds_pinia_store_factory(decl, source);
-                let binds_at_most_one_param = declarator_binds_low_arity_callable(decl);
+                let bound_positional_params = declarator_bound_positional_params(decl);
                 // Parity with the same-file const-string predicate in
                 // security_detect_non_literal_regexp: a single-identifier `const`
                 // bound to a string literal or a substitution-free template literal.
@@ -2807,7 +2819,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         is_primitive_literal,
                         is_vue_ref_factory,
                         is_pinia_store_factory,
-                        binds_at_most_one_param,
+                        bound_positional_params,
                         is_string_literal_const,
                     });
                 }
@@ -2829,7 +2841,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -2850,7 +2862,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -2872,7 +2884,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -3048,48 +3060,54 @@ fn collect_pattern_names(node: Node, source: &[u8], out: &mut Vec<String>) {
     }
 }
 
-/// True when a callable's formal parameter list binds at most the first
-/// argument passed to it — zero or one parameters total. A lone rest
-/// (`(...args)`) counts as one: it is a sink that ignores every argument (#825).
-/// The tree-sitter analogue of
-/// `no_array_callback_reference::callee_ignores_extra_args`: such a callee,
-/// passed bare to an array-iterator method, drops the injected `index`/`array`.
-/// Two or more parameters — including a positional param followed by a rest
-/// (`(x, ...rest)`, where `rest` captures `index`) — expose the
-/// `parseInt(string, radix)` extra-args footgun and return `false`.
-fn fn_binds_at_most_one_param(fn_node: Node) -> bool {
-    // A single unparenthesized arrow parameter (`x => …`) is exactly one param.
-    if fn_node.child_by_field_name("parameter").is_some() {
-        return true;
-    }
-    let Some(params) = fn_node.child_by_field_name("parameters") else {
-        return true; // no parameter list → zero parameters
-    };
-    // Every named child of the parameter list is a formal parameter (a rest
-    // parameter counts as one) except an interleaved comment.
-    let mut count = 0usize;
-    let mut cursor = params.walk();
-    for child in params.named_children(&mut cursor) {
-        if child.kind() != "comment" {
-            count += 1;
-            if count > 1 {
-                return false;
-            }
-        }
-    }
-    true
+/// True when a formal-parameter-list child is a rest parameter — a bare
+/// `rest_pattern` in the JavaScript grammar, or a `required_parameter` wrapping
+/// one in the TypeScript grammar.
+fn is_rest_parameter(param: Node) -> bool {
+    param.kind() == "rest_pattern"
+        || param
+            .child_by_field_name("pattern")
+            .is_some_and(|pattern| pattern.kind() == "rest_pattern")
 }
 
-/// True when a `variable_declarator`'s initializer is an arrow or function
-/// expression that binds at most one parameter (see
-/// [`fn_binds_at_most_one_param`]). Any other initializer — or none — is not a
-/// statically-known single-arity callable and returns `false`.
-fn declarator_binds_low_arity_callable(decl: Node) -> bool {
-    let Some(value) = decl.child_by_field_name("value") else {
-        return false;
+/// How many leading arguments a callable binds to *positional* parameters — the
+/// tree-sitter analogue of `oxc_helpers::bound_positional_params`. `Some(0)`
+/// when it declares none, including a lone rest (`(...args)`), a sink that never
+/// names a positional parameter (#825); `Some(n)` for `n` positional parameters
+/// and no rest. `None` when a rest *follows* positional parameters
+/// (`(x, ...rest)`, where `rest` absorbs every further argument) and for a
+/// parameter list longer than `u8::MAX`.
+fn fn_bound_positional_params(fn_node: Node) -> Option<u8> {
+    // A single unparenthesized arrow parameter (`x => …`) is exactly one param.
+    if fn_node.child_by_field_name("parameter").is_some() {
+        return Some(1);
+    }
+    let Some(params) = fn_node.child_by_field_name("parameters") else {
+        return Some(0); // no parameter list → zero parameters
     };
+    // Every named child of the parameter list is a formal parameter except an
+    // interleaved comment.
+    let mut positional = 0u8;
+    let mut has_rest = false;
+    let mut cursor = params.walk();
+    for child in params.named_children(&mut cursor) {
+        match child.kind() {
+            "comment" => {}
+            _ if is_rest_parameter(child) => has_rest = true,
+            _ => positional = positional.checked_add(1)?,
+        }
+    }
+    (!has_rest || positional == 0).then_some(positional)
+}
+
+/// The positional-parameter bound of a `variable_declarator`'s initializer when
+/// it is an arrow or function expression (see [`fn_bound_positional_params`]).
+/// `None` for any other initializer — or none — which is not a
+/// statically-visible callable.
+fn declarator_bound_positional_params(decl: Node) -> Option<u8> {
+    let value = decl.child_by_field_name("value")?;
     matches!(value.kind(), "arrow_function" | "function_expression")
-        && fn_binds_at_most_one_param(value)
+        .then(|| fn_bound_positional_params(value))?
 }
 
 /// The local binding name of a bare-identifier default export — the `X` in
@@ -3109,37 +3127,43 @@ fn default_export_local_name(export_node: Node, source: &[u8]) -> Option<String>
         .map(|ident| text_of(ident, source))
 }
 
-/// True when a `export default …` statement's exported value binds at most the
-/// first argument passed to it — the default-export analogue of the named-export
-/// arity signals ([`fn_binds_at_most_one_param`] /
-/// [`declarator_binds_low_arity_callable`]). Handles a directly-exported
-/// arrow/function (`export default (x) => …`, `export default function (x) {}`)
-/// and a bare identifier (`export default notEmpty`) resolved to its module-local
-/// single-arity `const`/`function` binding. Any other exported value — a class, a
-/// literal, a member expression, a multi-parameter callable — is not a
-/// statically-known single-arity callee and returns `false`.
-fn default_export_binds_low_arity(export_node: Node, source: &[u8]) -> bool {
+/// The positional-parameter bound of an `export default …` statement's exported
+/// value — the default-export analogue of the named-export arity signals
+/// ([`fn_bound_positional_params`] / [`declarator_bound_positional_params`]).
+/// Handles a directly-exported arrow/function (`export default (x) => …`,
+/// `export default function (x) {}`) and a bare identifier
+/// (`export default notEmpty`) resolved to its module-local `const`/`function`
+/// binding. Any other exported value — a class, a literal, a member
+/// expression — is not a statically-visible callable and yields `None`.
+fn default_export_bound_positional_params(export_node: Node, source: &[u8]) -> Option<u8> {
     let mut cursor = export_node.walk();
     for child in export_node.named_children(&mut cursor) {
         match child.kind() {
             "function_declaration" | "generator_function_declaration" | "arrow_function"
-            | "function_expression" => return fn_binds_at_most_one_param(child),
+            | "function_expression" => return fn_bound_positional_params(child),
             "identifier" => {
-                return default_export_identifier_binds_low_arity(export_node, child, source);
+                return default_export_identifier_bound_positional_params(
+                    export_node,
+                    child,
+                    source,
+                );
             }
             _ => {}
         }
     }
-    false
+    None
 }
 
 /// Resolve `export default <ident>` to a module-local binding of `ident` and
-/// report whether it is a single-arity callable. Scans the enclosing module's
-/// top-level declarations (both bare and `export`-prefixed) for a matching
+/// report its positional-parameter bound. Scans the enclosing module's top-level
+/// declarations (both bare and `export`-prefixed) for a matching
 /// `const`/`function` and reuses the named-export arity helpers. A name that is
-/// absent, imported, or not a statically-known single-arity callable yields
-/// `false`.
-fn default_export_identifier_binds_low_arity(export_node: Node, ident: Node, source: &[u8]) -> bool {
+/// absent, imported, or not a statically-visible callable yields `None`.
+fn default_export_identifier_bound_positional_params(
+    export_node: Node,
+    ident: Node,
+    source: &[u8],
+) -> Option<u8> {
     let name = text_of(ident, source);
     let mut root = export_node;
     while let Some(parent) = root.parent() {
@@ -3167,35 +3191,33 @@ fn default_export_identifier_binds_low_arity(export_node: Node, ident: Node, sou
         let Some(decl) = decl else {
             continue;
         };
-        if let Some(result) = named_declaration_binds_low_arity(decl, &name, source) {
-            return result;
+        if let Some(binding) = named_declaration_binding(decl, &name, source) {
+            return match binding.kind() {
+                "variable_declarator" => declarator_bound_positional_params(binding),
+                _ => fn_bound_positional_params(binding),
+            };
         }
     }
-    false
+    None
 }
 
-/// If `decl` declares `name` as a `const`/`function` binding, return whether that
-/// binding is a single-arity callable; otherwise `None` (name not declared here).
-fn named_declaration_binds_low_arity(decl: Node, name: &str, source: &[u8]) -> Option<bool> {
+/// The node binding `name` in `decl` — the `function_declaration` itself, or the
+/// `variable_declarator` of a `const`/`let`/`var` list — or `None` when `decl`
+/// does not declare `name`.
+fn named_declaration_binding<'t>(decl: Node<'t>, name: &str, source: &[u8]) -> Option<Node<'t>> {
     match decl.kind() {
         "function_declaration" | "generator_function_declaration" => {
             let id = decl.child_by_field_name("name")?;
-            (text_of(id, source) == name).then(|| fn_binds_at_most_one_param(decl))
+            (text_of(id, source) == name).then_some(decl)
         }
         "lexical_declaration" | "variable_declaration" => {
             let mut cursor = decl.walk();
-            for d in decl.named_children(&mut cursor) {
-                if d.kind() != "variable_declarator" {
-                    continue;
-                }
-                let Some(nm) = d.child_by_field_name("name") else {
-                    continue;
-                };
-                if nm.kind() == "identifier" && text_of(nm, source) == name {
-                    return Some(declarator_binds_low_arity_callable(d));
-                }
-            }
-            None
+            decl.named_children(&mut cursor).find(|d| {
+                d.kind() == "variable_declarator"
+                    && d.child_by_field_name("name").is_some_and(|nm| {
+                        nm.kind() == "identifier" && text_of(nm, source) == name
+                    })
+            })
         }
         _ => None,
     }
@@ -3344,7 +3366,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: oxc_default_export_binds_low_arity(
+                    bound_positional_params: oxc_default_export_bound_positional_params(
                         &export.declaration,
                         &semantic,
                     ),
@@ -3880,7 +3902,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -3911,7 +3933,9 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: oxc_binds_at_most_one_param(&func.params),
+                    bound_positional_params: crate::oxc_helpers::bound_positional_params(
+                        &func.params,
+                    ),
                     is_string_literal_const: false,
                 });
             }
@@ -3929,7 +3953,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -3964,11 +3988,11 @@ fn oxc_extract_export_named(
                 let is_pinia_store_factory =
                     matches!(&decl.id, BindingPattern::BindingIdentifier(_))
                         && decl.init.as_ref().is_some_and(oxc_init_is_pinia_store_factory);
-                // Parity with the tree-sitter `declarator_binds_low_arity_callable`:
-                // a binding initialized with an arrow or function expression that
-                // binds at most one parameter (`export const f = (x) => …`).
-                let binds_at_most_one_param =
-                    decl.init.as_ref().is_some_and(oxc_init_binds_low_arity_callable);
+                // Parity with the tree-sitter `declarator_bound_positional_params`:
+                // the positional-parameter bound of a binding initialized with an
+                // arrow or function expression (`export const f = (x) => …`).
+                let bound_positional_params =
+                    decl.init.as_ref().and_then(oxc_init_bound_positional_params);
                 // Parity with the same-file const-string predicate in
                 // security_detect_non_literal_regexp: a single-identifier `const`
                 // bound to a string literal or a substitution-free template literal.
@@ -3993,7 +4017,7 @@ fn oxc_extract_export_named(
                         is_primitive_literal,
                         is_vue_ref_factory,
                         is_pinia_store_factory,
-                        binds_at_most_one_param,
+                        bound_positional_params,
                         is_string_literal_const,
                     });
                 }
@@ -4011,7 +4035,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -4027,7 +4051,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -4043,7 +4067,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -4064,7 +4088,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
-                    binds_at_most_one_param: false,
+                    bound_positional_params: None,
                     is_string_literal_const: false,
                 });
             }
@@ -4106,7 +4130,7 @@ fn oxc_extract_cjs_export(
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
-            binds_at_most_one_param: false,
+            bound_positional_params: None,
             is_string_literal_const: false,
         });
     };
@@ -4224,7 +4248,7 @@ fn oxc_extract_export_all(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -4244,7 +4268,7 @@ fn oxc_extract_export_all(
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
-        binds_at_most_one_param: false,
+        bound_positional_params: None,
         is_string_literal_const: false,
     });
 }
@@ -4281,22 +4305,20 @@ fn oxc_init_is_pinia_store_factory(init: &oxc_ast::ast::Expression) -> bool {
             if callee.name.as_str() == crate::oxc_helpers::PINIA_STORE_FACTORY))
 }
 
-/// oxc analogue of tree-sitter `fn_binds_at_most_one_param`: a callable binds at
-/// most the first argument when it declares zero or one formal parameters total
-/// (a rest parameter, held separately in `params.rest`, counts as one). Mirrors
-/// `no_array_callback_reference::callee_ignores_extra_args`.
-fn oxc_binds_at_most_one_param(params: &oxc_ast::ast::FormalParameters) -> bool {
-    params.items.len() + usize::from(params.rest.is_some()) <= 1
-}
-
-/// oxc equivalent of tree-sitter `declarator_binds_low_arity_callable`: true when
-/// `init` is an arrow or function expression binding at most one parameter.
-fn oxc_init_binds_low_arity_callable(init: &oxc_ast::ast::Expression) -> bool {
+/// oxc equivalent of tree-sitter `declarator_bound_positional_params`: the
+/// positional-parameter bound of `init` when it is an arrow or function
+/// expression (see `oxc_helpers::bound_positional_params`), `None` for any other
+/// initializer.
+fn oxc_init_bound_positional_params(init: &oxc_ast::ast::Expression) -> Option<u8> {
     use oxc_ast::ast::Expression;
     match init {
-        Expression::ArrowFunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
-        Expression::FunctionExpression(f) => oxc_binds_at_most_one_param(&f.params),
-        _ => false,
+        Expression::ArrowFunctionExpression(f) => {
+            crate::oxc_helpers::bound_positional_params(&f.params)
+        }
+        Expression::FunctionExpression(f) => {
+            crate::oxc_helpers::bound_positional_params(&f.params)
+        }
+        _ => None,
     }
 }
 
@@ -4315,54 +4337,48 @@ fn oxc_default_export_local_name(
     }
 }
 
-/// oxc analogue of tree-sitter [`default_export_binds_low_arity`]: does a
-/// `export default <value>` bind at most the first argument passed to it? True
-/// for a default function declaration binding at most one parameter
-/// (`export default function (x) {}`), a directly-exported single-arity
-/// arrow/function expression, and a bare identifier (`export default notEmpty`)
-/// resolved to its module-local single-arity callable binding.
-fn oxc_default_export_binds_low_arity(
+/// oxc analogue of tree-sitter [`default_export_bound_positional_params`]: the
+/// positional-parameter bound of an `export default <value>` — a default
+/// function declaration (`export default function (x) {}`), a directly-exported
+/// arrow/function expression, or a bare identifier (`export default notEmpty`)
+/// resolved to its module-local callable binding.
+fn oxc_default_export_bound_positional_params(
     decl: &oxc_ast::ast::ExportDefaultDeclarationKind,
     semantic: &oxc_semantic::Semantic,
-) -> bool {
+) -> Option<u8> {
     use oxc_ast::ast::ExportDefaultDeclarationKind;
     if let ExportDefaultDeclarationKind::FunctionDeclaration(func) = decl {
-        return oxc_binds_at_most_one_param(&func.params);
+        return crate::oxc_helpers::bound_positional_params(&func.params);
     }
     decl.as_expression()
-        .is_some_and(|expr| oxc_expr_binds_low_arity(expr, semantic))
+        .and_then(|expr| oxc_expr_bound_positional_params(expr, semantic))
 }
 
-/// oxc equivalent of tree-sitter [`default_export_identifier_binds_low_arity`]:
-/// does `expr` denote a callable binding at most one parameter — a direct
-/// arrow/function expression ([`oxc_init_binds_low_arity_callable`]), or an
-/// identifier resolved through the semantic model to a module-local single-arity
-/// `const`/`function` binding?
-fn oxc_expr_binds_low_arity(
+/// oxc equivalent of tree-sitter [`default_export_identifier_bound_positional_params`]:
+/// the positional-parameter bound of `expr` — a direct arrow/function expression
+/// ([`oxc_init_bound_positional_params`]), or an identifier resolved through the
+/// semantic model to a module-local `const`/`function` binding.
+fn oxc_expr_bound_positional_params(
     expr: &oxc_ast::ast::Expression,
     semantic: &oxc_semantic::Semantic,
-) -> bool {
+) -> Option<u8> {
     use oxc_ast::AstKind;
     use oxc_ast::ast::Expression;
-    if oxc_init_binds_low_arity_callable(expr) {
-        return true;
+    if let Some(bound) = oxc_init_bound_positional_params(expr) {
+        return Some(bound);
     }
     let Expression::Identifier(ident) = expr else {
-        return false;
+        return None;
     };
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
+    let ref_id = ident.reference_id.get()?;
     let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     match semantic.nodes().kind(scoping.symbol_declaration(sym_id)) {
         AstKind::VariableDeclarator(decl) => {
-            decl.init.as_ref().is_some_and(oxc_init_binds_low_arity_callable)
+            decl.init.as_ref().and_then(oxc_init_bound_positional_params)
         }
-        AstKind::Function(func) => oxc_binds_at_most_one_param(&func.params),
-        _ => false,
+        AstKind::Function(func) => crate::oxc_helpers::bound_positional_params(&func.params),
+        _ => None,
     }
 }
 
@@ -5523,7 +5539,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
-        binds_at_most_one_param: false,
+        bound_positional_params: None,
         is_string_literal_const: false,
     });
 }
@@ -5602,7 +5618,7 @@ fn extract_rust_use(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
-                binds_at_most_one_param: false,
+                bound_positional_params: None,
                 is_string_literal_const: false,
             });
         }
@@ -8384,11 +8400,10 @@ mod tests {
         "export default function hello() {}",
         "export default class Widget {}",
         "export default function (x, y) { return x + y; }",
-        // `export default` single-arity forms: both extractors compute
-        // `binds_at_most_one_param` for the default export (the #7618 arity lever
+        // `export default` callable forms: both extractors compute
+        // `bound_positional_params` for the default export (the #7618 arity lever
         // applied to the default form) — a bare arrow, and a bare identifier
-        // resolved to a module-local single-arity `const`/`function`. The
-        // two-parameter variants stay `false`. Both paths must agree.
+        // resolved to a module-local `const`/`function`. Both paths must agree.
         "export default (x) => x;",
         "const single = (v) => !!v;\nexport default single;",
         "const dual = (a, b) => a + b;\nexport default dual;",
@@ -8555,34 +8570,46 @@ mod tests {
         assert!(extract.module_augmentations.is_empty());
     }
 
-    // #7706: the default export's `binds_at_most_one_param` is computed from the
-    // exported value, not hardcoded `false` — a bare identifier is resolved to
-    // its module-local single-arity binding (the `export default notEmpty`
-    // idiom), while a multi-parameter callee stays `false`.
+    // #7706: the default export's `bound_positional_params` is computed from the
+    // exported value, not hardcoded `None` — a bare identifier is resolved to
+    // its module-local binding (the `export default notEmpty` idiom), while a
+    // non-callable default carries no bound.
     #[test]
     fn oxc_computes_default_export_arity() {
-        let binds = |src: &str| {
+        let bound = |src: &str| {
             let extract = extract_ts_oxc(src, Path::new("d.ts")).expect("oxc extract");
             let def = extract
                 .exports
                 .iter()
                 .find(|e| e.kind == ExportKind::Default)
                 .expect("default export");
-            def.binds_at_most_one_param
+            def.bound_positional_params
         };
         // `export default <single-arity>` — bare arrow, and identifiers resolved
         // to a module-local single-arity `const`/`function`.
-        assert!(binds("export default (x) => !!x;"));
-        assert!(binds(
-            "const notEmpty = (v) => !!v;\nexport default notEmpty;"
-        ));
-        assert!(binds("function guard(v) { return !!v; }\nexport default guard;"));
-        assert!(binds("export default function only(x) { return x; }"));
-        // `export default <multi-arity or non-callable>` stays `false`.
-        assert!(!binds("const dual = (a, b) => a + b;\nexport default dual;"));
-        assert!(!binds("export default function (a, b) { return a + b; }"));
-        assert!(!binds("export default 42;"));
-        assert!(!binds("export default class Widget {}"));
+        assert_eq!(bound("export default (x) => !!x;"), Some(1));
+        assert_eq!(
+            bound("const notEmpty = (v) => !!v;\nexport default notEmpty;"),
+            Some(1)
+        );
+        assert_eq!(
+            bound("function guard(v) { return !!v; }\nexport default guard;"),
+            Some(1)
+        );
+        assert_eq!(bound("export default function only(x) { return x; }"), Some(1));
+        // A two-parameter default carries its own bound; `binds_at_most(1)` is
+        // then false while `binds_at_most(2)` holds (`reduce`'s budget, #8137).
+        assert_eq!(
+            bound("const dual = (a, b) => a + b;\nexport default dual;"),
+            Some(2)
+        );
+        assert_eq!(
+            bound("export default function (a, b) { return a + b; }"),
+            Some(2)
+        );
+        // A non-callable default has no statically-visible parameter list.
+        assert_eq!(bound("export default 42;"), None);
+        assert_eq!(bound("export default class Widget {}"), None);
     }
 
     #[test]
