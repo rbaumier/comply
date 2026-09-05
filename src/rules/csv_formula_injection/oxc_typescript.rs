@@ -4,6 +4,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::identifier_words::split_identifier_words;
 use oxc_ast::ast::{ArrayExpressionElement, Expression};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -253,33 +254,6 @@ fn assignment_target_is_csv(target: &oxc_ast::ast::AssignmentTarget) -> bool {
 /// `csvironment` or `recsv` (where `csv` is buried mid-word) do not.
 fn name_is_csv(name: &str) -> bool {
     split_identifier_words(name).any(|word| word.eq_ignore_ascii_case("csv"))
-}
-
-/// Splits an identifier into word tokens at camelCase boundaries and any
-/// non-alphanumeric separator (`_`, `-`, `.`). `buildCsvRow` → `build`, `Csv`,
-/// `Row`.
-fn split_identifier_words(name: &str) -> impl Iterator<Item = &str> {
-    let mut start = 0;
-    let bytes = name.as_bytes();
-    let mut boundaries = Vec::new();
-    for (i, &b) in bytes.iter().enumerate() {
-        let is_sep = !b.is_ascii_alphanumeric();
-        let is_camel_boundary =
-            i > 0 && b.is_ascii_uppercase() && bytes[i - 1].is_ascii_lowercase();
-        if is_sep {
-            if start < i {
-                boundaries.push((start, i));
-            }
-            start = i + 1;
-        } else if is_camel_boundary {
-            boundaries.push((start, i));
-            start = i;
-        }
-    }
-    if start < bytes.len() {
-        boundaries.push((start, bytes.len()));
-    }
-    boundaries.into_iter().map(move |(s, e)| &name[s..e])
 }
 
 /// A cell is flagged when it is a *dynamic* string expression not already

@@ -7,6 +7,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::identifier_words::split_identifier_words;
 use oxc_ast::ast::{Argument, Expression, TemplateLiteral};
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -368,32 +369,6 @@ fn is_benign_token(segment: &str) -> bool {
     benign_qualifier_found
 }
 
-/// Splits an identifier into word tokens at camelCase boundaries and any
-/// non-alphanumeric separator (`_`, `-`, `.`). `imageToken` → `image`, `Token`;
-/// `tgt_lang_token` → `tgt`, `lang`, `token`.
-fn split_identifier_words(name: &str) -> impl Iterator<Item = &str> {
-    let bytes = name.as_bytes();
-    let mut start = 0;
-    let mut boundaries = Vec::new();
-    for (i, &b) in bytes.iter().enumerate() {
-        let is_sep = !b.is_ascii_alphanumeric();
-        let is_camel_boundary =
-            i > 0 && b.is_ascii_uppercase() && bytes[i - 1].is_ascii_lowercase();
-        if is_sep {
-            if start < i {
-                boundaries.push((start, i));
-            }
-            start = i + 1;
-        } else if is_camel_boundary {
-            boundaries.push((start, i));
-            start = i;
-        }
-    }
-    if start < bytes.len() {
-        boundaries.push((start, bytes.len()));
-    }
-    boundaries.into_iter().map(move |(s, e)| &name[s..e])
-}
 
 #[cfg(test)]
 impl crate::rules::test_helpers::RunRule for Check {

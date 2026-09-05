@@ -36,6 +36,7 @@ pub mod elysia_helpers;
 pub mod file_ctx;
 pub mod html_rel_helpers;
 pub mod html_sink_helpers;
+pub mod identifier_words;
 pub mod jsdoc_helpers;
 pub mod jsdoc_text_helpers;
 pub mod jsx;
