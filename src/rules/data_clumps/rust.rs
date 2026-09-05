@@ -32,6 +32,13 @@
 //! shared fields into a nested type would change the layout and break the
 //! contract.
 //!
+//! A subset that is the complete field set of some — but not all —
+//! participating structs is not reported: the saturated struct already *is* the
+//! shared type the message asks for, so the only edit left is nesting it inside
+//! the larger participants, which removes no duplication. A subset that
+//! saturates every participant (structs with identical field sets) and a subset
+//! that is a strict subset of every participant are both still reported.
+//!
 //! Same-name `struct_item`s that each carry a `#[cfg(...)]` conditional-
 //! compilation gate are collapsed to a single representative before the
 //! pairwise scan. Two definitions of one struct name under mutually-exclusive
@@ -64,7 +71,7 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     // shared field name groups two structs only when both agree on it: a field
     // that is optional in one struct and mandatory in the other cannot be
     // factored into one shared type.
-    let mut subset_occurrences: FxHashMap<Vec<(String, bool)>, Vec<(usize, bool)>> =
+    let mut subset_occurrences: FxHashMap<Vec<(String, bool)>, Vec<Occurrence>> =
         FxHashMap::default();
     for sf in &struct_fields {
         for combo in combinations(&sf.names, 3) {
@@ -76,10 +83,11 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                     (f, optional)
                 })
                 .collect();
-            subset_occurrences
-                .entry(keyed)
-                .or_default()
-                .push((sf.line, all_generic));
+            subset_occurrences.entry(keyed).or_default().push(Occurrence {
+                line: sf.line,
+                all_generic,
+                field_count: sf.names.len(),
+            });
         }
     }
 
@@ -87,13 +95,23 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     let mut results: Vec<(usize, String)> = Vec::new();
 
     for (subset, occurrences) in &subset_occurrences {
+        // A struct whose whole field set is the subset already is the shared
+        // type; when it participates alongside wider structs there is nothing
+        // left to extract, only the unrelated advice to nest it.
+        let saturating = occurrences
+            .iter()
+            .filter(|o| o.field_count == subset.len())
+            .count();
+        if saturating > 0 && saturating < occurrences.len() {
+            continue;
+        }
         // A struct whose every subset field is one of its own generic
         // parameters cannot be merged into a shared type, so it does not count
         // toward the clump.
         let flaggable: Vec<usize> = occurrences
             .iter()
-            .filter(|&&(_, all_generic)| !all_generic)
-            .map(|&(line, _)| line)
+            .filter(|o| !o.all_generic)
+            .map(|o| o.line)
             .collect();
         // A two-struct clash whose every shared field is `Arc<X>`/`Rc<X>` in one
         // and `Weak<X>` in the other (same inner `X`) is a strong/weak ownership
@@ -139,6 +157,18 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             span: None,
         });
     }
+}
+
+/// One struct's participation in a shared field subset.
+struct Occurrence {
+    /// Line the struct is declared on.
+    line: usize,
+    /// True when the struct types every subset field with its own declared
+    /// generic parameters, so extracting them removes no duplication.
+    all_generic: bool,
+    /// The struct's total field count, compared against the subset size to tell
+    /// a strict subset from a struct the subset saturates.
+    field_count: usize,
 }
 
 /// Per-struct field data gathered for clump detection.
@@ -1109,5 +1139,79 @@ struct Handle {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// ttf-parser's COLR records: the clump is `ColorStopRaw`'s entire field
+    /// set, so extracting it produces a type identical to a struct that already
+    /// exists. Neither participant can act on the diagnostic.
+    #[test]
+    fn no_fp_on_clump_saturating_one_participant_issue_8157() {
+        let src = r#"
+#[derive(Clone, Copy, Debug)]
+pub struct ColorStopRaw {
+    pub stop_offset: u16,
+    pub palette_index: u16,
+    pub alpha: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VarColorStopRaw {
+    pub stop_offset: u16,
+    pub palette_index: u16,
+    pub alpha: u16,
+    pub var_index_base: u32,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A subset that saturates one participant and is a strict subset of the
+    /// others is the same non-finding however many wider structs join it.
+    #[test]
+    fn no_fp_on_clump_saturating_one_of_three_participants() {
+        let src = r#"
+struct Base {
+    host: String,
+    port: u16,
+    proto: u8,
+}
+
+struct Listener {
+    host: String,
+    port: u16,
+    proto: u8,
+    backlog: u32,
+}
+
+struct Dialer {
+    host: String,
+    port: u16,
+    proto: u8,
+    timeout: u64,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// The saturation check only silences a *mixed* subset: a clump that is a
+    /// strict subset of every participant is the case the rule exists for.
+    #[test]
+    fn still_flags_clump_that_saturates_no_participant() {
+        let src = r#"
+struct Listener {
+    host: String,
+    port: u16,
+    proto: u8,
+    backlog: u32,
+}
+
+struct Dialer {
+    host: String,
+    port: u16,
+    proto: u8,
+    timeout: u64,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
     }
 }
