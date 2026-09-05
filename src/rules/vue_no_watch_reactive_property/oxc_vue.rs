@@ -2,12 +2,16 @@
 //!
 //! Extracts `<script>` / `<script setup>` blocks with tree-sitter-vue, re-parses
 //! each block with oxc, then flags `watch(<obj>.<prop>, …)` only when `<obj>`
-//! resolves to a reactive proxy. A proxy read returns the property's own value,
-//! so `watch()` receives a snapshot instead of a trackable source.
+//! resolves to a reactive proxy AND the read returns the property's own value —
+//! `watch()` then receives a snapshot instead of a trackable source.
 //!
 //! A receiver whose declaration is unknown is never evidence. `ctx.modelValue`,
 //! where `ctx` comes from `inject()` or a composable, is normally a `Ref` or a
 //! `ComputedRef`, and `watch(ref, …)` is correct Vue 3 usage.
+//!
+//! Nor is a proven receiver enough on its own: `reactive()` converts every
+//! nesting level, so an object-valued property of a deep proxy reads back as a
+//! nested proxy and is a valid `watch` source.
 //!
 //! The `OxcCheck` sits here rather than in the usual sibling `oxc_typescript.rs`:
 //! the rule is registered for `Language::Vue` only, so a TypeScript module would
@@ -15,7 +19,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_pinia_store_binding, is_vue_reactive_object_target,
+    binding_init_call_object_literal_arg, byte_offset_to_line_col, is_pinia_store_binding,
+    is_vue_deep_reactive_receiver, is_vue_reactive_object_target, object_literal_property_value,
     root_identifier_of_expr,
 };
 use crate::rules::backend::{AstCheck, AstKind, AstType, CheckCtx, OxcCheck};
@@ -67,21 +72,99 @@ fn binding_is_props_object(ident: &IdentifierReference, semantic: &Semantic) -> 
     decl.init.as_ref().is_some_and(is_define_props_call)
 }
 
+/// The static key path of a member chain, root first — `["user", "name"]` for
+/// `state.user.name`. A computed segment contributes its key when it is a string
+/// literal (`state['my key'].x`). Returns `false`, leaving `keys` unusable, when
+/// a segment's key is not statically known or the chain is broken by anything
+/// other than member links.
+fn static_key_path<'a>(expr: &'a Expression<'a>, keys: &mut Vec<&'a str>) -> bool {
+    let (object, key) = match expr {
+        Expression::Identifier(_) => return true,
+        Expression::StaticMemberExpression(member) => {
+            (&member.object, member.property.name.as_str())
+        }
+        Expression::ComputedMemberExpression(member) => match &member.expression {
+            Expression::StringLiteral(literal) => (&member.object, literal.value.as_str()),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    if !static_key_path(object, keys) {
+        return false;
+    }
+    keys.push(key);
+    true
+}
+
+/// Whether reading `member` off a deep `reactive()` proxy yields another proxy
+/// rather than a snapshot. `reactive()` converts every nesting level, so a
+/// property holding an object or an array reads back as a proxy — a `watch`
+/// source Vue traverses deeply, not a snapshot.
+///
+/// The proof is the object literal the proxy was built from, walked one nesting
+/// level per key of the watched chain. Anything that breaks the walk — a
+/// non-literal `reactive()` argument, a key absent from the literal or shadowed
+/// by a spread, a computed non-string key, a value that is a call or an
+/// identifier — leaves the property's value unknown, and an unknown value is no
+/// proof of a proxy: the caller keeps flagging.
+fn deep_read_yields_a_proxy(member: &StaticMemberExpression, semantic: &Semantic) -> bool {
+    let Some(root) = root_identifier_of_expr(&member.object) else {
+        return false;
+    };
+    let Some(literal) = binding_init_call_object_literal_arg(root, semantic) else {
+        return false;
+    };
+    let mut keys = Vec::new();
+    if !static_key_path(&member.object, &mut keys) {
+        return false;
+    }
+    keys.push(member.property.name.as_str());
+
+    let mut current = literal;
+    for (depth, key) in keys.iter().enumerate() {
+        let Some(value) = object_literal_property_value(current, key) else {
+            return false;
+        };
+        if depth + 1 == keys.len() {
+            return matches!(
+                value,
+                Expression::ObjectExpression(_) | Expression::ArrayExpression(_)
+            );
+        }
+        let Expression::ObjectExpression(nested) = value else {
+            return false;
+        };
+        current = nested;
+    }
+    false
+}
+
 /// Whether reading `member` returns the property's own value rather than a
 /// trackable source.
 ///
-/// Three receivers prove it, each resolved from the chain's root binding. A
-/// `reactive()` / `shallowReactive()` proxy, decided by the shared
-/// [`is_vue_reactive_object_target`] predicate, which confirms the factory is
-/// Vue's own and settles how far down the chain each factory's reactivity
-/// reaches. A Pinia store instance, decided by [`is_pinia_store_binding`], which
-/// resolves the store factory across modules. And the props object, which
-/// exposes the values the parent passed in.
+/// Three receivers put the read on a reactive container, each resolved from the
+/// chain's root binding. A `reactive()` / `shallowReactive()` proxy, decided by
+/// the shared [`is_vue_reactive_object_target`] predicate, which confirms the
+/// factory is Vue's own and settles how far down the chain each factory's
+/// reactivity reaches. A Pinia store instance, decided by
+/// [`is_pinia_store_binding`], which resolves the store factory across modules.
+/// And the props object, which exposes the values the parent passed in.
+///
+/// Proving the container is only half the question: what the read returns also
+/// depends on the property. A deep `reactive()` proxy converts every nesting
+/// level, so an object-valued property reads back as a proxy and is a valid
+/// `watch` source (see [`deep_read_yields_a_proxy`]).
 fn member_reads_a_snapshot(
     member: &StaticMemberExpression,
     semantic: &Semantic,
     ctx: &CheckCtx,
 ) -> bool {
+    if is_vue_deep_reactive_receiver(&member.object, semantic, ctx.project, ctx.path) {
+        return !deep_read_yields_a_proxy(member, semantic);
+    }
+    // The deep arm is settled above, so only `shallowReactive()` can still match
+    // here — a root-level read off a shallow proxy, which returns the stored
+    // value as-is.
     if is_vue_reactive_object_target(member, semantic, ctx.project, ctx.path) {
         return true;
     }
@@ -263,6 +346,51 @@ mod tests {
         );
     }
 
+    /// A shallow proxy exposes nested values as-is, so an object-valued property
+    /// reads back raw — not a proxy, whatever the deep factory would have done.
+    #[test]
+    fn flags_object_valued_property_of_shallow_reactive_object() {
+        assert_eq!(
+            run(
+                "import { shallowReactive, watch } from 'vue'\n\
+                 const state = shallowReactive({ filters: { page: 1 } })\n\
+                 watch(state.filters, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
+    /// A call-valued property leaves the read's value unknown, and an unknown
+    /// value is no proof of a proxy.
+    #[test]
+    fn flags_call_valued_property_of_reactive_object() {
+        assert_eq!(
+            run(
+                "import { reactive, watch } from 'vue'\n\
+                 const state = reactive({ filters: makeFilters() })\n\
+                 watch(state.filters, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
+    /// A spread may replace the property the literal shows, so the literal stops
+    /// being evidence.
+    #[test]
+    fn flags_property_shadowed_by_a_later_spread() {
+        assert_eq!(
+            run(
+                "import { reactive, watch } from 'vue'\n\
+                 const state = reactive({ filters: { page: 1 }, ...overrides })\n\
+                 watch(state.filters, cb)"
+            )
+            .len(),
+            1
+        );
+    }
+
     #[test]
     fn flags_state_of_pinia_store() {
         assert_eq!(
@@ -343,6 +471,47 @@ mod tests {
                  watch(rootContext.filterState, (_newValue, oldValue) => {\n\
                  if (oldValue.count === 0) highlightFirstItem()\n\
                  })"
+            )
+            .is_empty()
+        );
+    }
+
+    /// #8221: `reactive()` converts every nesting level, so `state.filters` is
+    /// itself a proxy and a valid `watch` source.
+    #[test]
+    fn allows_object_valued_property_of_deep_reactive_object() {
+        assert!(
+            run(
+                "import { reactive, watch } from 'vue'\n\
+                 const state = reactive({ filters: { page: 1 } })\n\
+                 watch(state.filters, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// An array is converted like any other object by `reactive()`.
+    #[test]
+    fn allows_array_valued_property_of_deep_reactive_object() {
+        assert!(
+            run(
+                "import { reactive, watch } from 'vue'\n\
+                 const state = reactive({ items: [] })\n\
+                 watch(state.items, cb)"
+            )
+            .is_empty()
+        );
+    }
+
+    /// The nested level is a proxy too, so a chain ending on an object stays a
+    /// valid source at any depth.
+    #[test]
+    fn allows_nested_object_valued_property_of_deep_reactive_object() {
+        assert!(
+            run(
+                "import { reactive, watch } from 'vue'\n\
+                 const state = reactive({ user: { address: { city: '' } } })\n\
+                 watch(state.user.address, cb)"
             )
             .is_empty()
         );

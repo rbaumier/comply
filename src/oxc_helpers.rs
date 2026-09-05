@@ -5726,6 +5726,31 @@ pub fn object_literal_callable_member_bounds(
         .collect()
 }
 
+/// The value an object literal binds to `key` — the `0` of `{ count: 0 }` for
+/// `key = "count"`. A later property of the same name wins, as it does at
+/// runtime. `None` when the key is absent, is computed, or when a spread follows
+/// the matching property (`{ count: 0, ...overrides }`) and may replace it: the
+/// literal is then no evidence of that property's value.
+#[must_use]
+pub fn object_literal_property_value<'a>(
+    object: &'a oxc_ast::ast::ObjectExpression<'a>,
+    key: &str,
+) -> Option<&'a oxc_ast::ast::Expression<'a>> {
+    use oxc_ast::ast::ObjectPropertyKind;
+    let mut value = None;
+    for property in &object.properties {
+        match property {
+            ObjectPropertyKind::ObjectProperty(prop) => {
+                if prop.key.static_name().as_deref() == Some(key) {
+                    value = Some(&prop.value);
+                }
+            }
+            ObjectPropertyKind::SpreadProperty(_) => value = None,
+        }
+    }
+    value
+}
+
 /// True when `decl_node_id` is the declaration of a function's first formal
 /// parameter (the parameter chain reaches a `FormalParameters` whose first item
 /// spans the declaration before any enclosing function boundary).
@@ -6515,6 +6540,41 @@ pub fn is_vue_deep_reactive_receiver(
     root_identifier_of_expr(object).is_some_and(|base| {
         is_vue_factory_binding(base, semantic, VUE_DEEP_REACTIVE_FACTORIES, project, path)
     })
+}
+
+/// The object literal a binding's initializer call was given as its first
+/// argument — `{ count: 0 }` for `const state = reactive({ count: 0 })`.
+/// Resolves `ident` through `reference_id` → symbol → declaration, then peels
+/// transparent wrappers off the initializer (`reactive({…}) as State`,
+/// `reactive({…})!`; see [`peel_value_wrappers`]). `None` for every other shape —
+/// no initializer, a non-call initializer, or a call handed a variable or another
+/// call: the properties the value was built from are then not statically known.
+#[must_use]
+pub fn binding_init_call_object_literal_arg<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::ObjectExpression<'a>> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    let declarator = std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl),
+            _ => None,
+        })?;
+    let Expression::CallExpression(call) = peel_value_wrappers(declarator.init.as_ref()?) else {
+        return None;
+    };
+    match call.arguments.first()?.as_expression()? {
+        Expression::ObjectExpression(object) => Some(object),
+        _ => None,
+    }
 }
 
 /// Pinia's store-factory function. A `defineStore(id, setup | options)` call
