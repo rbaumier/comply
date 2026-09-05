@@ -1,5 +1,7 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_or_resolves_to_literal};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, expression_is_or_resolves_to_literal, expression_is_symbol_value,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryExpression, Expression};
 use std::sync::Arc;
@@ -56,7 +58,9 @@ impl OxcCheck for Check {
         // check), not byte-by-byte, so a comparison where either operand is a
         // `Symbol()` / `Symbol.for(...)` value cannot leak timing. This covers
         // the capability-token idiom (`const secret = Symbol(); arg === secret`).
-        if is_symbol_operand(&bin.left, semantic) || is_symbol_operand(&bin.right, semantic) {
+        if expression_is_symbol_value(&bin.left, semantic)
+            || expression_is_symbol_value(&bin.right, semantic)
+        {
             return;
         }
         // A function reference is compared by identity (a pointer/slot check),
@@ -180,60 +184,6 @@ fn expr_text(expr: &Expression) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// True when `expr` is a `Symbol(...)` or `Symbol.for(...)` call expression.
-/// These produce JS `Symbol` values, which are compared by reference identity
-/// rather than byte content.
-fn is_symbol_call(expr: &Expression) -> bool {
-    let Expression::CallExpression(call) = expr else {
-        return false;
-    };
-    match &call.callee {
-        Expression::Identifier(id) => id.name == "Symbol",
-        Expression::StaticMemberExpression(member) => {
-            matches!(&member.object, Expression::Identifier(id) if id.name == "Symbol")
-                && member.property.name == "for"
-        }
-        _ => false,
-    }
-}
-
-/// True when `expr` is provably a `Symbol` value: either an inline
-/// `Symbol(...)` / `Symbol.for(...)` call, or an identifier whose binding is a
-/// `const`/`let` declarator initialised from such a call. Symbols are compared
-/// by reference identity, so they are immune to timing attacks regardless of
-/// the equality operator used.
-///
-/// Resolves the binding via `reference_id` → symbol → declaration node, then
-/// inspects the `VariableDeclarator` initializer. A binding without a
-/// `Symbol(...)` initializer (a stored secret string, buffer, or token) does
-/// not match and stays flagged.
-fn is_symbol_operand(expr: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
-    use oxc_ast::AstKind;
-
-    if is_symbol_call(expr) {
-        return true;
-    }
-    let Expression::Identifier(ident) = expr else {
-        return false;
-    };
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
-    {
-        if let AstKind::VariableDeclarator(decl) = kind {
-            return decl.init.as_ref().is_some_and(is_symbol_call);
-        }
-    }
-    false
 }
 
 /// True when `expr` is provably a reference to a function rather than a secret
@@ -541,6 +491,18 @@ mod tests {
         assert!(
             run_on("const secret = Symbol.for('x'); function f(arg) { if (arg === secret) {} }")
                 .is_empty()
+        );
+    }
+
+    /// A `unique symbol` annotation is the binding's contract, so the operand is
+    /// a symbol even when the declaration carries no initializer to read.
+    #[test]
+    fn allows_declared_unique_symbol_token() {
+        assert!(
+            run_on(
+                "declare const secret: unique symbol; function f(arg) { if (arg === secret) {} }"
+            )
+            .is_empty()
         );
     }
 
