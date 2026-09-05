@@ -118,20 +118,22 @@ impl OxcCheck for Check {
             return;
         }
 
-        // Check for <label htmlFor="<id>"> or <label for="<id>"> anywhere in the file
+        // Explicit association: an element elsewhere in the file carries
+        // `htmlFor` / `for` matching this control's `id`. The attribute, not the
+        // tag, is the signal — `htmlFor` only reaches the DOM through a
+        // `<label>`, so a registry re-export (`<Label htmlFor>`, `<FormLabel
+        // htmlFor>`) associates just as an intrinsic `<label>` does.
         let maybe_id = opening.attributes.iter().find_map(|attr_item| {
             let JSXAttributeItem::Attribute(attr) = attr_item else { return None; };
             let JSXAttributeName::Identifier(name_ident) = &attr.name else { return None; };
             if name_ident.name.as_str() != "id" { return None; }
             let Some(JSXAttributeValue::StringLiteral(lit)) = &attr.value else { return None; };
-            Some(lit.value.clone())
+            Some(lit.value)
         });
 
         if let Some(id) = maybe_id {
             let has_associated_label = semantic.nodes().iter().any(|n| {
                 let AstKind::JSXOpeningElement(label_opening) = n.kind() else { return false; };
-                let JSXElementName::Identifier(label_name) = &label_opening.name else { return false; };
-                if label_name.name.as_str() != "label" { return false; }
                 label_opening.attributes.iter().any(|attr_item| {
                     let JSXAttributeItem::Attribute(attr) = attr_item else { return false; };
                     let JSXAttributeName::Identifier(name_ident) = &attr.name else { return false; };
@@ -309,6 +311,31 @@ mod tests {
                 </button>
             );
         "#).len(), 1);
+    }
+
+    // Regression #8473: a registry `<Label htmlFor>` associates like `<label htmlFor>`.
+    #[test]
+    fn no_fp_on_input_labelled_by_component_htmlfor() {
+        assert!(run_on(r#"
+            const C = ({ value, onChange }) => (
+                <div>
+                    <Label htmlFor="email">Email</Label>
+                    <input id="email" type="email" value={value} onChange={onChange} />
+                </div>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_select_labelled_by_form_label_htmlfor() {
+        assert!(run_on(r#"
+            const C = () => (
+                <div>
+                    <FormLabel htmlFor="fruit">Fruit</FormLabel>
+                    <select id="fruit" />
+                </div>
+            );
+        "#).is_empty());
     }
 
     // Guard: a sibling <label> (not an ancestor) does not satisfy implicit association.
