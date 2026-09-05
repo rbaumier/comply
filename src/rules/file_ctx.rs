@@ -670,29 +670,6 @@ fn has_test_internal_dir(normalized: &str) -> bool {
         .any(|pair| TEST_ROOT_SEGMENTS.contains(&pair[0]) && pair[1] == "internal")
 }
 
-/// True when `path` is a benchmark source file: a `benches`, `bench`,
-/// `benchmark`, or `benchmarks` directory segment (matched whole between `/`
-/// delimiters, so `benches-old/` or `workbench/` are not matched), or a file
-/// stem carrying a `_bench`/`-bench` marker (e.g. `parse_bench.rs`), or a
-/// `.bench.` filename infix (e.g. `parse.bench.ts`), or a file whose stem is
-/// exactly `bench` or `benchmark` (e.g. Turf's per-package `bench.ts`).
-fn is_benchmark_path(normalized: &str) -> bool {
-    if normalized
-        .split('/')
-        .any(|seg| matches!(seg, "benches" | "bench" | "benchmark" | "benchmarks"))
-    {
-        return true;
-    }
-    let Some(name) = normalized.rsplit('/').next() else {
-        return false;
-    };
-    if name.contains(".bench.") {
-        return true;
-    }
-    let stem = name.split('.').next().unwrap_or("");
-    stem == "bench" || stem == "benchmark" || stem.ends_with("_bench") || stem.ends_with("-bench")
-}
-
 pub(crate) fn scan_path(path: &Path) -> PathSegments {
     let lower = path.to_string_lossy().replace('\\', "/");
     PathSegments {
@@ -766,7 +743,7 @@ pub(crate) fn scan_path(path: &Path) -> PathSegments {
         is_relaxed_dir: has_relaxed_segment(&lower),
         in_aux_dir: crate::rules::path_utils::is_aux_dir_path(path),
         in_fuzz_targets: crate::rules::path_utils::is_fuzz_targets_path(path),
-        in_benchmark_dir: is_benchmark_path(&lower),
+        in_benchmark_dir: crate::rules::path_utils::is_benchmark_path(path),
         is_framework_hook_file: is_framework_hook_file(path),
         is_linter_spec_fixture: crate::rules::path_utils::is_linter_spec_fixture(path),
         is_type_test_file: crate::rules::path_utils::is_type_test_file(path),

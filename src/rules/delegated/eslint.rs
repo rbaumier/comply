@@ -567,6 +567,9 @@ fn entry_with_filter(
 //       or only such entries import it (`ProjectCtx::is_script_tooling_module`).
 //       A `npm run build` task's progress and warnings are what the developer
 //       reads in the terminal; there is no log sink to route them to.
+//    c. The file is a benchmark harness, whose printed measurements are the
+//       entire product of running it, or it sits in a top-level CLI/automation
+//       directory of the project, executed directly and never imported.
 //
 // A third drop is about the `console` member itself rather than the file: the
 // diagnostic survives only when the member is *invoked*. Reading the reference
@@ -581,7 +584,9 @@ struct NoConsoleFilter;
 
 impl PostFilter for NoConsoleFilter {
     fn keep(&self, diag: &crate::diagnostic::Diagnostic, source: Option<&str>) -> bool {
-        if is_browser_targeted(&diag.path, source) {
+        if is_browser_targeted(&diag.path, source)
+            || crate::rules::path_utils::is_benchmark_path(&diag.path)
+        {
             return false;
         }
         let Some(src) = source else {
@@ -601,11 +606,24 @@ impl PostFilter for NoConsoleFilter {
     ) -> bool {
         if is_cli_tool_package(&diag.path, project)
             || project.is_script_tooling_module(&diag.path)
+            || is_in_top_level_script_dir(&diag.path, project)
         {
             return false;
         }
         self.keep(diag, source)
     }
+}
+
+/// True when `path` sits in a top-level CLI/automation/benchmark directory of
+/// the project (`<root>/scripts/`, `<root>/bin/`, `<root>/benchmarks/`, …).
+/// Those files are run directly by a shell or a build runner, so the terminal is
+/// the only place their output can go. Anchored at the project root, so a nested
+/// `src/scripts/util.ts` library helper stays subject to the rule.
+fn is_in_top_level_script_dir(path: &std::path::Path, project: &crate::project::ProjectCtx) -> bool {
+    project
+        .project_root
+        .as_deref()
+        .is_some_and(|root| crate::rules::path_utils::is_top_level_script_dir_path(path, root))
 }
 
 /// Re-parse `src` and report whether the `console.<member>` expression covering
@@ -1486,6 +1504,69 @@ mod tests {
         let pkg = r#"{"name":"libphonenumber-js","scripts":{"test":"mocha"}}"#;
         let source = "console.log('generating metadata')\n";
         assert!(keep_in_project(pkg, "build-scripts/generate.js", source));
+    }
+
+    // ── benchmarks and top-level script dirs (dropped) — issue #8171 ─────────
+
+    /// Load a real project — import index and project root included — from
+    /// `(relative-path, contents)` pairs, then run the project-aware filter on a
+    /// diagnostic anchored at the start of `rel_file`.
+    fn keep_in_loaded_project(files: &[(&str, &str)], rel_file: &str) -> bool {
+        let (dir, project) = crate::project::load_with_files(files);
+        let file = dir.path().join(rel_file);
+        let source = std::fs::read_to_string(&file).unwrap();
+        crate::oxc_helpers::reset_file_caches();
+        let d = Diagnostic { path: Arc::from(file.as_path()), ..diag("unused") };
+        FILTER.keep_with_project(&d, Some(&source), &project)
+    }
+
+    const LUXON_PKG: &str = r#"{"name":"luxon","main":"./src/luxon.js"}"#;
+    const BENCH_SRC: &str = "console.log('elapsed', ms);\n";
+
+    #[test]
+    fn drops_console_in_a_benchmark_harness() {
+        // moment/luxon: `benchmarks/info.js` prints timings — that output is the
+        // entire product of running it.
+        for rel in ["benchmarks/info.js", "bench/x.js", "benchmark/x.js", "parse.bench.js"] {
+            assert!(
+                !keep_in_loaded_project(&[("package.json", LUXON_PKG), (rel, BENCH_SRC)], rel),
+                "benchmark harness {rel} must not be flagged"
+            );
+        }
+    }
+
+    #[test]
+    fn drops_console_in_a_top_level_script_dir() {
+        assert!(!keep_in_loaded_project(
+            &[("package.json", LUXON_PKG), ("scripts/precompile.js", BENCH_SRC)],
+            "scripts/precompile.js",
+        ));
+    }
+
+    #[test]
+    fn keeps_console_in_a_nested_scripts_helper() {
+        // Negative space: the top-level anchor is what earns the exemption — a
+        // `src/scripts/` library helper is product code.
+        assert!(keep_in_loaded_project(
+            &[("package.json", LUXON_PKG), ("src/scripts/util.js", BENCH_SRC)],
+            "src/scripts/util.js",
+        ));
+    }
+
+    #[test]
+    fn drops_console_in_a_task_an_npm_script_runs() {
+        // luxon's `tasks/buildAll.js`, wired as `"build": "babel-node
+        // tasks/buildAll.js"` — a build task's progress output is its UI.
+        let pkg = r#"{"name":"luxon","scripts":{"build":"babel-node tasks/buildAll.js"}}"#;
+        assert!(!keep_in_project(pkg, "tasks/buildAll.js", BENCH_SRC));
+    }
+
+    #[test]
+    fn keeps_console_in_a_task_no_npm_script_runs() {
+        // The exemption is earned by the manifest: `tasks/` alone is not a
+        // top-level script directory.
+        let pkg = r#"{"name":"luxon","main":"./src/luxon.js"}"#;
+        assert!(keep_in_project(pkg, "tasks/buildAll.js", BENCH_SRC));
     }
 
     #[test]
