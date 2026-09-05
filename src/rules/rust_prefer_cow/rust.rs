@@ -41,6 +41,11 @@
 //! back; an `&str` parameter would force a `.to_owned()` in that branch, so
 //! `String` is correct.
 //!
+//! Ownership carried on through a local counts too: `let owned = name;` — or a
+//! `match`/`if` arm of the initializer yielding `name` — where `owned` is itself
+//! moved out by any of the criteria above. Both halves are required, so a local
+//! that is merely read (`let x = name; x.len()`) still warrants the warning.
+//!
 //! A function whose name is referenced as a bare value elsewhere in the file
 //! (e.g. `Some(gdbus_parse_color)` stored in a `fn(String) -> …` field, or
 //! `iter.map(gdbus_parse_color)`) is also left alone: such a reference uses the
@@ -100,7 +105,8 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
         let Ok(param_name) = pattern.utf8_text(source) else { continue; };
         if let Some(body) = body
             && (param_is_moved(body, source, param_name)
-                || tail_expr_moves_param(body, source, param_name))
+                || tail_expr_moves_param(body, source, param_name)
+                || param_moved_into_consumed_local(body, source, param_name))
         {
             continue;
         }
@@ -304,6 +310,38 @@ fn tail_expr_moves_param(node: tree_sitter::Node, source: &[u8], param_name: &st
         }),
         _ => false,
     }
+}
+
+/// Whether `param_name` is moved into a `let` local that is itself consumed —
+/// `let owned = <param>; …` where `owned` is later moved out by the
+/// [`param_is_moved`] or [`tail_expr_moves_param`] criteria in the enclosing
+/// block. The initializer is read in tail position, so the param may reach the
+/// local through a `match`/`if` arm (`let key = match … { …, None => param };`)
+/// as well as directly.
+///
+/// Both halves are required. The `let` alone proves nothing — `let x = param;
+/// x.len()` needs no ownership and stays flagged — but a consumed local carries
+/// the ownership on: an `&str` param would force a `.to_owned()` to build it.
+fn param_moved_into_consumed_local(
+    node: tree_sitter::Node,
+    source: &[u8],
+    param_name: &str,
+) -> bool {
+    if node.kind() == "let_declaration"
+        && let Some(value) = node.child_by_field_name("value")
+        && tail_expr_moves_param(value, source, param_name)
+        && let Some(local) = node.child_by_field_name("pattern")
+        && local.kind() == "identifier"
+        && let Ok(local_name) = local.utf8_text(source)
+        && let Some(scope) = node.parent()
+        && (param_is_moved(scope, source, local_name)
+            || tail_expr_moves_param(scope, source, local_name))
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .any(|child| param_moved_into_consumed_local(child, source, param_name))
 }
 
 /// Whether a `break` bound to the enclosing `loop` yields `param_name` by value,
@@ -989,6 +1027,44 @@ mod tests {
         assert!(
             run("#[expect(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_moved_into_let_binding_that_is_consumed() {
+        // Repro of #7620 (surrealdb `register_physical`): the param is moved by
+        // value into `dedup_key` through the `None` match arm, and `dedup_key`
+        // is then moved into the map. An `&str` param would force
+        // `expr_key.to_owned()` on that arm, so owning is correct.
+        assert!(
+            run("pub fn register_physical(&mut self, expr_key: String) -> String { let dedup_key = match &alias { Some(a) => format!(\"{expr_key}\\0{a}\"), None => expr_key }; self.expressions.insert(dedup_key, info); out }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_param_moved_into_let_binding_returned_as_tail() {
+        assert!(run("pub fn f(s: String) -> String { let owned = s; owned }").is_empty());
+    }
+
+    #[test]
+    fn flags_param_moved_into_let_binding_that_is_only_borrowed() {
+        // The local the param moves into is never itself consumed, so `&str`
+        // would compile — the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { let x = s; x.len() }").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn flags_param_when_a_different_local_is_consumed() {
+        // The consumed local is built from something else; the param only
+        // reaches a local that is read, so the warning holds.
+        assert_eq!(
+            run("pub fn f(s: String) -> usize { let x = s; let y = other(); take(y); x.len() }")
+                .len(),
+            1
         );
     }
 
