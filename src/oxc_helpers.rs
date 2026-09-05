@@ -3823,6 +3823,191 @@ pub fn expression_is_array(
     }
 }
 
+/// Array methods that yield an array of the receiver's own element type, so a
+/// proof about the receiver's elements carries to the call's result.
+/// Element-*changing* methods (`map`, `flatMap`) and element-*extracting* ones
+/// (`find`, `at`) are deliberately absent.
+const ELEMENT_PRESERVING_ARRAY_METHODS: &[&str] = &[
+    "concat",
+    "filter",
+    "flat",
+    "reverse",
+    "slice",
+    "sort",
+    "toReversed",
+    "toSorted",
+];
+
+/// How many resolution steps [`expression_is_string_array`] may take. A binding
+/// may legally be initialised from itself (`var xs = xs`), so identifier
+/// resolution needs a bound to terminate.
+const STRING_ARRAY_RESOLUTION_STEPS: u8 = 8;
+
+/// Whether a type annotation denotes a `string`-valued type: the `string`
+/// keyword, a string-literal type, or a union of those.
+fn type_is_string(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSLiteral, TSType};
+    match ty {
+        TSType::TSStringKeyword(_) => true,
+        TSType::TSLiteralType(lit) => matches!(lit.literal, TSLiteral::StringLiteral(_)),
+        TSType::TSUnionType(union) => union.types.iter().all(type_is_string),
+        _ => false,
+    }
+}
+
+/// Whether a type annotation denotes an array of strings: `string[]`,
+/// `readonly string[]`, `Array<string>`, `ReadonlyArray<string>`, and their
+/// string-literal-union element forms.
+fn type_is_string_array(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeName, TSTypeOperatorOperator};
+    match ty {
+        TSType::TSArrayType(arr) => type_is_string(&arr.element_type),
+        TSType::TSTypeOperatorType(op) if op.operator == TSTypeOperatorOperator::Readonly => {
+            type_is_string_array(&op.type_annotation)
+        }
+        TSType::TSTypeReference(tref) => {
+            matches!(
+                &tref.type_name,
+                TSTypeName::IdentifierReference(id)
+                    if matches!(id.name.as_str(), "Array" | "ReadonlyArray")
+            ) && tref
+                .type_arguments
+                .as_ref()
+                .is_some_and(|args| matches!(args.params.as_slice(), [param] if type_is_string(param)))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `call` is a spec-guaranteed `string[]` producer: `Object.keys(o)` and
+/// `Object.getOwnPropertyNames(o)` both return an array of own property names,
+/// which are strings whatever `o` is.
+fn call_returns_spec_string_array(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return false;
+    };
+    matches!(&member.object, Expression::Identifier(obj) if obj.name.as_str() == "Object")
+        && matches!(
+            member.property.name.as_str(),
+            "keys" | "getOwnPropertyNames"
+        )
+}
+
+/// Resolve an identifier reference to its declaration and decide whether that
+/// declaration proves the binding holds a `string[]` — a declared string-array
+/// type (on the declarator, the parameter, or the object pattern member it is
+/// destructured from) or a declarator initialised from a string array.
+fn binding_is_string_array(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    steps: u8,
+) -> bool {
+    use oxc_ast::AstKind;
+    let scoping = semantic.scoping();
+    let Some(symbol_id) = ident
+        .reference_id
+        .get()
+        .and_then(|ref_id| scoping.get_reference(ref_id).symbol_id())
+    else {
+        return false;
+    };
+    let declared_directly = match semantic.nodes().kind(scoping.symbol_declaration(symbol_id)) {
+        AstKind::VariableDeclarator(decl) => {
+            decl.type_annotation
+                .as_ref()
+                .is_some_and(|ann| type_is_string_array(&ann.type_annotation))
+                || decl
+                    .init
+                    .as_ref()
+                    .is_some_and(|init| string_array_expression(init, semantic, steps))
+        }
+        AstKind::FormalParameter(param) => param
+            .type_annotation
+            .as_ref()
+            .is_some_and(|ann| type_is_string_array(&ann.type_annotation)),
+        _ => false,
+    };
+    declared_directly || binding_declared_ts_type(ident, semantic).is_some_and(type_is_string_array)
+}
+
+/// Whether `expr` is demonstrably an array whose element type is `string`.
+///
+/// The proof comes from a declaration or from the language spec, resolved
+/// through oxc's symbol table: an array literal of string literals (or of
+/// spreads of string arrays); a binding whose declarator, parameter, or
+/// destructured object-pattern member is annotated `string[]` (or whose
+/// initializer is itself a string array); an `Object.keys` /
+/// `Object.getOwnPropertyNames` call; an element-preserving array method
+/// (`filter`, `slice`, …) on a string-array receiver; a `string[]` assertion;
+/// and a `??`/`||` default whose two branches are both string arrays.
+///
+/// A receiver's *name* is never evidence — names do not determine type — and a
+/// receiver whose element type cannot be proven returns `false`. Callers use
+/// this to skip the numeric-coercion hazards of string-keyed operations
+/// (lexicographic `Array.prototype.sort`), which cannot arise when every
+/// element is already a string.
+#[must_use]
+pub fn expression_is_string_array(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    string_array_expression(expr, semantic, STRING_ARRAY_RESOLUTION_STEPS)
+}
+
+fn string_array_expression(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+    steps: u8,
+) -> bool {
+    use oxc_ast::ast::{ArrayExpressionElement, Expression};
+    let Some(steps) = steps.checked_sub(1) else {
+        return false;
+    };
+    match expr {
+        Expression::ArrayExpression(arr) => {
+            !arr.elements.is_empty()
+                && arr.elements.iter().all(|element| match element {
+                    ArrayExpressionElement::StringLiteral(_)
+                    | ArrayExpressionElement::TemplateLiteral(_) => true,
+                    ArrayExpressionElement::SpreadElement(spread) => {
+                        string_array_expression(&spread.argument, semantic, steps)
+                    }
+                    _ => false,
+                })
+        }
+        Expression::Identifier(ident) => binding_is_string_array(ident, semantic, steps),
+        Expression::CallExpression(call) => {
+            call_returns_spec_string_array(call)
+                || matches!(
+                    &call.callee,
+                    Expression::StaticMemberExpression(member)
+                        if ELEMENT_PRESERVING_ARRAY_METHODS.contains(&member.property.name.as_str())
+                            && string_array_expression(&member.object, semantic, steps)
+                )
+        }
+        Expression::LogicalExpression(logical) => {
+            is_array_defaulting_operator(logical.operator)
+                && string_array_expression(&logical.left, semantic, steps)
+                && string_array_expression(&logical.right, semantic, steps)
+        }
+        Expression::ParenthesizedExpression(paren) => {
+            string_array_expression(&paren.expression, semantic, steps)
+        }
+        Expression::TSAsExpression(as_expr) => {
+            type_is_string_array(&as_expr.type_annotation)
+                || string_array_expression(&as_expr.expression, semantic, steps)
+        }
+        Expression::TSSatisfiesExpression(sat) => {
+            string_array_expression(&sat.expression, semantic, steps)
+        }
+        Expression::TSNonNullExpression(nn) => {
+            string_array_expression(&nn.expression, semantic, steps)
+        }
+        _ => false,
+    }
+}
+
 /// Whether a type annotation denotes a built-in keyed map: `Map<K, V>`,
 /// `WeakMap<K, V>`, or `ReadonlyMap<K, V>`. These are the standard library
 /// containers whose `.set(key, value)` merely stores a value at `key` with no

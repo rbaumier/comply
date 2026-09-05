@@ -1,8 +1,17 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_string_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{CallExpression, Expression};
 use std::sync::Arc;
+
+/// Whether `call` is a `.sort()` invoked with no comparator.
+fn is_comparator_less_sort(call: &CallExpression) -> bool {
+    call.arguments.is_empty()
+        && matches!(
+            &call.callee,
+            Expression::StaticMemberExpression(member) if member.property.name.as_str() == "sort"
+        )
+}
 
 pub struct Check;
 
@@ -19,7 +28,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::CallExpression(call) = node.kind() else {
@@ -28,22 +37,14 @@ impl OxcCheck for Check {
         let Expression::StaticMemberExpression(member) = &call.callee else {
             return;
         };
-        if member.property.name.as_str() != "sort" {
+        if !is_comparator_less_sort(call) {
             return;
         }
-        if !call.arguments.is_empty() {
-            return;
-        }
-        // `Object.keys(...)` / `Object.getOwnPropertyNames(...)` are spec-guaranteed
-        // to return `string[]`, on which a bare `.sort()` sorts lexicographically —
-        // the correct, idiomatic ordering. The numeric-coercion footgun this rule
-        // targets cannot occur on a statically-`string[]` receiver.
-        if let Expression::CallExpression(recv) = &member.object
-            && let Expression::StaticMemberExpression(m) = &recv.callee
-            && let Expression::Identifier(obj) = &m.object
-            && obj.name.as_str() == "Object"
-            && matches!(m.property.name.as_str(), "keys" | "getOwnPropertyNames")
-        {
+        // A receiver whose element type is provably `string` sorts
+        // lexicographically by definition — the numeric-coercion footgun this
+        // rule targets cannot occur, and the remediation it advises (`(a, b) =>
+        // a - b`) does not apply.
+        if expression_is_string_array(&member.object, semantic) {
             return;
         }
         // `<expr>.searchParams` is the spec-defined `URL.prototype.searchParams`
@@ -152,5 +153,81 @@ mod tests {
         // A `.<prop>.sort()` receiver whose property isn't `searchParams` is still
         // an unknown (likely array) receiver — the footgun applies.
         assert_eq!(run_on("foo.bar.sort();").len(), 1);
+    }
+
+    // --- Receiver proven `string[]` (#6356) ---
+
+    #[test]
+    fn allows_sort_of_annotated_string_array_binding() {
+        let src = "const files: string[] = load(); files.sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_generic_string_array_binding() {
+        let src = "const tags: Array<string> = load(); tags.sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_string_array_parameter() {
+        let src = "function render(names: string[]) { return names.sort(); }";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_string_literal_array_binding() {
+        let src = "const order = ['b', 'a']; order.sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_string_array_assertion() {
+        let src = "(load() as string[]).sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_readonly_string_array_spread_copy() {
+        let src = "const tags: readonly string[] = load(); [...tags].sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_filtered_object_keys() {
+        let src = "Object.keys(o).filter(Boolean).sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_sort_of_binding_initialised_from_object_keys() {
+        let src = "const names = Object.keys(o); names.sort();";
+        assert!(run_on(src).is_empty(), "{:?}", run_on(src));
+    }
+
+    // A `map` callback returns whatever it likes, so the element type of its
+    // result is not the receiver's.
+    #[test]
+    fn flags_sort_of_mapped_object_keys() {
+        assert_eq!(run_on("Object.keys(o).map(f).sort();").len(), 1);
+    }
+
+    #[test]
+    fn flags_sort_of_number_array_binding() {
+        assert_eq!(run_on("const ids: number[] = load(); ids.sort();").len(), 1);
+    }
+
+    // The receiver's NAME is never evidence: an unresolved `files` proves
+    // nothing about its element type.
+    #[test]
+    fn flags_sort_of_unresolved_receiver() {
+        assert_eq!(run_on("files.sort();").len(), 1);
+    }
+
+    // A binding may legally be initialised from itself; resolution must
+    // terminate rather than recurse forever.
+    #[test]
+    fn flags_sort_of_self_initialised_binding() {
+        assert_eq!(run_on("var xs = xs; xs.sort();").len(), 1);
     }
 }
