@@ -691,6 +691,16 @@ mod tests {
         assert_eq!(run_on("if (user.password_hash === expectedHash) {}").len(), 1);
     }
 
+    /// vitest packages/vitest/src/node/cache/fsModuleCache.ts:313 (#3327) — a
+    /// lockfile fingerprint compared to skip a cache rebuild. `lockfile` is no
+    /// cryptographic qualifier, so neither operand is a credential.
+    #[test]
+    fn allows_lockfile_cache_hash_comparison() {
+        assert!(
+            run_on("if (metadata.lockfileHash === currentLockfileHash) { return }").is_empty()
+        );
+    }
+
     /// immich server/src/services/auth.service.ts:447 — `AuthType.OAuth` is an
     /// enum member (a public compile-time discriminant), not a credential, even
     /// though its normalized name `oauth` ends with the secret word `auth`.
