@@ -4,7 +4,10 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryOperator, Expression, TSTypeName, TSTypeQueryExprName};
+use oxc_ast::ast::{
+    BinaryOperator, Expression, TSLiteral, TSType, TSTypeName, TSTypeQueryExprName,
+};
+use oxc_semantic::{NodeId, Semantic};
 use oxc_span::GetSpan;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
@@ -75,6 +78,54 @@ fn mark_all_members_used(
 ) {
     for (member_name, _) in members {
         used.insert((enum_name.to_string(), member_name.clone()));
+    }
+}
+
+/// The member names an indexed access selects out of the `typeof Enum`
+/// projection rooted at `query_id`. `None` when the projection is not the object
+/// of an indexed access, or when the index can reach any member (`keyof typeof
+/// Enum`, a generic parameter) — the caller then treats the whole enum as
+/// referenced.
+fn literal_index_of_projection<'a>(
+    query_id: NodeId,
+    semantic: &Semantic<'a>,
+) -> Option<Vec<&'a str>> {
+    let nodes = semantic.nodes();
+    // `(typeof Enum)[…]` wraps the query in a parenthesised type.
+    let mut child_id = query_id;
+    let mut parent_id = nodes.parent_id(child_id);
+    while matches!(nodes.kind(parent_id), AstKind::TSParenthesizedType(_)) {
+        child_id = parent_id;
+        parent_id = nodes.parent_id(child_id);
+    }
+    let AstKind::TSIndexedAccessType(indexed) = nodes.kind(parent_id) else {
+        return None;
+    };
+    // The projection must be what is indexed, not the index itself.
+    if indexed.object_type.span() != nodes.kind(child_id).span() {
+        return None;
+    }
+    string_literal_type_names(&indexed.index_type)
+}
+
+/// The string-literal names `ty` spells out: one for a string-literal type, one
+/// per branch for a union of them. `None` for any other type, which names no
+/// fixed set of members.
+fn string_literal_type_names<'a>(ty: &TSType<'a>) -> Option<Vec<&'a str>> {
+    match ty {
+        TSType::TSParenthesizedType(inner) => string_literal_type_names(&inner.type_annotation),
+        TSType::TSLiteralType(literal) => match &literal.literal {
+            TSLiteral::StringLiteral(s) => Some(vec![s.value.as_str()]),
+            _ => None,
+        },
+        TSType::TSUnionType(union) => {
+            let mut names = Vec::with_capacity(union.types.len());
+            for branch in &union.types {
+                names.extend(string_literal_type_names(branch)?);
+            }
+            Some(names)
+        }
+        _ => None,
     }
 }
 
@@ -232,17 +283,25 @@ impl OxcCheck for Check {
                         }
                     }
                 }
-                // `typeof EnumName` projects the enum object into type space. Any
-                // use of that projection can reach every member — `keyof typeof E`,
-                // `(typeof E)[keyof typeof E]`, `Record<keyof typeof E, T>`,
-                // `x: typeof E`. So the whole enum counts as referenced. A query
-                // naming no local binding (`typeof import("…")`, `typeof this.x`)
-                // exempts nothing.
+                // `typeof EnumName` projects the enum object into type space.
+                // Most uses of that projection reach every member — `keyof typeof
+                // E`, `(typeof E)[keyof typeof E]`, `Record<keyof typeof E, T>`,
+                // `x: typeof E` — so the whole enum counts as referenced. Indexing
+                // the projection with string-literal types names exactly the
+                // members those literals spell out. A query naming no local
+                // binding (`typeof import("…")`, `typeof this.x`) exempts nothing.
                 AstKind::TSTypeQuery(query) => {
                     if let TSTypeQueryExprName::IdentifierReference(id) = &query.expr_name {
                         let enum_name = id.name.as_str();
                         if let Some(members) = enums.get(enum_name) {
-                            mark_all_members_used(enum_name, members, &mut used);
+                            match literal_index_of_projection(node.id(), semantic) {
+                                Some(names) => used.extend(
+                                    names
+                                        .into_iter()
+                                        .map(|name| (enum_name.to_string(), name.to_string())),
+                                ),
+                                None => mark_all_members_used(enum_name, members, &mut used),
+                            }
                         }
                     }
                 }
@@ -726,6 +785,38 @@ enum Food {
 }
 export type A = typeof Food.Pizza;
 export type B = Food.Taco;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Fries"));
+    }
+
+    // Regression for #8382 — indexing the `typeof` projection with a string
+    // literal names exactly one member, so the others stay dead.
+    #[test]
+    fn typeof_projection_indexed_by_string_literal_names_one_member() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export type P = (typeof Food)['Pizza'];
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Taco"));
+    }
+
+    // A union index names each of its literals, and nothing else.
+    #[test]
+    fn typeof_projection_indexed_by_literal_union_names_each_member() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+    Fries = "fries",
+}
+export type P = (typeof Food)['Pizza' | 'Taco'];
 "#;
         let diags = run(source);
         assert_eq!(diags.len(), 1);
