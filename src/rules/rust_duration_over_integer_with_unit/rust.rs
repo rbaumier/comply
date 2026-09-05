@@ -5,8 +5,14 @@
 //!
 //! 1. its name ends (case-insensitively) with a time-unit suffix
 //!    like `_seconds`, `_ms`, `_days`, `_nanos`, ...
-//! 2. its type text, trimmed, is one of the primitive integer types
-//!    (`u8`..`u128`, `i8`..`i128`, `usize`, `isize`).
+//! 2. its type text, trimmed, is one of the primitive *unsigned* integer types
+//!    (`u8`..`u128`, `usize`).
+//!
+//! `std::time::Duration` — the only type this rule proposes — is unsigned:
+//! `Duration::new(u64, u32)`, `from_secs(u64)`. A signed field or parameter
+//! (`offset_hours: i8`, `drift_millis: i64`) ranges over the negatives, where
+//! there is no `Duration` to migrate to, so signed integer types are not
+//! flagged.
 //!
 //! A `*_ns`/`*_ms` value typed `f32`/`f64` is a floating-point mathematical
 //! parameter (an EWMA decay factor, a continuous statistical estimate) where
@@ -93,9 +99,16 @@ const ABSOLUTE_TIME_PREFIXES: &[&str] = &["julian_", "gregorian_", "unix_", "epo
 const SECONDS_SUFFIXES: &[&str] = &["_seconds", "_secs", "_sec"];
 const NANOSECONDS_SUFFIXES: &[&str] = &["_nanoseconds", "_nanos", "_nsec"];
 
-const INTEGER_TYPES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "usize", "isize",
-];
+/// Primitive integer types whose value domain a `std::time::Duration` covers.
+/// `Duration` is unsigned — `Duration::new(u64, u32)`, `from_secs(u64)` — so
+/// only a non-negative integer has a `Duration` form to migrate to.
+const UNSIGNED_INTEGER_TYPES: &[&str] = &["u8", "u16", "u32", "u64", "u128", "usize"];
+
+/// Primitive signed integer types. A signed value ranges over the negatives — a
+/// UTC offset, a clock skew, a drift — which `std::time::Duration` cannot hold,
+/// so the rule never proposes it for one. Recognized only to identify atomic
+/// counters, where `AtomicI64` is as much a counter as `AtomicU64`.
+const SIGNED_INTEGER_TYPES: &[&str] = &["i8", "i16", "i32", "i64", "i128", "isize"];
 
 /// Derive macros whose final path segment marks the enclosing struct as a
 /// serialization target: serde's `Serialize`/`Deserialize` and parquet's row
@@ -139,7 +152,7 @@ impl AstCheck for Check {
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
             && !is_marked_intentionally_unused(name)
             && has_time_unit_suffix(name)
-            && is_integer_type(type_text)
+            && is_unsigned_integer_type(type_text)
             && !mirrors_atomic_counter(node, name, source_bytes)
             && !in_serialization_derived_struct(node, source_bytes)
             && !has_seconds_nanoseconds_pair(node, name, type_text, source_bytes)
@@ -160,7 +173,7 @@ impl AstCheck for Check {
             && let Ok(type_text) = type_node.utf8_text(source_bytes)
             && !is_marked_intentionally_unused(name)
             && has_time_unit_suffix(name)
-            && is_integer_type(type_text)
+            && is_unsigned_integer_type(type_text)
         {
             diagnostics.push(make_diagnostic(ctx, node, name, type_text));
         }
@@ -192,9 +205,16 @@ fn is_absolute_time_coordinate(lower: &str) -> bool {
         || lower.ends_with("_at")
 }
 
+/// True when `text` names a primitive unsigned integer type — the only shape a
+/// `std::time::Duration` can replace, since `Duration` has no sign.
+fn is_unsigned_integer_type(text: &str) -> bool {
+    UNSIGNED_INTEGER_TYPES.contains(&text.trim())
+}
+
+/// True when `text` names any primitive integer type, either signedness.
 fn is_integer_type(text: &str) -> bool {
     let trimmed = text.trim();
-    INTEGER_TYPES.contains(&trimmed)
+    UNSIGNED_INTEGER_TYPES.contains(&trimmed) || SIGNED_INTEGER_TYPES.contains(&trimmed)
 }
 
 /// True when `text` names a `std::sync::atomic` integer type
@@ -206,7 +226,7 @@ fn is_atomic_integer_type(text: &str) -> bool {
     let Some(suffix) = last.strip_prefix("Atomic") else {
         return false;
     };
-    INTEGER_TYPES.contains(&suffix.to_ascii_lowercase().as_str())
+    is_integer_type(&suffix.to_ascii_lowercase())
 }
 
 /// True when a plain-integer `field_declaration` named `name` is taken to
@@ -579,8 +599,8 @@ struct UnrelatedMetrics { timeout_ms: AtomicU64 }";
     }
 
     #[test]
-    fn flags_fn_parameter_delay_ms_i64() {
-        assert_eq!(run_on("fn f(delay_ms: i64) {}").len(), 1);
+    fn flags_fn_parameter_delay_ms_u64() {
+        assert_eq!(run_on("fn f(delay_ms: u64) {}").len(), 1);
     }
 
     #[test]
@@ -731,11 +751,11 @@ pub trait File {
     }
 
     #[test]
-    fn flags_free_function_secs_param() {
-        // A free function with the same `secs: i64` parameter is the author's own
-        // choice — the rule still flags it, proving the trait-definition exemption
-        // does not neuter the check.
-        assert_eq!(run_on("fn touch(atime_secs: i64) {}").len(), 1);
+    fn flags_free_function_nanos_param() {
+        // A free function with the same `atime_nanos: u32` parameter as deno's
+        // trait method is the author's own choice — the rule still flags it,
+        // proving the trait-definition exemption does not neuter the check.
+        assert_eq!(run_on("fn touch(atime_nanos: u32) {}").len(), 1);
     }
 
     #[test]
@@ -766,11 +786,19 @@ struct FileId {
     }
 
     #[test]
+    fn allows_unsigned_timespec_seconds_nanoseconds_pair() {
+        // The same `timespec` split with unsigned halves: the pair exemption, not
+        // the type's signedness, is what silences both fields.
+        let source = "struct FileId { change_seconds: u64, change_nanoseconds: u64 }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
     fn flags_seconds_nanoseconds_with_different_stems() {
         // `a_seconds` and `b_nanoseconds` do not share a stem, so they are not a
         // decomposed `timespec` pair; both still flag.
         assert_eq!(
-            run_on("struct X { a_seconds: i64, b_nanoseconds: i64 }").len(),
+            run_on("struct X { a_seconds: u64, b_nanoseconds: u32 }").len(),
             2
         );
     }
@@ -813,5 +841,54 @@ pub fn query_webserver_with_response(
         // `unused_variables` reads it on a parameter: the field is never read, so
         // its type is never observed and a `Duration` would type-check nothing.
         assert!(run_on("struct S { _timeout_ms: u64 }").is_empty());
+    }
+
+    #[test]
+    fn allows_signed_offset_hours_parameter() {
+        // jiff's `tz::offset(offset_hours: i8)`: a UTC offset ranges over
+        // -12..=+14, and `std::time::Duration` — the only type this rule proposes
+        // — is unsigned, so the suggested edit does not exist. Regression for
+        // #8238.
+        let source = "\
+pub fn unambiguous(offset_hours: i8) -> Offset {
+    Offset::from_seconds(offset_hours as i32 * 3600)
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_signed_offset_hours_pair_parameters() {
+        // jiff's `gap(earlier_offset_hours, later_offset_hours)`.
+        let source = "\
+fn gap(earlier_offset_hours: i8, later_offset_hours: i8) -> AmbiguousOffset {
+    o_gap(tz::offset(earlier_offset_hours), tz::offset(later_offset_hours))
+}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_signed_drift_millis_parameter() {
+        // A clock drift is signed: `Duration` cannot express a negative span.
+        assert!(run_on("pub fn skew(drift_millis: i64) -> i64 { drift_millis }").is_empty());
+    }
+
+    #[test]
+    fn allows_signed_skew_secs_isize_parameter() {
+        assert!(run_on("fn g(skew_secs: isize) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_signed_drift_millis_field() {
+        assert!(run_on("struct S { drift_millis: i64 }").is_empty());
+    }
+
+    #[test]
+    fn flags_unsigned_struct_fields() {
+        // The unsigned counterpart of the signed cases above: a genuine
+        // non-negative span, which `Duration` does represent.
+        assert_eq!(
+            run_on("struct S { timeout_ms: u32, ttl_seconds: usize }").len(),
+            2
+        );
     }
 }

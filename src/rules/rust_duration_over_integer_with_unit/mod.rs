@@ -5,9 +5,11 @@
 //! `*_ms`, `*_millis`, `*_milliseconds`, `*_minutes`, `*_hours`,
 //! `*_days`, `*_nanos`, `*_nanoseconds`, `*_micros`, `*_microseconds`
 //! (and common short forms like `_secs`, `_mins`, `_hrs`, `_ns`, `_us`)
-//! whose type is a primitive integer or float. Encoding a unit in the
+//! whose type is a primitive unsigned integer. Encoding a unit in the
 //! name but not the type makes `window_days: u32` and `timeout_ms: u64`
 //! interchangeable at the call site — a `Duration` makes that impossible.
+//! Signed integers and floats carry values `Duration` cannot hold, so
+//! they are left alone.
 //!
 //! False negatives: type paths (`std::time::Duration`), wrappers
 //! (`Option<Duration>`, `Arc<Duration>`), and type aliases are not
