@@ -6,13 +6,17 @@
 //! caller a wrong value. What it can hide is work left undone for the remaining
 //! case, so the chain is flagged unless the code already says what happens then.
 //!
-//! One property of the chain as a whole says it:
+//! Two properties of the chain as a whole say it:
 //!
+//! - **pattern dispatch** — an arm tests a refutable pattern (`if let`), so the
+//!   chain tries shapes in order instead of carving a value domain into regions.
+//!   Falling through means "none of these shapes was present", which is the
+//!   whole of the remaining case: there is no region left to name;
 //! - **tail expression** — the chain stands directly above the value the
 //!   enclosing function answers with, so the chain and its remaining case share
 //!   one continuation and no `else` could hold anything the code does not say.
 //!
-//! Failing that, the chain is complete when every branch answers for itself —
+//! Failing those, the chain is complete when every branch answers for itself —
 //! and the branches may answer differently, since each way is a claim about one
 //! branch and nothing else (see [`branch_answers_for_itself`]):
 //!
@@ -47,10 +51,11 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
-    if chain
-        .branches
-        .iter()
-        .all(|body| branch_answers_for_itself(*body, source))
+    if chain.dispatches_on_patterns
+        || chain
+            .branches
+            .iter()
+            .all(|body| branch_answers_for_itself(*body, source))
         || remaining_case_is_function_tail(node)
     {
         return;
@@ -74,6 +79,9 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
 struct Chain<'tree> {
     /// The consequence block of the head `if` and of every `else if` after it.
     branches: Vec<Node<'tree>>,
+    /// Whether any arm tests a refutable pattern rather than a value — see
+    /// [`arm_dispatches_on_a_pattern`].
+    dispatches_on_patterns: bool,
     /// The last `else if` of the chain — where the diagnostic points.
     last_else_if: Node<'tree>,
 }
@@ -88,13 +96,16 @@ impl<'tree> Chain<'tree> {
             return None;
         };
         let mut branches = vec![head.child_by_field_name("consequence")?];
+        let mut dispatches_on_patterns = arm_dispatches_on_a_pattern(head);
         let mut last_else_if = first;
         loop {
             branches.push(last_else_if.child_by_field_name("consequence")?);
+            dispatches_on_patterns |= arm_dispatches_on_a_pattern(last_else_if);
             match tail_of(last_else_if) {
                 Tail::Open => {
                     return Some(Self {
                         branches,
+                        dispatches_on_patterns,
                         last_else_if,
                     });
                 }
@@ -102,6 +113,29 @@ impl<'tree> Chain<'tree> {
                 Tail::ElseIf(next) => last_else_if = next,
             }
         }
+    }
+}
+
+/// True when `if_expression` tests a refutable pattern: its condition is a
+/// `let_condition` (`if let <pattern> = <expr>`), on its own or `&&`-joined into
+/// a `let_chain`.
+///
+/// Only the condition's own shape is read. A `let_condition` nested inside a
+/// sub-expression binds nothing for the arm, so it is not what this answers
+/// about.
+fn arm_dispatches_on_a_pattern(if_expression: Node) -> bool {
+    let Some(condition) = if_expression.child_by_field_name("condition") else {
+        return false;
+    };
+    match condition.kind() {
+        "let_condition" => true,
+        "let_chain" => {
+            let mut cursor = condition.walk();
+            condition
+                .named_children(&mut cursor)
+                .any(|part| part.kind() == "let_condition")
+        }
+        _ => false,
     }
 }
 
@@ -937,10 +971,10 @@ fn update(&self, v: FlagValue, args: &mut LowArgs) -> anyhow::Result<()> {
         // written nowhere. The function returns `()` of necessity: a function
         // that returns a value has to end on one.
         let src = r#"
-fn outcome(ok: bool, s: Option<String>) {
+fn outcome(ok: bool, second: bool) {
     if ok {
         record(1);
-    } else if let Some(v) = s {
+    } else if second {
         record(2);
     }
 }
@@ -1058,6 +1092,74 @@ fn outcome(a: bool, b: bool) -> u8 {
         record(2);
     }
     panic!("unsupported");
+}
+"#;
+        let d = run_on(src);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule_id, "elseif-without-else");
+    }
+
+    #[test]
+    fn allows_if_let_pattern_chain() {
+        // Repro from harfbuzz/ttf-parser `src/tables/glyf.rs:128`: each arm tries
+        // a shape of the accumulated contour. Falling through means no on-curve
+        // point was present, which is the whole of the remaining case.
+        let src = r#"
+impl Outline {
+    fn close(&mut self) {
+        if let (Some(p), Some(off)) = (self.first_on_curve, self.last_off_curve) {
+            self.quad_to(off.0, off.1, p.0, p.1);
+        } else if let Some(p) = self.first_on_curve {
+            self.line_to(p.0, p.1);
+        }
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_chain_mixing_a_boolean_and_a_pattern_arm() {
+        // One refutable pattern is enough: the chain no longer carves a value
+        // domain into regions, so there is no region left for an `else` to name.
+        let src = r#"
+fn f(a: bool, s: Option<u8>) {
+    if a {
+        record(1);
+    } else if let Some(v) = s {
+        record(v);
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_chain_whose_pattern_arm_is_a_let_chain() {
+        // `let` joined by `&&` binds for the arm just as a bare `if let` does.
+        let src = r#"
+fn f(a: bool, s: Option<u8>) {
+    if a {
+        record(1);
+    } else if a && let Some(v) = s {
+        record(v);
+    }
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_chain_whose_conditions_are_all_boolean_tests() {
+        // Negative control for the pattern exemption: a value domain carved into
+        // regions really can leave one out.
+        let src = r#"
+fn f(a: i32) {
+    if a > 0 {
+        record(1);
+    } else if a < 0 {
+        record(2);
+    }
 }
 "#;
         let d = run_on(src);
