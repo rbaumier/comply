@@ -76,6 +76,13 @@
 //! crate's own identity, not on whether it depends on a logging crate, so an
 //! application that merely uses `tracing` stays flagged.
 //!
+//! The four exemptions that follow answer one question: does the failure
+//! being reported have anywhere else to go? Each is a place where the answer
+//! is no — no `Result` to return it in, no twin that hands it back, or no
+//! process left to read it — which is what makes stderr the remaining channel
+//! rather than a shortcut past `tracing`. The FFI-bridge and logging-crate
+//! exemptions above answer the same question about the whole crate.
+//!
 //! A custom panic hook installed via `std::panic::set_hook(|info| { … })`
 //! exists to write a human-readable crash report to stderr before the
 //! process dies — that is exactly what the default hook does. At the point
@@ -90,15 +97,33 @@
 //! An `eprintln!` / `eprint!` whose immediately-following statement in the
 //! enclosing block unconditionally terminates the process is a
 //! pre-termination diagnostic: the process dies on that very next statement,
-//! so the rule's premise — consumers can't redirect or capture the output —
-//! is moot, there is nothing left to redirect. This is the same category as
-//! the panic-hook exemption (output written just before the process dies).
-//! The terminator is either an `unreachable!()` / `panic!(…)` invocation
-//! (matched on the macro's final path segment) or a `std::process::exit(…)` /
-//! `std::process::abort()` call (the callee's final segment is `exit`/`abort`
-//! qualified by a `process` segment). The next statement must itself be the
-//! terminator; an `eprintln!` followed by ordinary code, or one that is the
-//! last statement of its block with no terminator after it, stays flagged.
+//! so there is nothing left to redirect. The terminator is either an
+//! `unreachable!()` / `panic!(…)` invocation (matched on the macro's final path
+//! segment) or a `std::process::exit(…)` / `std::process::abort()` call (the
+//! callee's final segment is `exit`/`abort` qualified by a `process` segment).
+//! The next statement must itself be the terminator; an `eprintln!` followed by
+//! ordinary code, or one that is the last statement of its block with no
+//! terminator after it, stays flagged.
+//!
+//! A destructor has no return channel: `Drop` fixes the signature to
+//! `fn drop(&mut self)`, so there is no `Result` to carry the failure and no
+//! `?` to write it with, and panicking is not the alternative either — a panic
+//! during unwind aborts the process. An `eprintln!` / `eprint!` whose nearest
+//! enclosing function is the `drop` method of an `impl Drop for …` block is
+//! exempt. An inherent method named `drop` is an ordinary method that could
+//! have returned a `Result` and stays flagged, as does output in a closure
+//! nested inside the destructor — the same boundary the panic-hook exemption
+//! draws.
+//!
+//! The infallible half of a `try_` pair has already handed the error to the
+//! caller — in the other half. A function that declares no return type while
+//! the same scope declares a public `try_<its own name>` returning a `Result`
+//! is the error-swallowing façade over that twin (`restore()` beside
+//! `try_restore() -> io::Result<()>`, the shape std spells `Builder::spawn` /
+//! `thread::spawn`): handling the error is its whole contract, and the
+//! consumer who wants the error back calls the twin. Both halves of the
+//! identity are required — a façade that returns a `Result` itself, or a
+//! `try_` twin that returns nothing, exempts nothing.
 //!
 //! Output gated behind a runtime verbosity flag is opt-in diagnostics,
 //! not unconditional library noise: the consumer only sees it after
@@ -142,8 +167,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    is_library_code, is_suppressed_by_clippy_allow, is_under_env_var_gate, is_under_if_guard,
-    trailing_path_segment,
+    enclosing_fn, enclosing_trait_impl_name, is_library_code, is_pub, is_suppressed_by_clippy_allow,
+    is_under_env_var_gate, is_under_if_guard, trailing_path_segment, trait_base_name,
 };
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -218,10 +243,7 @@ impl AstCheck for Check {
         if is_opt_in_diagnostic(node, source_bytes) {
             return;
         }
-        if is_in_panic_hook_closure(node, source_bytes) {
-            return;
-        }
-        if is_pre_termination_diagnostic(node, source_bytes) {
+        if has_no_alternative_error_channel(node, source_bytes) {
             return;
         }
         if is_suppressed_by_clippy_allow(node, &["disallowed_macros"], source_bytes) {
@@ -244,12 +266,119 @@ impl AstCheck for Check {
 /// True when the macro call is gated on a runtime opt-in the consumer
 /// controls: a verbosity-flag guard, an environment-variable gate, or a
 /// function whose entry guard returns unless the flag is on. Output that is
-/// unconditional but still intended — a panic hook, a pre-exit diagnostic — is
-/// exempted separately.
+/// unconditional but still intended is exempted by
+/// [`has_no_alternative_error_channel`] instead.
 fn is_opt_in_diagnostic(node: tree_sitter::Node, source: &[u8]) -> bool {
     is_under_verbose_flag_guard(node, source)
         || is_under_env_var_gate(node, source)
         || is_after_inverted_early_return_guard(node, source)
+}
+
+/// True when the failure being reported has nowhere else to go: the code around
+/// the macro call has no `Result` to return it in, no twin that hands it back,
+/// or no process left to read it. Writing to stderr there is the remaining
+/// channel, not a shortcut past `tracing`.
+fn has_no_alternative_error_channel(node: tree_sitter::Node, source: &[u8]) -> bool {
+    is_in_panic_hook_closure(node, source)
+        || is_pre_termination_diagnostic(node, source)
+        || is_in_drop_glue(node, source)
+        || is_infallible_half_of_try_pair(node, source)
+}
+
+/// True when `node` sits in the body of a `Drop::drop` method: the nearest
+/// enclosing function is named `drop` and the nearest `impl_item` around it
+/// implements `Drop`.
+///
+/// The trait fixes that signature to `fn drop(&mut self)`, so a failure caught
+/// there has no `Result` to travel in and no `?` to write it with. Panicking is
+/// not the alternative either — a panic during unwind aborts the process — which
+/// leaves reporting to stderr and carrying on.
+///
+/// An inherent method named `drop` is an ordinary method that could have
+/// returned a `Result`, so it stays flagged. A closure nested inside the
+/// destructor is a boundary too: its body may be stored and run anywhere, so it
+/// is not the destructor's own output — the same cut the panic-hook exemption
+/// makes.
+fn is_in_drop_glue(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(func) = enclosing_function_outside_closure(node) else {
+        return false;
+    };
+    let names_drop = func
+        .child_by_field_name("name")
+        .and_then(|name| name.utf8_text(source).ok())
+        == Some("drop");
+    names_drop && enclosing_trait_impl_name(func, source) == Some("Drop")
+}
+
+/// The nearest enclosing `function_item` of `node`, or `None` when a
+/// `closure_expression` sits between the two. A closure body is not the
+/// enclosing function's own output — it may be handed off and run elsewhere —
+/// so exemptions that read that function's signature stop at it.
+fn enclosing_function_outside_closure(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    let mut current = node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "closure_expression" => return None,
+            "function_item" => return Some(parent),
+            _ => {}
+        }
+        current = parent;
+    }
+    None
+}
+
+/// True when `node`'s enclosing function is the infallible half of a `try_`
+/// pair: it declares no return type, and the scope declaring it also declares a
+/// public `try_<its name>` whose return type names a `Result`.
+///
+/// Such a pair splits one operation in two — `try_restore() -> io::Result<()>`
+/// hands the error to the caller, `restore()` handles it for them. Swallowing
+/// the error is the plain half's whole contract, so its stderr report is what it
+/// does with it, and the consumer who wants the error calls the twin instead.
+///
+/// Both halves of the name identity are required: a function that returns a
+/// `Result` itself is not a façade over anything, and a `try_` twin that returns
+/// nothing hands the caller no error either.
+fn is_infallible_half_of_try_pair(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+    if func.child_by_field_name("return_type").is_some() {
+        return false;
+    }
+    let Some(name) = func
+        .child_by_field_name("name")
+        .and_then(|name| name.utf8_text(source).ok())
+    else {
+        return false;
+    };
+    let Some(scope) = func.parent() else {
+        return false;
+    };
+    let twin_name = format!("try_{name}");
+    let mut cursor = scope.walk();
+    scope
+        .named_children(&mut cursor)
+        .any(|item| is_public_result_fn_named(item, &twin_name, source))
+}
+
+/// True when `item` is a public `function_item` named `name` whose declared
+/// return type names a `Result` — `Result<T, E>`, `io::Result<()>`, or a crate
+/// alias, all read through their final path segment.
+fn is_public_result_fn_named(item: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+    if item.kind() != "function_item" {
+        return false;
+    }
+    let names_twin = item
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source).ok())
+        == Some(name);
+    names_twin
+        && is_pub(item, source)
+        && item
+            .child_by_field_name("return_type")
+            .and_then(|return_type| trait_base_name(return_type, source))
+            == Some("Result")
 }
 
 /// True when `node` sits in the `then` branch of an enclosing `if`
@@ -278,14 +407,7 @@ fn is_after_inverted_early_return_guard(node: tree_sitter::Node, source: &[u8]) 
 /// The `body` block of the nearest enclosing `function_item`, or `None` if
 /// `node` is not inside one.
 fn enclosing_function_body(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    let mut current = node;
-    while let Some(parent) = current.parent() {
-        if parent.kind() == "function_item" {
-            return parent.child_by_field_name("body");
-        }
-        current = parent;
-    }
-    None
+    enclosing_fn(node)?.child_by_field_name("body")
 }
 
 /// The first non-comment statement of a `block`, or `None` if empty.
@@ -1409,6 +1531,126 @@ edition = "2021"
     #[test]
     fn flags_eprintln_before_non_process_qualified_exit_call() {
         let source = "fn f() { eprintln!(\"oops\"); libc::exit(1); }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #8321 (ratatui `ratatui-core/src/terminal.rs:475`): the
+    /// `Drop` trait fixes `drop`'s signature to `fn drop(&mut self)`, so a
+    /// failed cursor restore has no `Result` to travel in — and panicking mid
+    /// unwind aborts the process. Reporting to stderr is what is left.
+    #[test]
+    fn allows_eprintln_in_drop_impl() {
+        let source = "struct Terminal { hidden_cursor: bool } \
+                      impl Drop for Terminal { fn drop(&mut self) { if self.hidden_cursor { \
+                      if let Err(err) = self.show_cursor() { \
+                      std::eprintln!(\"Failed to show the cursor: {err}\"); } } } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/terminal.rs", source).is_empty());
+    }
+
+    /// A path-qualified `impl core::ops::Drop for …` names the same trait —
+    /// the impl's trait is read through its final path segment.
+    #[test]
+    fn allows_eprintln_in_path_qualified_drop_impl() {
+        let source = "struct T; impl core::ops::Drop for T { fn drop(&mut self) { \
+                      eprintln!(\"cleanup failed\"); } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// The exemption is the trait contract, not the method name: an inherent
+    /// `fn drop` could have returned a `Result` and stays flagged.
+    #[test]
+    fn flags_eprintln_in_inherent_drop_method() {
+        let source = "struct T; impl T { fn drop(&mut self) { eprintln!(\"oops\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// A closure nested inside the destructor may be handed off and run
+    /// anywhere, so it is not the destructor's own output — the same boundary
+    /// the panic-hook exemption draws.
+    #[test]
+    fn flags_eprintln_in_closure_inside_drop_impl() {
+        let source = "struct T; impl Drop for T { fn drop(&mut self) { \
+                      self.on_error(|e| { eprintln!(\"{e}\"); }); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// A helper `fn` declared inside a `Drop::drop` body has its own signature
+    /// and could return a `Result`, so its `eprintln!` stays flagged.
+    #[test]
+    fn flags_eprintln_in_nested_fn_inside_drop_impl() {
+        let source = "struct T; impl Drop for T { fn drop(&mut self) { \
+                      fn report(e: Error) { eprintln!(\"{e}\"); } report(self.err()); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
+    }
+
+    /// Regression for #8321 (ratatui `ratatui/src/init.rs:509`): `restore()`
+    /// returns nothing and sits beside `pub fn try_restore() -> io::Result<()>`
+    /// — it is the documented error-swallowing façade over its twin, and the
+    /// consumer who wants the error calls the twin instead.
+    #[test]
+    fn allows_eprintln_in_infallible_half_of_try_pair() {
+        let source = "pub fn restore() { if let Err(err) = try_restore() { \
+                      std::eprintln!(\"Failed to restore terminal: {err}\"); } } \
+                      pub fn try_restore() -> io::Result<()> { Ok(()) }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/init.rs", source).is_empty());
+    }
+
+    /// The pair may be two methods of one `impl` block — the twin is looked up
+    /// among the siblings of the function that holds the `eprintln!`.
+    #[test]
+    fn allows_eprintln_in_infallible_half_of_try_pair_methods() {
+        let source = "impl Terminal { pub fn restore(&mut self) { \
+                      if let Err(err) = self.try_restore() { eprintln!(\"{err}\"); } } \
+                      pub fn try_restore(&mut self) -> Result<(), Error> { Ok(()) } }";
+        assert!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).is_empty());
+    }
+
+    /// Without a `try_` twin there is no other half holding the error, so the
+    /// same function stays flagged.
+    #[test]
+    fn flags_eprintln_in_facade_without_try_twin() {
+        let source = "pub fn restore() { if let Err(err) = do_restore() { \
+                      std::eprintln!(\"Failed to restore terminal: {err}\"); } }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/init.rs", source).len(), 1);
+    }
+
+    /// A `try_` twin that returns nothing hands the caller no error either, so
+    /// the plain half is not a façade over it.
+    #[test]
+    fn flags_eprintln_when_try_twin_returns_unit() {
+        let source = "pub fn restore() { if let Err(err) = try_restore() { eprintln!(\"{err}\"); } } \
+                      pub fn try_restore() { }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/init.rs", source).len(), 1);
+    }
+
+    /// The façade must swallow the error: one that returns a `Result` itself
+    /// could have propagated it and stays flagged.
+    #[test]
+    fn flags_eprintln_when_facade_itself_returns_result() {
+        let source = "pub fn restore() -> io::Result<()> { \
+                      if let Err(err) = try_restore() { eprintln!(\"{err}\"); } Ok(()) } \
+                      pub fn try_restore() -> io::Result<()> { Ok(()) }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/init.rs", source).len(), 1);
+    }
+
+    /// A private `try_` twin is not reachable by the consumer who wants the
+    /// error, so the plain half is not the documented alternative and stays
+    /// flagged.
+    #[test]
+    fn flags_eprintln_when_try_twin_is_private() {
+        let source = "pub fn restore() { if let Err(err) = try_restore() { eprintln!(\"{err}\"); } } \
+                      fn try_restore() -> io::Result<()> { Ok(()) }";
+        assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/init.rs", source).len(), 1);
+    }
+
+    /// Control from #8321: an ordinary `Err` arm that reports and swallows,
+    /// in a function that chose `Option` over `Result` and could have chosen
+    /// otherwise, is exactly what the rule targets.
+    #[test]
+    fn flags_eprintln_in_ordinary_error_swallowing_arm() {
+        let source = "pub fn load(path: &str) -> Option<String> { \
+                      match std::fs::read_to_string(path) { Ok(s) => Some(s), \
+                      Err(err) => { eprintln!(\"Failed to read {path}: {err}\"); None } } }";
         assert_eq!(run_in_crate(LIB_CARGO_TOML, "src/lib.rs", source).len(), 1);
     }
 
