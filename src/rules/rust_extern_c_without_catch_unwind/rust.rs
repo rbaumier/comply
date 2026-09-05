@@ -38,7 +38,7 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{fn_extern_abi, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{fn_extern_abi, is_test_code};
 
 /// Binary operators that panic on overflow or on a zero divisor. The comparison
 /// and bitwise operators sharing the `binary_expression` kind cannot panic, so
@@ -52,7 +52,7 @@ crate::ast_check! { on ["function_item"] prefilter = ["extern"] => |node, source
     // `"C-unwind"` defines unwinding across the boundary; every other ABI is
     // outside this rule's premise.
     if fn_extern_abi(node, source) != Some("C") { return; }
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };

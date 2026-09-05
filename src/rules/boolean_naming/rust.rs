@@ -10,7 +10,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 // Predicate prefixes accepted by the rule. The first row is the classic
 // API-surface set (`is_ready`, `has_items`, `should_retry`, …). The
@@ -96,7 +96,7 @@ fn check_node(node: tree_sitter::Node, ctx: &CheckCtx) -> Option<Diagnostic> {
     if is_toggle_yes_no_placeholder_param(node, source) {
         return None;
     }
-    if is_assertion_value_param(node, name, source) {
+    if is_assertion_value_param(node, name, source, ctx) {
         return None;
     }
     if is_wasm_bindgen_foreign_param(node, source) {
@@ -602,11 +602,16 @@ fn impl_self_type_name<'a>(
 /// unaffected and still flags. The walk stops at the first `closure_expression`
 /// boundary so a closure callback param named `expected`/`actual` is judged by
 /// its own enclosing function.
-fn is_assertion_value_param(node: tree_sitter::Node, name: &str, source: &[u8]) -> bool {
+fn is_assertion_value_param(
+    node: tree_sitter::Node,
+    name: &str,
+    source: &[u8],
+    ctx: &CheckCtx,
+) -> bool {
     if node.kind() != "parameter" || (name != "expected" && name != "actual") {
         return false;
     }
-    if is_in_test_context(node, source) {
+    if is_test_code(node, source, ctx) {
         return true;
     }
     let mut cursor = node;

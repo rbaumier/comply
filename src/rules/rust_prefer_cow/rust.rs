@@ -60,10 +60,10 @@
 //! statement that the by-value parameter is intentional.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context, is_pub};
+use crate::rules::rust_helpers::{has_clippy_allow, is_pub, is_test_code};
 
 crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
     if !is_pub(node, source) { return; }
 
     // The author explicitly opted out of `clippy::needless_pass_by_value` — the

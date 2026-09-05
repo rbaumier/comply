@@ -38,7 +38,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{has_test_attribute, is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::{has_test_attribute, is_test_code};
 
 const KINDS: &[&str] = &["impl_item"];
 
@@ -73,9 +73,8 @@ impl AstCheck for Check {
         // `self` still fires. A dedicated test-helper crate (e.g. `tower-test`)
         // is the test infrastructure itself, so its lock-in-`Drop` teardown is
         // intentional even though the source is not `#[cfg(test)]`-gated.
-        if is_in_test_context(node, source_bytes)
+        if is_test_code(node, source_bytes, ctx)
             || has_test_attribute(node, source_bytes)
-            || is_under_tests_dir(ctx.path)
             || ctx
                 .project
                 .nearest_cargo_manifest(ctx.path)

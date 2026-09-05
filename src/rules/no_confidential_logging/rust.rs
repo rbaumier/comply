@@ -203,7 +203,7 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
-    if crate::rules::rust_helpers::is_in_test_context(node, source) {
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx) {
         return;
     }
 

@@ -28,7 +28,7 @@
 //!   study.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{file_binds_name_to_module, is_in_test_context, root_node};
+use crate::rules::rust_helpers::{file_binds_name_to_module, is_test_code, root_node};
 
 const INTEGER_PRIMITIVES: &[&str] = &[
     "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
@@ -67,7 +67,7 @@ const DECLARATION_OWNERS: &[&str] = &[
 
 crate::ast_check! { on ["generic_type"] prefilter = ["HashMap", "HashSet"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir || ctx.file.path_segments.in_benchmark_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
     if !is_in_declaration_position(node) { return; }
 
     let Some(type_node) = node.child_by_field_name("type") else { return; };

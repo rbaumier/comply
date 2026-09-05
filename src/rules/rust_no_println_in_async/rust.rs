@@ -20,7 +20,7 @@
 //! [`CargoManifest::is_stdout_exporter_crate`]: crate::project::CargoManifest::is_stdout_exporter_crate
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_inside_async_fn};
+use crate::rules::rust_helpers::{is_inside_async_fn, is_test_code};
 
 /// True when `node` lies inside an `async { … }` or `async move { … }` block.
 /// tree-sitter-rust represents these as `async_block` nodes.
@@ -41,7 +41,7 @@ fn is_inside_async_block(node: tree_sitter::Node<'_>) -> bool {
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
     if ctx.path.to_string_lossy().contains("/examples/") { return; }
 
     let Some(macro_node) = node.child_by_field_name("macro") else { return; };

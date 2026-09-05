@@ -127,8 +127,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::rust_helpers::{
-    is_in_const_initializer, is_in_index_trait_impl, is_in_test_context, is_infallible_buffer_write,
-    is_under_tests_dir, preceded_by_nullity_guard,
+    is_in_const_initializer, is_in_index_trait_impl, is_infallible_buffer_write, is_test_code,
+    preceded_by_nullity_guard,
 };
 
 const KINDS: &[&str] = &["call_expression"];
@@ -196,7 +196,7 @@ impl AstCheck for Check {
             return;
         }
         // Skip test code — `.unwrap()` is fine there.
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // Skip crates declaring `categories = ["development-tools::testing"]` —

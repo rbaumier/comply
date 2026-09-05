@@ -127,7 +127,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["clone"] => |node, sourc
     // where authors already treat `.clone()` on an `Arc` as a cheap ref-count
     // bump. Skip inline `#[cfg(test)]` modules and `#[test]` functions inside
     // `src/` files (path-based `tests/` dirs are gated by `skip_in_test_dir`).
-    if crate::rules::rust_helpers::is_in_test_context(node, source) { return; }
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,

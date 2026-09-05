@@ -6,9 +6,7 @@
 //! left alone: their panics signal caller programming errors at app build time.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{
-    enclosing_fn, fn_is_async, has_outer_attribute, is_in_test_context, is_under_tests_dir,
-};
+use crate::rules::rust_helpers::{enclosing_fn, fn_is_async, has_outer_attribute, is_test_code};
 use tree_sitter::Node;
 
 /// Web-framework route-registration attribute macros (`#[get(...)]`, …).
@@ -23,11 +21,11 @@ const ROUTE_ATTR_MACROS: [&str; 5] = ["get", "post", "put", "delete", "patch"];
 /// the code tree. Routing constructs inside `#[cfg(test)]` / `#[test]` contexts
 /// are skipped too, so a file whose only `.route(...)` lives in its test module
 /// is not treated as a route file.
-fn is_route_file(root: Node, source: &[u8]) -> bool {
+fn is_route_file(root: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
     let mut cursor = root.walk();
     let mut stack = vec![root];
     while let Some(n) = stack.pop() {
-        if is_route_registration(n, source) && !is_in_test_context(n, source) {
+        if is_route_registration(n, source) && !is_test_code(n, source, ctx) {
             return true;
         }
         for child in n.children(&mut cursor) {
@@ -107,7 +105,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     let Some(mac) = node.child_by_field_name("macro") else { return };
     let Ok(mac_name) = mac.utf8_text(source) else { return };
 
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    if crate::rules::rust_helpers::is_test_code(node, source, ctx) {
         return;
     }
 
@@ -123,7 +121,7 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     while let Some(parent) = root.parent() {
         root = parent;
     }
-    if !is_route_file(root, source) {
+    if !is_route_file(root, source, ctx) {
         return;
     }
 

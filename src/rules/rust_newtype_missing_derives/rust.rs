@@ -42,7 +42,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
     any_outer_attribute, collect_top_level_derives, file_impls_trait_for_type,
-    has_attribute_option, has_test_attribute, is_in_test_context, is_pub,
+    has_attribute_option, has_test_attribute, is_pub, is_test_code,
 };
 
 /// Types whose `Eq`-ness is known here: stdlib leaves that implement `Eq`, and
@@ -108,7 +108,7 @@ crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, 
     if ctx.file.path_segments.in_test_dir { return; }
     // `is_in_test_context` reads the ANCESTORS' attributes, so a `#[cfg(test)]`
     // written on this very struct needs its own check.
-    if is_in_test_context(node, source) || has_test_attribute(node, source) { return; }
+    if is_test_code(node, source, ctx) || has_test_attribute(node, source) { return; }
     if !is_pub(node, source) { return; }
     // A generic newtype would need `T: Clone`-style bounds on every derive, a
     // constraint the author may have declined on purpose.

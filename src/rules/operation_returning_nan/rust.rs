@@ -8,12 +8,12 @@
 //! valid way to exercise NaN-robustness.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_tests_dir};
+use crate::rules::rust_helpers::is_test_code;
 
 crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     // Skip test code — deliberately constructing NaN / dividing by zero is a
     // valid technique for exercising NaN-robustness (e.g. `#[should_panic]`).
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    if is_test_code(node, source, ctx) {
         return;
     }
 

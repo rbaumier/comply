@@ -42,7 +42,7 @@
 //! wouldn't catch a real bug.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 
 const SHARING_WRAPPERS: &[&str] = &["Arc", "Rc", "LazyLock", "OnceLock", "Lazy", "OnceCell"];
 
@@ -55,7 +55,7 @@ const ARC_CONSTRUCTORS: &[&str] =
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     if ctx.file.path_segments.in_test_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let Some(type_node) = node.child_by_field_name("type") else { return; };
     let type_text = type_node.utf8_text(source).unwrap_or("");

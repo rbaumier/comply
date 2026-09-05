@@ -22,7 +22,7 @@
 //!   parenthesised expression, a turbofish. Unrecognised means unreported.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_loop_body, is_in_test_context, trailing_path_segment};
+use crate::rules::rust_helpers::{is_in_loop_body, is_test_code, trailing_path_segment};
 
 /// Calls that yield a cancel-safe future: dropping one mid-poll loses nothing,
 /// so rebuilding it every iteration is free and idiomatic. `timeout` is
@@ -46,7 +46,7 @@ crate::ast_check! { on ["macro_invocation"] prefilter = ["select!"] => |node, so
     let Some(name) = node.child_by_field_name("macro") else { return; };
     if trailing_path_segment(name, source) != Some("select") { return; }
     if !is_in_loop_body(node, source) { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let mut cursor = node.walk();
     let Some(body) = node.children(&mut cursor).find(|child| child.kind() == "token_tree") else { return; };

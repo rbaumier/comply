@@ -20,9 +20,7 @@
 //! structure to discriminate on, so there is no typed-error alternative.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{
-    is_expression_turbofish, is_in_test_context, is_under_tests_dir, result_error_type,
-};
+use crate::rules::rust_helpers::{is_expression_turbofish, is_test_code, result_error_type};
 
 crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     let Some(err_type) = result_error_type(node, source) else {
@@ -45,7 +43,7 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
     // in test code: tests return `Result` so the body can use `?`, and a `String`
     // error is fine there since the harness only displays it. The typed-error
     // guidance applies to library/production code, not tests.
-    if is_in_test_context(node, source) || is_under_tests_dir(ctx.path) {
+    if is_test_code(node, source, ctx) {
         return;
     }
     // A `Result<_, String>` in a trait method signature is a public API contract:

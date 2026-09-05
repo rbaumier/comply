@@ -125,7 +125,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     crate_has_external_consumers, enclosing_fn, has_attribute_option, has_outer_attribute_path,
-    is_effectively_pub, is_in_test_context, is_pub,
+    is_effectively_pub, is_pub, is_test_code,
+
 };
 
 const KINDS: &[&str] = &["struct_item"];
@@ -159,7 +160,7 @@ impl AstCheck for Check {
         let source_bytes = ctx.source.as_bytes();
         // Structs defined inside a test function or `#[cfg(test)]` module
         // are throwaway fixtures that never see untrusted input.
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // A struct defined as a local item inside a function body (any

@@ -124,7 +124,7 @@ pub(super) fn collect_diagnostics(
         if is_rust && rust::is_match_arm_pattern(node) {
             continue;
         }
-        if is_rust && crate::rules::rust_helpers::is_in_test_context(node, source_bytes) {
+        if is_rust && crate::rules::rust_helpers::is_test_code(node, source_bytes, ctx) {
             continue;
         }
         occurrences

@@ -14,7 +14,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_test_context, is_under_env_var_gate, is_under_tests_dir};
+use crate::rules::rust_helpers::{is_test_code, is_under_env_var_gate};
 
 const KINDS: &[&str] = &["macro_invocation"];
 
@@ -43,7 +43,7 @@ impl AstCheck for Check {
         if name != "dbg" {
             return;
         }
-        if is_in_test_context(node, source_bytes) || is_under_tests_dir(ctx.path) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         if is_under_env_var_gate(node, source_bytes) {

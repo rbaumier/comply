@@ -33,8 +33,8 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    enclosing_fn, is_gated_by_cfg, is_in_test_context, is_in_trait_impl, is_under_tests_dir,
-    macro_body, split_top_level_args, string_literal_content,
+    enclosing_fn, is_gated_by_cfg, is_in_trait_impl, is_test_code, macro_body,
+    split_top_level_args, string_literal_content,
 };
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -72,8 +72,7 @@ impl AstCheck for Check {
         // segment and a fuzz crate identified by its `Cargo.toml`
         // (`[package.metadata] cargo-fuzz = true` or a `libfuzzer-sys`/`afl`/
         // `honggfuzz` dependency), covering non-`fuzz_targets/` layouts.
-        if is_in_test_context(node, source_bytes)
-            || is_under_tests_dir(ctx.path)
+        if is_test_code(node, source_bytes, ctx)
             || ctx.project.in_fuzz_crate(ctx.path)
         {
             return;

@@ -10,7 +10,7 @@
 //! test context.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{is_in_test_context, is_safety_marker};
+use crate::rules::rust_helpers::{is_safety_marker, is_test_code};
 
 crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, diagnostics|
     let Ok(text) = node.utf8_text(source) else { return; };
@@ -37,7 +37,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
     // A comment in a test characterises the fixture the test feeds in. "A string
     // that's clearly broken" states how malformed an input is; no production
     // complexity sits behind it.
-    if is_in_test_context(node, source) {
+    if is_test_code(node, source, ctx) {
         return;
     }
     let (line, column) = word_position(node, text, offset);

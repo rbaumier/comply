@@ -1,12 +1,12 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{has_attached_comment, is_in_test_context};
+use crate::rules::rust_helpers::{has_attached_comment, is_test_code};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Regex::new"] => |node, source, ctx, diagnostics|
     let Some(func_node) = node.child_by_field_name("function") else { return };
     let Ok(func_text) = func_node.utf8_text(source) else { return };
     if func_text != "Regex::new" { return; }
 
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     if is_in_named_binding_init(node) { return; }
 

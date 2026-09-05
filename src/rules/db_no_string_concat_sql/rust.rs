@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_in_test_context;
+use crate::rules::rust_helpers::is_test_code;
 use crate::rules::sql_helpers::is_sql_string;
 
 use super::position::placeholder_is_identifier_position;
@@ -69,7 +69,7 @@ impl AstCheck for Check {
         // `#[test]` fn is a query fixture fed to the code under test against an
         // in-process session, never a production query over untrusted input, so
         // the injection rationale does not apply.
-        if is_in_test_context(node, source_bytes) {
+        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         let pos = node.start_position();

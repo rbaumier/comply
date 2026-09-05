@@ -26,7 +26,7 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{enclosing_fn, is_in_loop_body, is_in_test_context};
+use crate::rules::rust_helpers::{enclosing_fn, is_in_loop_body, is_test_code};
 
 /// `io::Read` / `io::Write` methods that issue one syscall per call on an
 /// unbuffered handle. `read_to_string` / `read_to_end` read the whole file in
@@ -62,7 +62,7 @@ crate::ast_check! {
     => |node, source, ctx, diagnostics|
 
     if ctx.file.path_segments.in_test_dir { return; }
-    if is_in_test_context(node, source) { return; }
+    if is_test_code(node, source, ctx) { return; }
 
     let Some(name) = let_binding_name(node, source) else { return; };
     let Some(value) = node.child_by_field_name("value") else { return; };
