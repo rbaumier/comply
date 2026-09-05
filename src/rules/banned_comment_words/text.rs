@@ -1,98 +1,68 @@
 //! banned-comment-words backend — scan comment lines for dismissive filler.
 //!
-//! Each match must be (a) inside a comment (we look for the `//` or `/*`
-//! marker first) and (b) on a word boundary so we don't false-positive on
-//! `simplify` matching `simply` or `understanding` matching nothing. The
-//! word list mirrors `super::BANNED`; keep the two in sync.
+//! A match must be inside a comment, so the line is read from its `//` or `/*`
+//! marker on. The word list, the word-boundary test and the sense tests are
+//! `super::find_banned_word`'s, so a Vue file gets the verdict a `.ts` file
+//! with the same comment gets.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
-
-const BANNED: &[&str] = &[
-    "obviously",
-    "simply",
-    "just",
-    "basically",
-    "clearly",
-    "trivially",
-    "reloaded",
-    "really",
-    "literally",
-    "genuinely",
-    "honestly",
-    "truly",
-    "fundamentally",
-    "inevitably",
-    "interestingly",
-    "importantly",
-    "crucially",
-];
+use crate::rules::comment_blocks::RawComment;
 
 #[derive(Debug)]
 pub struct Check;
 
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            let Some(comment_text) = comment_body(line) else {
-                continue;
-            };
-            for &word in BANNED {
-                if !contains_word_boundary(comment_text, word) {
-                    continue;
-                }
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "banned-comment-words".into(),
-                    message: format!(
-                        "Comment uses `{word}` — dismissive filler that hides complexity. \
-                         Either explain the actual subtlety or delete the comment if the \
-                         line is genuinely self-explanatory."
-                    ),
-                    severity: Severity::Error,
-                    span: None,
-                });
-                break; // one diagnostic per line is enough
-            }
-        }
-        diagnostics
+        let comments = comment_lines(ctx.source);
+        let matches: Vec<(usize, &'static str)> = comments
+            .iter()
+            .filter_map(|comment| {
+                super::find_banned_word(&comment.raw).map(|(word, _)| (comment.line, word))
+            })
+            .collect();
+        let budget = super::explanation_budget(ctx);
+        let explained = super::explained_rows(comments, ctx.source, budget);
+        matches
+            .into_iter()
+            .filter(|(line, _)| !explained.contains(line))
+            .map(|(line, word)| Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line,
+                column: 1,
+                rule_id: super::META.id.into(),
+                message: format!(
+                    "Comment uses `{word}` — dismissive filler that hides complexity. \
+                     Either explain the actual subtlety or delete the comment if the \
+                     line is genuinely self-explanatory."
+                ),
+                severity: Severity::Error,
+                span: None,
+            })
+            .collect()
     }
 }
 
-/// Return the comment body (everything after `//` or `/*`) for this line,
-/// lowercased on demand by the caller. Returns None if the line has no
-/// comment marker.
-fn comment_body(line: &str) -> Option<&str> {
-    let pos = line.find("//").or_else(|| line.find("/*"))?;
-    Some(&line[pos..])
-}
-
-/// Case-insensitive word-boundary substring match — `word` must be preceded
-/// and followed by a non-letter character (or string boundary).
-fn contains_word_boundary(haystack: &str, word: &str) -> bool {
-    let h_lower = haystack.to_ascii_lowercase();
-    let bytes = h_lower.as_bytes();
-    let needle = word.as_bytes();
-    let mut i = 0;
-    while i + needle.len() <= bytes.len() {
-        if &bytes[i..i + needle.len()] == needle {
-            let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphabetic();
-            let next_ok =
-                i + needle.len() == bytes.len() || !bytes[i + needle.len()].is_ascii_alphabetic();
-            if prev_ok && next_ok {
-                if super::ends_with_negation(&h_lower[..i]) {
-                    i += 1;
-                    continue;
-                }
-                return true;
-            }
+/// Every line holding a comment, from its marker on, as the block merger reads
+/// comments. One line is one comment here: a `/* … */` spanning several lines
+/// is scanned line by line, which is the unit this backend reports on.
+fn comment_lines(source: &str) -> Vec<RawComment> {
+    let mut comments = Vec::new();
+    let mut byte = 0;
+    for (offset, line) in source.lines().enumerate() {
+        if let Some(column) = line.find("//").or_else(|| line.find("/*")) {
+            let raw = &line[column..];
+            comments.push(RawComment {
+                start_byte: byte + column,
+                line: offset + 1,
+                column: column + 1,
+                raw: raw.to_string(),
+                is_line: raw.starts_with("//"),
+            });
         }
-        i += 1;
+        byte += line.len() + 1;
     }
-    false
+    comments
 }
 
 #[cfg(test)]
@@ -174,6 +144,21 @@ mod tests {
     fn allows_negated_simply() {
         // "not simply" reverses the dismissive import — explanatory, not filler.
         assert!(run("// this will not simply filter the entries").is_empty());
+    }
+
+    #[test]
+    fn allows_negation_following_the_filler_word_issue_8184() {
+        assert!(run("// I really can't see a better way").is_empty());
+    }
+
+    #[test]
+    fn allows_banned_word_in_a_block_over_the_word_budget_issue_8184() {
+        let src = "\
+// The reader needs the whole story here, so this note names the compiler
+// version, the shorter form that fails to build, what the checker infers
+// instead, why that inference is wrong for this call, and it ends on the
+// upstream issue, because we could just write the shorter form otherwise.";
+        assert!(run(src).is_empty());
     }
 
     #[test]

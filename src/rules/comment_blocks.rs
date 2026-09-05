@@ -65,6 +65,15 @@ impl CommentBlock {
             .sum()
     }
 
+    /// True when the block spends more than `max` words on saying something.
+    ///
+    /// The word budget of `comment-max-block-words`, read as a property of the
+    /// block so that every rule asking "has this comment explained itself?"
+    /// reads the same number off the same measurement.
+    pub fn exceeds_budget(&self, max: usize) -> bool {
+        self.word_count() > max && !self.is_license()
+    }
+
     /// True for license and copyright banners.
     /// Those are duplicated by design, so their length is not a smell.
     pub fn is_license(&self) -> bool {
