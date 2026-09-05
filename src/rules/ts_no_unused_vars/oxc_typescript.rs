@@ -7,7 +7,7 @@ use crate::oxc_helpers::{byte_offset_to_line_col, is_custom_element_decorator_na
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers;
 use oxc_ast::AstKind;
-use oxc_ast::ast::{Expression, FunctionType, TSTypeName};
+use oxc_ast::ast::{ClassType, Expression, FunctionType, TSTypeName};
 use oxc_semantic::SymbolId;
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
@@ -78,24 +78,26 @@ fn is_preact_jsx_factory_import(
     })
 }
 
-/// True when `decl_node` is the id of a named function *expression*
-/// (`const f = function name() {}`). That name is the function's own identity,
-/// scoped to its body for self-reference / stack traces — it is intentionally
-/// not a binding in the outer scope, so an absence of references is by design,
-/// not dead code. A function *declaration* (`function name() {}`) is excluded:
-/// its name is a real outer-scope binding and an unused one stays reportable.
-fn is_named_function_expression_id(
+/// True when `decl_node` is the id of a named function or class *expression*
+/// (`const f = function name() {}`, `registry.b = class Name {}`). That name is
+/// the expression's own identity, bound in a scope holding only its body — for
+/// self-reference, `constructor.name` and stack traces. It is intentionally not
+/// a binding in the enclosing scope, whatever the expression is assigned to, so
+/// an absence of references is by design, not dead code. A function or class
+/// *declaration* is excluded: its name is a real outer-scope binding and an
+/// unused one stays reportable.
+fn is_named_expression_id(
     decl_node: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    matches!(
-        semantic.nodes().kind(decl_node),
-        AstKind::Function(func)
-            if matches!(
-                func.r#type,
-                FunctionType::FunctionExpression | FunctionType::TSEmptyBodyFunctionExpression
-            )
-    )
+    match semantic.nodes().kind(decl_node) {
+        AstKind::Function(func) => matches!(
+            func.r#type,
+            FunctionType::FunctionExpression | FunctionType::TSEmptyBodyFunctionExpression
+        ),
+        AstKind::Class(class) => matches!(class.r#type, ClassType::ClassExpression),
+        _ => false,
+    }
 }
 
 /// True when the binding spanning `symbol_span` is a non-rest property of an
@@ -585,7 +587,7 @@ impl OxcCheck for Check {
             let decl_node = scoping.symbol_declaration(symbol_id);
             let symbol_span = scoping.symbol_span(symbol_id);
 
-            if is_named_function_expression_id(decl_node, semantic) {
+            if is_named_expression_id(decl_node, semantic) {
                 continue;
             }
 
@@ -1089,6 +1091,71 @@ export { machineSnapshotMatches, machineSnapshotHasTag };
         let diags = run(src);
         assert_eq!(diags.len(), 1, "expected `unusedHelper` to be flagged: {diags:?}");
         assert!(diags[0].message.contains("`unusedHelper`"));
+    }
+
+    #[test]
+    fn no_fp_on_class_expression_id_in_any_position() {
+        // The inner name of a named class expression binds in the class's own
+        // scope, exactly like a named function expression's — the assignment
+        // target it ends up in has no bearing on that. (Closes #8231)
+        let src = r#"
+type Ctor = new () => object;
+declare const registry: Record<string, Ctor>;
+declare const obj: Record<string, unknown>;
+
+obj.send = function send(body: string): string { return body; };
+registry.b = class AlsoNeverRef { method(): void {} };
+export const E3 = function neverRefFn(n: number): number { return n; };
+export const E4 = class NeverRefCls { method(): void {} };
+const local = class LocalNeverRef {};
+const arr: unknown[] = [];
+arr.push(class InArray {});
+export { local };
+"#;
+        let diags = run(src);
+        for name in [
+            "send",
+            "AlsoNeverRef",
+            "neverRefFn",
+            "NeverRefCls",
+            "LocalNeverRef",
+            "InArray",
+        ] {
+            assert!(
+                !diags.iter().any(|d| d.message.contains(&format!("`{name}`"))),
+                "FP on class/function expression id `{name}`: {diags:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_fp_on_class_expression_assigned_to_global_property_in_javascript() {
+        // execa's `test/helpers/override-promise.js`: the class expression name
+        // is what identifies the mock in a stack trace. (Closes #8231)
+        let src = r#"
+const nativePromise = Promise;
+globalThis.Promise = class BrokenPromise {
+    then() {
+        throw new Error('error');
+    }
+};
+export { nativePromise };
+"#;
+        let diags = run_at(src, "test/helpers/override-promise.js");
+        assert!(
+            !diags.iter().any(|d| d.message.contains("`BrokenPromise`")),
+            "FP on class expression id assigned to a global property: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn still_flags_unused_class_declaration() {
+        // Negative-space guard: a class *declaration*'s name is a real
+        // outer-scope binding, so a genuinely unused one is still dead code.
+        let src = "class ReallyUnused {}\nexport {};";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1, "expected `ReallyUnused` to be flagged: {diags:?}");
+        assert!(diags[0].message.contains("`ReallyUnused`"));
     }
 
     #[test]
