@@ -1,7 +1,7 @@
 //! no-for-loop OXC backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_write_position};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::*;
 use oxc_span::GetSpan;
@@ -134,15 +134,19 @@ fn check_update<'a>(update: &'a Expression<'a>, idx_name: &str) -> bool {
     }
 }
 
-/// True when the loop index `symbol_id` is referenced anywhere in `body` in a
-/// position other than the computed key of a subscript (`arr[i]`). A call
-/// argument (`args.slice(i)`), a `return i`, or an arithmetic expression needs
-/// the numeric position, which a `for-of` loop cannot provide, so the rewrite
-/// suggestion would be wrong.
+/// True when the loop index `symbol_id` has a reference in `body` that a
+/// `for-of` binding cannot stand in for. Only a read through the computed key of
+/// a subscript (`arr[i]`) survives, because that is exactly what the loop
+/// variable of a `for-of` yields:
+///
+/// - a call argument (`args.slice(i)`), a `return i`, or an arithmetic
+///   expression needs the numeric position, which `for-of` does not provide;
+/// - a write through the subscript (`arr[i] = …`, `arr[i] += 1`, `arr[i]++`)
+///   stores back into the array, which a by-value `for-of` binding cannot do.
 ///
 /// References in the loop header (`i < arr.length`, `i++`) lie outside the body
 /// span and are not considered.
-fn index_used_beyond_subscript(
+fn index_has_non_iterable_use(
     body: &Statement,
     symbol_id: oxc_semantic::SymbolId,
     semantic: &oxc_semantic::Semantic<'_>,
@@ -156,19 +160,18 @@ fn index_used_beyond_subscript(
         if ref_span.start < body_span.start || ref_span.end > body_span.end {
             return false;
         }
-        !is_subscript_key_use(nodes.kind(nodes.parent_id(reference.node_id())), ref_span)
+        let member_id = nodes.parent_id(reference.node_id());
+        let AstKind::ComputedMemberExpression(member) = nodes.kind(member_id) else {
+            return true;
+        };
+        // The span equality pins the reference to the key position, so
+        // `arr[i + 1]` (the key is the binary expression, not the bare `i`)
+        // does not qualify.
+        if member.expression.span() != ref_span {
+            return true;
+        }
+        is_write_position(nodes.parent_kind(member_id), member.span())
     })
-}
-
-/// True when a reference (spanning `ref_span`) is exactly the computed key of a
-/// member access — the `i` in `arr[i]`. The span equality pins the reference to
-/// the index position, so `arr[i + 1]` (the key is the binary expression, not
-/// the bare `i`) does not qualify.
-fn is_subscript_key_use(parent: AstKind<'_>, ref_span: oxc_span::Span) -> bool {
-    matches!(
-        parent,
-        AstKind::ComputedMemberExpression(member) if member.expression.span() == ref_span
-    )
 }
 
 impl OxcCheck for Check {
@@ -211,11 +214,12 @@ impl OxcCheck for Check {
             return;
         }
 
-        // 4. The index must be used only as `arr[i]` subscript inside the body.
-        // Any other use (slice(i), return i, arithmetic) needs the numeric
-        // position, which `for-of` cannot supply, so the rewrite is wrong.
+        // 4. The index must only be read as an `arr[i]` subscript inside the
+        // body. Any other use (slice(i), return i, arithmetic) needs the numeric
+        // position and a write-back (`arr[i] = …`) needs the reference, neither
+        // of which `for-of` supplies, so the rewrite would be wrong.
         if let Some(symbol_id) = idx_symbol
-            && index_used_beyond_subscript(&for_stmt.body, symbol_id, semantic)
+            && index_has_non_iterable_use(&for_stmt.body, symbol_id, semantic)
         {
             return;
         }
@@ -299,6 +303,36 @@ mod tests {
         // only body ref, so the loop is still a `for-of` candidate.
         let d = run_on("for (let i = 0; i < arr.length; i++) console.log(arr[i]);");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_write_back_subscript_issue_6546() {
+        // #6546: `arr[i]` is the assignment target. A `for-of` binds the element
+        // by value and cannot store it back, so the rewrite is wrong.
+        let src = "for (let i = 0; i < arr.length; i++) { arr[i] = transform(arr[i]); }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_compound_write_back_subscript_issue_6546() {
+        // `arr[i] += 1` stores through the subscript just like `=` does.
+        let src = "for (let i = 0; i < arr.length; i++) { arr[i] += 1; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_update_through_subscript_issue_6546() {
+        // `arr[i]++` is an update target — also a store.
+        let src = "for (let i = 0; i < arr.length; i++) { arr[i]++; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_subscript_read_on_assignment_rhs_issue_6546() {
+        // Control: `arr[i]` on the right of an assignment is a read, so the
+        // `for-of` rewrite still holds.
+        let src = "for (let i = 0; i < arr.length; i++) { total = total + arr[i]; }";
+        assert_eq!(run_on(src).len(), 1);
     }
 
     #[test]
