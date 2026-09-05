@@ -98,17 +98,20 @@
 //!
 //! A function/arrow expression *assigned* to a target (`inst.email = (params) =>
 //! later`, the constructor-factory convention `factory("Name", (inst, def) => {
-//! inst.check = ... })`) is deferred when the assignment itself cannot run
-//! before the referenced binding's declaration line. An assignment stores the
-//! expression, it never calls it, so nothing can reach the stored expression
-//! until the assignment has run. The object/array-literal containers are
-//! transparent here too (`inst.formats = { email: () => later }`). An assignment
-//! that does run in the synchronous pass preceding the declaration puts the
-//! expression within reach of a call the analysis cannot see, so it keeps the
-//! reference flagged (`obj.f = () => later; obj.f(); const later = 1`). Whether
-//! the assignment runs in that pass is read lexically, so an assignment placed in
-//! a callback its callee runs synchronously counts as deferred and leaves the
-//! reference unflagged.
+//! inst.check = ... })`) is deferred while nothing has reached into the object it
+//! was written onto. An assignment stores the expression, it never calls it, so
+//! reaching into that object through the base binding of the target
+//! (`inst.email = ...` → `inst`) is the only way to invoke what was stored — the
+//! same reasoning the object/array-literal containers follow, and those stay
+//! transparent here (`inst.formats = { email: () => later }`). The reference stays
+//! flagged when such a read runs after the store and before the declaration line
+//! (`obj.f = () => later; obj.f(); const later = 1`); a read that precedes the
+//! store reads an object that does not hold the expression yet, and one from a
+//! deferred body runs later. When the target names no base binding — a bare
+//! identifier, `this.f`, or an unresolvable base such as `getObj().f` — the
+//! assignment's own site bounds the expression instead, and whether that site runs
+//! in the synchronous pass is read lexically, so an assignment placed in a
+//! callback its callee runs synchronously counts as deferred.
 //!
 //! Also skips forward references made from inside a function/arrow *expression*
 //! that lives inside a decorator (`@Decorator(...)`) — the lazy-thunk pattern
@@ -564,8 +567,11 @@ fn is_inside_deferred_definition<'a>(
 ///   (`const handlers = { run: () => later }`) and eagerly read before
 ///   `decl_start` through a read that can run what the literal holds
 ///   (`handlers.run(); const later = 1`) — see [`binding_read_before`];
-/// - an assignment (`inst.email = (p) => later`) whose own site is eagerly
-///   reachable, which puts the expression within reach of a later call.
+/// - an assignment (`inst.email = (p) => later`) whose target's base binding is
+///   eagerly reached, after the store and before `decl_start`, by something that
+///   can run what was stored (`obj.f = () => later; obj.f(); const later = 1`).
+///   With no such binding to consult, an assignment whose own site is eagerly
+///   reachable is what puts the expression within reach.
 ///
 /// "Before `decl_start`" counts only sites that share a synchronous pass with
 /// the declaration — module evaluation, or the run of the function body that
@@ -584,7 +590,7 @@ fn is_deferred_function_expression<'a>(
     if crate::oxc_helpers::function_is_immediately_invoked(nodes, func_id) {
         return false;
     }
-    match function_expression_owner(nodes, func_id) {
+    match function_expression_owner(nodes, scoping, func_id) {
         Some(ExpressionOwner::Variable(symbol_id, BindingReach::IsValue)) => {
             !binding_called_before(nodes, scoping, symbol_id, decl_start)
         }
@@ -598,11 +604,24 @@ fn is_deferred_function_expression<'a>(
             scoping,
             symbol_id,
             &ReadTrigger {
+                stored_at: 0,
                 decl_start,
                 member_access_runs_code: container_declares_accessor,
             },
         ),
-        Some(ExpressionOwner::Assignment) => !is_eagerly_reachable(nodes, func_id, decl_start),
+        Some(ExpressionOwner::Assignment(Some(base))) => !binding_read_before(
+            nodes,
+            scoping,
+            base.root,
+            &ReadTrigger {
+                stored_at: base.stored_at,
+                decl_start,
+                member_access_runs_code: false,
+            },
+        ),
+        Some(ExpressionOwner::Assignment(None)) => {
+            !is_eagerly_reachable(nodes, func_id, decl_start)
+        }
         None => false,
     }
 }
@@ -615,15 +634,22 @@ enum ExpressionOwner {
     /// how the expression relates to that variable's value. The variable's own
     /// references say whether it was reached early.
     Variable(oxc_semantic::SymbolId, BindingReach),
-    /// An assignment (`inst.email = (p) => ...`). The target is not resolved to a
-    /// symbol, so the expression is bounded by the assignment's own site instead:
-    /// nothing can call the stored expression until the assignment has run, and
-    /// the assignment runs where the expression sits. A target that does carry a
-    /// symbol (`x = () => ...`) is bounded the same way — its references are not
-    /// consulted. The selector and container wrappers between the expression and
-    /// the assignment do not move that site, so `BindingReach` is not carried
-    /// here.
-    Assignment,
+    /// An assignment (`inst.email = (p) => ...`). Reaching into the object the
+    /// assignment wrote to is the only way to invoke what it stored, so the base
+    /// binding of a member-expression target says when the expression was within
+    /// reach. `None` when no such binding exists (see [`assigned_member_base`]),
+    /// and the assignment's own site bounds the expression instead: nothing can
+    /// call a stored expression before the store has run.
+    Assignment(Option<AssignedMemberBase>),
+}
+
+/// The binding an assignment's member-expression target hangs off, and where the
+/// assignment stores.
+struct AssignedMemberBase {
+    root: oxc_semantic::SymbolId,
+    /// End of the assignment expression. A read before it reads an object the
+    /// assignment had not yet written to, so it cannot run what it stores.
+    stored_at: u32,
 }
 
 /// How a function/arrow expression relates to the value of the variable it
@@ -670,6 +696,7 @@ enum BindingReach {
 /// owning symbol and returns `None`.
 fn function_expression_owner<'a>(
     nodes: &'a oxc_semantic::AstNodes<'a>,
+    scoping: &Scoping,
     func_id: NodeId,
 ) -> Option<ExpressionOwner> {
     let mut current = func_id;
@@ -694,7 +721,11 @@ fn function_expression_owner<'a>(
                     .get()
                     .map(|symbol_id| ExpressionOwner::Variable(symbol_id, reach));
             }
-            AstKind::AssignmentExpression(_) => return Some(ExpressionOwner::Assignment),
+            AstKind::AssignmentExpression(assignment) => {
+                return Some(ExpressionOwner::Assignment(assigned_member_base(
+                    assignment, scoping,
+                )));
+            }
             AstKind::ConditionalExpression(_)
             | AstKind::LogicalExpression(_)
             | AstKind::ParenthesizedExpression(_)
@@ -712,6 +743,35 @@ fn function_expression_owner<'a>(
             _ => return None,
         }
     }
+}
+
+/// The binding an assignment's member-expression target hangs off, paired with
+/// the end of the assignment — `inst.email = …` → `inst`, `a.b.c = …` → `a`,
+/// `arr[i] = …` → `arr`.
+///
+/// `None` when the target names no such binding: a bare identifier
+/// (`x = () => ...`), `this.f`, a destructuring pattern, or a base the analysis
+/// cannot resolve to a single symbol (`getObj().f = ...`). Nothing then names the
+/// object the assignment wrote to, so the reads that reach into it cannot be
+/// enumerated.
+fn assigned_member_base(
+    assignment: &oxc_ast::ast::AssignmentExpression,
+    scoping: &Scoping,
+) -> Option<AssignedMemberBase> {
+    let object = match &assignment.left {
+        oxc_ast::ast::AssignmentTarget::StaticMemberExpression(member) => &member.object,
+        oxc_ast::ast::AssignmentTarget::ComputedMemberExpression(member) => &member.object,
+        _ => return None,
+    };
+    let root = crate::oxc_helpers::root_identifier_of_expr(object)?;
+    let symbol_id = root
+        .reference_id
+        .get()
+        .and_then(|reference_id| scoping.get_reference(reference_id).symbol_id())?;
+    Some(AssignedMemberBase {
+        root: symbol_id,
+        stored_at: assignment.span.end,
+    })
 }
 
 /// True when the object literal declares a getter or a setter, so reading or
@@ -757,8 +817,13 @@ fn binding_called_before(
     })
 }
 
-/// Which eager reads of a holder count as reaching what its value stores.
+/// Which eager reads of a holder count as reaching what it stores.
 struct ReadTrigger {
+    /// Where the holder received the expression: a read starting before it reads
+    /// a value the holder did not yet carry. A container holds the expression
+    /// from its own declarator on, so the container path sets `0`; an assignment
+    /// stores at an arbitrary point and sets its own end.
+    stored_at: u32,
     /// The referenced binding's declaration: a read starting at or after it runs
     /// once the binding is initialized and is no hazard.
     decl_start: u32,
@@ -767,18 +832,20 @@ struct ReadTrigger {
     member_access_runs_code: bool,
 }
 
-/// True when an *eager* read of `symbol_id` that can run what the holder's value
-/// stores starts before `trigger.decl_start`. Applies to a function/arrow
-/// expression stored in an object or array literal: reaching into that literal
-/// through its variable is the only way to trigger the stored expression, so such
+/// True when an *eager* read of `symbol_id` that can run what the holder stores
+/// falls inside the window `trigger` describes. Two holders ask this: a variable
+/// whose object/array literal stores the expression, and the base binding of an
+/// assignment that wrote the expression onto it. In both, reaching into the
+/// object through that binding is the only way to trigger the expression, so such
 /// a read is what could run it during the synchronous initialization pass that
 /// precedes the declaration.
 ///
-/// Three read shapes reach what the literal stores, per [`ContainerReadKind`]:
-/// an invoking member access, any member access when the literal declares an
-/// accessor, and a non-member read, which hands the whole container to somebody
-/// who may reach into it. A member access that only extracts a stored function
-/// (`reg.onSave` handed to a listener table) runs nothing on a data-only literal.
+/// Three read shapes reach what the holder stores, per [`ContainerReadKind`]:
+/// an invoking member access, any member access when the holder's literal
+/// declares an accessor, and a non-member read, which hands the whole object to
+/// somebody who may reach into it. A member access that only extracts a stored
+/// function (`reg.onSave` handed to a listener table) runs nothing on a data-only
+/// literal.
 ///
 /// Reads nested in another deferred function body run only when that body is
 /// later invoked and do not count. A write-only reference (`handlers =
@@ -795,7 +862,8 @@ fn binding_read_before(
             return false;
         }
         let ref_id = reference.node_id();
-        if nodes.kind(ref_id).span().start >= trigger.decl_start {
+        let ref_start = nodes.kind(ref_id).span().start;
+        if ref_start < trigger.stored_at || ref_start >= trigger.decl_start {
             return false;
         }
         let reaches = match container_read_kind(nodes, ref_id) {
@@ -2577,17 +2645,146 @@ mod tests {
     }
 
     #[test]
-    fn tolerated_false_negative_assignment_in_an_eagerly_run_callback_issue_8226() {
-        // Eagerness is read from lexical nesting, so the `forEach` callback counts
-        // as deferred even though it runs during module evaluation. The stored
-        // arrow reaches `later` in the TDZ at runtime and stays unflagged.
+    fn still_flags_assignment_in_a_synchronously_run_callback_issue_8226() {
+        // `forEach` runs the callback during module evaluation and `obj.f()` sits
+        // at module scope, so the stored arrow reaches `later` inside its TDZ.
+        let d = run_on(
+            "const obj: any = {};\n\
+             [1].forEach(() => { obj.f = () => later; });\n\
+             obj.f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an assignment reached through its base must be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_assignment_in_an_immediately_invoked_object_method_issue_8226() {
+        // The holder of the assignment is an object-literal method invoked on the
+        // spot; the call on the assigned member is what makes it reachable.
+        let d = run_on(
+            "const obj: any = {};\n\
+             ({ init() { obj.f = () => later; } }).init();\n\
+             obj.f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an assignment in an immediately invoked method must be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_assignment_in_an_eagerly_read_getter_issue_8226() {
+        // Reading `h.f` runs the getter, which stores the arrow; `obj.g()` then
+        // runs it before `later` is initialized.
+        let d = run_on(
+            "const obj: any = {};\n\
+             const h = { get f() { obj.g = () => later; return 1; } };\n\
+             h.f;\n\
+             obj.g();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an assignment in an eagerly read getter must be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn still_flags_assignment_to_an_unresolvable_base_issue_8226() {
+        // The target's base is a call result, so no binding names the object the
+        // assignment wrote to; the assignment's own site bounds the arrow.
+        let d = run_on(
+            "declare function getObj(): any;\n\
+             getObj().f = () => later;\n\
+             getObj().f();\n\
+             const later = 1;",
+        );
+        assert_eq!(
+            d.len(),
+            1,
+            "an assignment on an unresolvable base must be flagged: {d:?}"
+        );
+        assert!(d[0].message.contains("`later`"));
+    }
+
+    #[test]
+    fn no_fp_assignment_root_read_before_the_store_issue_8226() {
+        // `obj.init()` runs before the assignment, so it cannot reach a value the
+        // assignment had not yet stored.
         let source = "const obj: any = {};\n\
+                      obj.init();\n\
                       [1].forEach(() => { obj.f = () => later; });\n\
-                      obj.f();\n\
                       const later = 1;";
         assert!(
             run_on(source).is_empty(),
-            "the lexical eagerness read leaves this shape unflagged: {:?}",
+            "a read preceding the store should not count: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_assignment_never_reached_before_the_declaration_issue_8226() {
+        // Nothing reaches into `obj` between the store and the declaration, so
+        // the stored arrow cannot run inside the TDZ.
+        let source = "const obj: any = {};\n\
+                      obj.f = () => later;\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "an unreached assignment should not be flagged: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_assignment_root_read_only_after_the_declaration_issue_8226() {
+        // The call runs once `later` is initialized.
+        let source = "const obj: any = {};\n\
+                      obj.f = () => later;\n\
+                      const later = 1;\n\
+                      obj.f();";
+        assert!(
+            run_on(source).is_empty(),
+            "a read after the declaration should not count: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn no_fp_assignment_root_read_from_a_deferred_body_issue_8226() {
+        // The only read sits in a body nothing calls eagerly.
+        let source = "const obj: any = {};\n\
+                      obj.f = () => later;\n\
+                      export const start = () => obj.f();\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "a read from a deferred body should not count: {:?}",
+            run_on(source)
+        );
+    }
+
+    #[test]
+    fn tolerated_false_negative_assignment_and_call_inside_one_callback_issue_8226() {
+        // The read sits in the same callback as the store, and eagerness is read
+        // lexically, so the callback counts as deferred even though `forEach` runs
+        // it on the spot. A runtime TDZ error stays unflagged.
+        let source = "const obj: any = {};\n\
+                      [1].forEach(() => { obj.f = () => later; obj.f(); });\n\
+                      const later = 1;";
+        assert!(
+            run_on(source).is_empty(),
+            "a read inside the storing callback is not reachable: {:?}",
             run_on(source)
         );
     }
