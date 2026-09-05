@@ -175,16 +175,21 @@ impl OxcCheck for Check {
                         }
                     }
                 }
+                // A string-literal key names one member; any other key
+                // expression can select any of them, so all are reachable.
                 AstKind::ComputedMemberExpression(member) => {
                     if let Expression::Identifier(obj) = &member.object {
                         let obj_name = obj.name.as_str();
-                        if enums.contains_key(obj_name)
-                            && let Expression::StringLiteral(s) = &member.expression {
+                        if let Some(members) = enums.get(obj_name) {
+                            if let Expression::StringLiteral(s) = &member.expression {
                                 used.insert((
                                     obj_name.to_string(),
                                     s.value.as_str().to_string(),
                                 ));
+                            } else {
+                                mark_all_members_used(obj_name, members, &mut used);
                             }
+                        }
                     }
                 }
                 // `expr in EnumName` reads every member value off the compiled
@@ -616,6 +621,62 @@ enum Color {
 }
 type FoodName = keyof typeof Food;
 export const n: FoodName = "Pizza";
+const r = Color.Red;
+const g = Color.Green;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Blue"));
+    }
+
+    // Regression for #8379 — a computed key that is not a string literal can
+    // select any member, so no member of that enum is provably dead.
+    #[test]
+    fn dynamic_computed_key_marks_all_members_used() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export function pick(name: 'Pizza' | 'Taco') {
+    return Food[name];
+}
+"#;
+        assert!(run(source).is_empty());
+    }
+
+    // A string-literal computed key stays precise: it names exactly one member.
+    #[test]
+    fn string_literal_computed_key_marks_only_that_member() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+const t = Food["Taco"];
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Pizza"));
+    }
+
+    // A dynamic access on one enum does not exempt an unrelated enum's dead
+    // member.
+    #[test]
+    fn dynamic_computed_key_does_not_exempt_unrelated_enum() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+export function pick(k: string) {
+    return Food[k as 'Pizza' | 'Taco'];
+}
 const r = Color.Red;
 const g = Color.Green;
 "#;
