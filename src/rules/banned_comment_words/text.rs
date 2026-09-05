@@ -147,6 +147,30 @@ mod tests {
     }
 
     #[test]
+    fn allows_the_non_hedge_senses_of_just_issue_8310() {
+        // The same comments the `.rs` and `.ts` backends read, and the same
+        // verdicts: the sense tests live in the scanner all three share.
+        let src = "\
+// ripgrep must sniff utf-8 BOM, just like it does with utf-16.
+const a = 1;
+
+// We have just enough space.
+const b = 2;
+
+// Get a mutable view into the bytes we've just read.
+const c = 3;
+
+// If the entire glob is just `**`, then it should match everything.
+const d = 4;
+
+// just call foo and it works
+const e = 5;
+";
+        let diags = run(src);
+        assert_eq!(diags.iter().map(|d| d.line).collect::<Vec<_>>(), vec![13]);
+    }
+
+    #[test]
     fn allows_negation_following_the_filler_word_issue_8184() {
         assert!(run("// I really can't see a better way").is_empty());
     }
