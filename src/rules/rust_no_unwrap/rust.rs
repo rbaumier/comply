@@ -67,6 +67,15 @@
 //! literal range (`a[5..2]`) is also suppressed; a dynamic-length receiver
 //! (`chunk`, `a[i..i+4]`, `a[4..]`) still flags.
 //!
+//! A guarded receiver is exempted — an earlier early-return `if` guard in the
+//! same block whose consequence diverges and whose condition tests the receiver
+//! for emptiness (`if x.is_none() { return … }`, including as one `||` disjunct)
+//! leaves the receiver occupied on fall-through, so the call is unreachable.
+//! The guard and the receiver are matched through the variant-preserving
+//! adapters, so a guard on `self.store` covers `self.store.as_ref().unwrap()`;
+//! a guard on a different receiver, one whose consequence falls through, or a
+//! write to the receiver between the guard and the call keeps flagging.
+//!
 //! `Index`/`IndexMut` impls are exempted — `fn index`/`fn index_mut` return
 //! `&Self::Output` / `&mut Self::Output`, never a `Result`/`Option`, so they
 //! cannot propagate an error. Panicking on missing elements is the documented
@@ -105,6 +114,7 @@ use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::rust_helpers::{
     is_in_const_initializer, is_in_index_trait_impl, is_in_test_context, is_under_tests_dir,
+    preceded_by_nullity_guard,
 };
 
 const KINDS: &[&str] = &["call_expression"];
@@ -212,6 +222,13 @@ impl AstCheck for Check {
         // is the documented trait contract and `unwrap`/`expect` is the only valid
         // implementation.
         if is_in_index_trait_impl(node, source_bytes) {
+            return;
+        }
+        // Skip a receiver an earlier early-return guard in the same block already
+        // proved occupied (`if x.is_none() { return … }` before `x.unwrap()`):
+        // control reaches the call only when the guard fell through, so there is
+        // no runtime condition left to turn into a panic.
+        if preceded_by_nullity_guard(node, function, source_bytes) {
             return;
         }
         // Skip lock operations and constant-bounds `try_into()` — both call the
@@ -1371,5 +1388,77 @@ proc-macro = true
         assert_eq!((diagnostics[0].line, diagnostics[0].column), (4, 10));
         let (offset, len) = diagnostics[0].span.expect("native rules carry a span");
         assert_eq!(&source[offset..offset + len], "expect");
+    }
+
+    /// Closes #8150, reduced from `harfbuzz/ttf-parser`'s `src/tables/colr.rs`:
+    /// the `||` guard returns whenever `self.variation_store` is `None`, so on
+    /// fall-through the receiver is `Some` and the unwrap is unreachable. The
+    /// guard names `self.store` while the unwrap goes through `.as_ref()` — the
+    /// adapter carries the variant through unchanged, so both name one value.
+    #[test]
+    fn allows_unwrap_after_dominating_is_none_guard() {
+        let source = r#"impl S {
+    pub fn guarded(&self, empty: bool) -> usize {
+        if empty || self.store.is_none() {
+            return 0;
+        }
+        let store = self.store.as_ref().unwrap();
+        store.len()
+    }
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// An `is_err()` guard discharges a `Result` receiver the same way: the
+    /// branch exits on `Err`, so fall-through leaves an `Ok`.
+    #[test]
+    fn allows_unwrap_after_dominating_is_err_guard() {
+        let source = r#"pub fn f(parsed: Result<u32, E>) -> u32 {
+    if parsed.is_err() {
+        return 0;
+    }
+    parsed.unwrap()
+}"#;
+        assert!(run_on(source).is_empty());
+    }
+
+    /// SOUNDNESS: a guard on a *different* receiver proves nothing about the one
+    /// being unwrapped — that is the bug the rule exists to report.
+    #[test]
+    fn flags_unwrap_guarded_on_a_different_receiver() {
+        let source = r#"pub fn f(&self) -> usize {
+    if self.other.is_none() {
+        return 0;
+    }
+    self.store.as_ref().unwrap().len()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS: a write to the receiver between the guard and the call means
+    /// the guard tested a value the call no longer unwraps.
+    #[test]
+    fn flags_unwrap_when_receiver_is_reassigned_after_the_guard() {
+        let source = r#"pub fn f(&mut self, next: Option<Store>) -> usize {
+    if self.store.is_none() {
+        return 0;
+    }
+    self.store = next;
+    self.store.as_ref().unwrap().len()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    /// SOUNDNESS: a guard whose consequence falls through leaves the receiver
+    /// empty on the path reaching the unwrap.
+    #[test]
+    fn flags_unwrap_after_guard_that_does_not_diverge() {
+        let source = r#"pub fn f(&self) -> usize {
+    if self.store.is_none() {
+        log("empty");
+    }
+    self.store.as_ref().unwrap().len()
+}"#;
+        assert_eq!(run_on(source).len(), 1);
     }
 }
