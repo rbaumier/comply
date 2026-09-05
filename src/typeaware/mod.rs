@@ -34,6 +34,7 @@ use wait_timeout::ChildExt;
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::files::SourceFile;
+use crate::toolchain::ToolchainError;
 
 /// The sidecar is embedded so the binary is self-contained; it's written to a
 /// temp file per run and executed with `node`.
@@ -78,10 +79,12 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     }
 
     if !node_available() {
-        anyhow::bail!(
-            "type-aware analysis needs Node.js on PATH to run the type-aware sidecar, but `node` \
-             was not found. Install Node.js."
-        );
+        return Err(ToolchainError::Unusable {
+            what: "type-aware analysis needs Node.js on PATH to run the type-aware sidecar, but \
+                   `node` was not found — install Node.js"
+                .to_owned(),
+        }
+        .into());
     }
 
     let Some(tsconfig) = find_tsconfig(files) else {
@@ -130,7 +133,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     };
 
     if let Some(err) = response.error.as_deref() {
-        return Err(sidecar_error(err));
+        return Err(sidecar_error(err).into());
     }
 
     Ok(map_diagnostics(
@@ -221,20 +224,24 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
 
 /// Build the hard error for a sidecar-reported environment-config failure. The
 /// sidecar only reports `error` for `package-not-found`, `api-init-failed: …`,
-/// and `snapshot-failed: …` — all toolchain/config gaps that must fail loud so
-/// a clean exit is never confused with type-aware not having run.
-fn sidecar_error(err: &str) -> anyhow::Error {
+/// and `snapshot-failed: …` — all toolchain gaps that must fail loud so a clean
+/// exit is never confused with type-aware not having run. A missing package has
+/// one install command; an API that refuses to start does not.
+fn sidecar_error(err: &str) -> ToolchainError {
     if err == "package-not-found" {
-        anyhow::anyhow!(
-            "type-aware analysis needs the typescript-go API, but @typescript/native-preview could \
-             not be resolved from the project. Install it with: npm install --save-dev \
-             @typescript/native-preview."
-        )
+        ToolchainError::Missing {
+            what: "type-aware analysis needs the typescript-go API, but \
+                   @typescript/native-preview could not be resolved from the project"
+                .to_owned(),
+            install_cmd: "npm install --save-dev @typescript/native-preview".to_owned(),
+        }
     } else {
-        anyhow::anyhow!(
-            "the type-aware sidecar failed to initialize the TypeScript program ({err}). This is a \
-             type-aware analysis-environment error; fix the toolchain."
-        )
+        ToolchainError::Unusable {
+            what: format!(
+                "the type-aware sidecar failed to initialize the TypeScript program ({err}) — fix \
+                 the TypeScript toolchain in this project"
+            ),
+        }
     }
 }
 
@@ -350,22 +357,32 @@ mod tests {
         assert_eq!(out[0].path.to_string_lossy(), "/abs/unmapped.ts");
     }
 
-    // ── fail-loud sidecar errors (#5941) ────────────────────────────────────
+    // ── fail-loud sidecar errors (#5941, #8109) ─────────────────────────────
 
-    // A `package-not-found` cause is a hard, actionable error: it names the
-    // missing package and the install command.
+    // A `package-not-found` cause is a hard error carrying the exact install
+    // command, so `main` renders an instruction rather than a crash banner.
     #[test]
-    fn sidecar_error_package_not_found_is_actionable() {
-        let msg = format!("{:#}", sidecar_error("package-not-found"));
-        assert!(msg.contains("@typescript/native-preview"), "{msg}");
-        assert!(msg.contains("npm install"), "{msg}");
+    fn sidecar_error_package_not_found_is_installable() {
+        let err = sidecar_error("package-not-found");
+        assert!(
+            matches!(&err, ToolchainError::Missing { install_cmd, .. }
+                if install_cmd == "npm install --save-dev @typescript/native-preview"),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .starts_with("type-aware analysis needs the typescript-go API"),
+            "{err}"
+        );
     }
 
-    // An api-init / snapshot cause is a hard error that preserves the underlying
-    // cause string and points at the toolchain.
+    // An api-init / snapshot cause is a hard error too, but no single command
+    // fixes it: it preserves the underlying cause and points at the toolchain.
     #[test]
     fn sidecar_error_api_init_preserves_cause() {
-        let msg = format!("{:#}", sidecar_error("api-init-failed: boom"));
+        let err = sidecar_error("api-init-failed: boom");
+        assert!(matches!(err, ToolchainError::Unusable { .. }), "{err:?}");
+        let msg = err.to_string();
         assert!(msg.contains("api-init-failed: boom"), "{msg}");
         assert!(msg.contains("toolchain"), "{msg}");
     }

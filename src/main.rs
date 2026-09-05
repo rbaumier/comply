@@ -42,6 +42,7 @@ mod parsing;
 mod project;
 mod rules;
 mod runner_helpers;
+mod toolchain;
 mod tui;
 mod typeaware;
 
@@ -75,12 +76,27 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::from(1),  // violations found
         Ok(false) => ExitCode::from(0), // clean
         Err(e) => {
-            eprintln!(
-                "comply: crashed unexpectedly: {e:#}\n\
-                 Re-run with RUST_BACKTRACE=1 and report at https://github.com/rbaumier/comply/issues"
-            );
+            eprintln!("{}", failure_message(&e));
             ExitCode::from(2)
         }
+    }
+}
+
+/// The stderr text for a failed run.
+///
+/// A missing or unusable mandatory toolchain is a condition comply diagnosed on
+/// purpose and knows the remedy for, so it gets that remedy. Anything else is
+/// unexpected and asks for a bug report.
+fn failure_message(e: &anyhow::Error) -> String {
+    match e
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<toolchain::ToolchainError>())
+    {
+        Some(gap) => format!("comply: {gap}"),
+        None => format!(
+            "comply: crashed unexpectedly: {e:#}\n\
+             Re-run with RUST_BACKTRACE=1 and report at https://github.com/rbaumier/comply/issues"
+        ),
     }
 }
 
@@ -155,6 +171,55 @@ mod tests {
             !type_aware_rules_active(&ts, &opted_out),
             "no type-aware rule left enabled must not drive the sidecar"
         );
+    }
+
+    // ── failure reporting (#8109) ───────────────────────────────────────────
+
+    fn native_preview_missing() -> anyhow::Error {
+        toolchain::ToolchainError::Missing {
+            what: "type-aware analysis needs the typescript-go API, but \
+                   @typescript/native-preview could not be resolved from the project"
+                .to_owned(),
+            install_cmd: "npm install --save-dev @typescript/native-preview".to_owned(),
+        }
+        .into()
+    }
+
+    /// A mandatory toolchain comply asked for and did not get is not a crash:
+    /// the user gets the install command, not a bug-report banner.
+    #[test]
+    fn a_toolchain_gap_reports_the_install_command() {
+        let msg = failure_message(&native_preview_missing());
+        assert_eq!(
+            msg,
+            "comply: type-aware analysis needs the typescript-go API, but \
+             @typescript/native-preview could not be resolved from the project.\n\
+             Install it with: npm install --save-dev @typescript/native-preview"
+        );
+        assert!(!msg.contains("crashed unexpectedly"), "{msg}");
+        assert!(!msg.contains("github.com/rbaumier/comply/issues"), "{msg}");
+    }
+
+    /// The gap is recognised through whatever context the pipeline added on the
+    /// way up, so a future `.context(..)` cannot silently restore the banner.
+    #[test]
+    fn a_toolchain_gap_is_recognised_under_added_context() {
+        use anyhow::Context;
+        let wrapped = Err::<(), _>(native_preview_missing())
+            .context("failed to lint TypeScript")
+            .unwrap_err();
+        assert!(
+            failure_message(&wrapped).starts_with("comply: type-aware analysis needs"),
+            "{wrapped:#}"
+        );
+    }
+
+    /// Anything comply did not diagnose on purpose still asks for a bug report.
+    #[test]
+    fn an_unexpected_failure_still_asks_for_a_bug_report() {
+        let msg = failure_message(&anyhow::anyhow!("boom"));
+        assert!(msg.starts_with("comply: crashed unexpectedly: boom"), "{msg}");
+        assert!(msg.contains("https://github.com/rbaumier/comply/issues"), "{msg}");
     }
 
     /// No TypeScript file means no program to resolve, whatever the config says.
@@ -880,14 +945,21 @@ fn apply_config_filters(mut diagnostics: Vec<Diagnostic>, config: &Config) -> Ve
     diagnostics
 }
 
-/// Abort with an actionable message when a linter comply delegates to is
-/// missing. These backends are not optional — skipping one would silently
-/// under-report — so comply refuses to run rather than report a false "clean".
-fn require_linter(available: bool, missing_msg: &str, install_cmd: &str) {
-    if !available {
-        eprintln!("comply: {missing_msg}.\nInstall it with: {install_cmd}");
-        std::process::exit(2);
+/// Refuse the run when a linter comply delegates to is not installed.
+/// These backends are not optional — skipping one would silently under-report
+/// — so comply stops rather than report a false "clean".
+fn require_linter(
+    available: bool,
+    missing_msg: &str,
+    install_cmd: &str,
+) -> Result<(), toolchain::ToolchainError> {
+    if available {
+        return Ok(());
     }
+    Err(toolchain::ToolchainError::Missing {
+        what: missing_msg.to_owned(),
+        install_cmd: install_cmd.to_owned(),
+    })
 }
 
 /// Lint Rust files via clippy subprocess + custom tree-sitter rules.
@@ -907,17 +979,17 @@ fn lint_rust(
         clippy::is_available(),
         "cargo clippy is required to lint Rust but was not found",
         "rustup component add clippy",
-    );
+    )?;
     require_linter(
         cargo_shear::is_available(),
         "cargo shear is required to lint Rust but was not found",
         "cargo install cargo-shear",
-    );
+    )?;
     require_linter(
         cargo_modules::is_available(),
         "cargo modules is required to lint Rust but was not found",
         "cargo install cargo-modules",
-    );
+    )?;
 
     // All four phases below are independent: they read the same input
     // slice but never mutate shared state and each spawns its own
@@ -1033,7 +1105,7 @@ fn lint_typescript(
         oxlint::is_available(),
         "oxlint is required to lint TypeScript/JavaScript but was not found",
         "npm install -g oxlint oxlint-tsgolint",
-    );
+    )?;
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 

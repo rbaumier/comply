@@ -357,6 +357,7 @@ dependencies = [
  "serde_yaml",
  "syntect",
  "tempfile",
+ "thiserror",
  "tokio",
  "toml",
  "tower-lsp",
