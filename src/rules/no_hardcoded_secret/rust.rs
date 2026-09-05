@@ -6,6 +6,9 @@
 //! reachable by the directory-based `skip_in_test_dir` lever, so the cfg
 //! attribute is detected through the AST instead. Attribute-item line spans
 //! are skipped for the same reason — see `collect_attribute_line_ranges`.
+//!
+//! No file-scoped prefilter is declared here either — see the text backend for
+//! why the rule's shapes cannot share one.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
@@ -16,40 +19,44 @@ use crate::rules::rust_helpers::has_test_attribute;
 pub struct Check;
 
 impl AstCheck for Check {
-    fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(text::Check::PREFILTER)
-    }
-
     fn check(&self, ctx: &CheckCtx, tree: &tree_sitter::Tree) -> Vec<Diagnostic> {
+        // The line scan runs first so the two tree walks below — a full
+        // traversal each — are paid only by a file that carries a secret shape.
+        let candidates: Vec<(usize, &'static str)> = ctx
+            .source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| !text::is_doc_or_comment_line(line))
+            .filter_map(|(idx, line)| text::scan_line(line).map(|found| (idx, found.kind)))
+            .collect();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
         let source = ctx.source.as_bytes();
         let test_ranges = collect_test_line_ranges(tree, source);
         let attribute_ranges = collect_attribute_line_ranges(tree);
 
-        let mut diagnostics = Vec::new();
-        for (idx, line) in ctx.source.lines().enumerate() {
-            if line_in_any_range(idx, &test_ranges)
-                || line_in_any_range(idx, &attribute_ranges)
-                || text::is_doc_or_comment_line(line)
-            {
-                continue;
-            }
-            if let Some(kind) = text::scan_line(line) {
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: idx + 1,
-                    column: 1,
-                    rule_id: "no-hardcoded-secret".into(),
-                    message: format!(
-                        "Possible hardcoded secret ({kind}) — move it to an \
-                         environment variable or secret store. If this is a \
-                         false positive, add a comply-ignore comment explaining."
-                    ),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            }
-        }
-        diagnostics
+        candidates
+            .into_iter()
+            .filter(|(idx, _)| {
+                !line_in_any_range(*idx, &test_ranges)
+                    && !line_in_any_range(*idx, &attribute_ranges)
+            })
+            .map(|(idx, kind)| Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: idx + 1,
+                column: 1,
+                rule_id: "no-hardcoded-secret".into(),
+                message: format!(
+                    "Possible hardcoded secret ({kind}) — move it to an \
+                     environment variable or secret store. If this is a \
+                     false positive, add a comply-ignore comment explaining."
+                ),
+                severity: Severity::Error,
+                span: None,
+            })
+            .collect()
     }
 }
 
@@ -123,6 +130,31 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    /// Lint through the engine, which applies the file-scoped prefilter pass
+    /// before calling the rule — `run_on` calls the check directly and cannot
+    /// see that gate.
+    fn engine_findings(source: &str) -> usize {
+        crate::engine::lint_in_memory(
+            std::path::Path::new("src/db.rs"),
+            crate::files::Language::Rust,
+            source,
+            crate::config::default_static_config(),
+            None,
+        )
+        .iter()
+        .filter(|d| d.rule_id.as_ref() == "no-hardcoded-secret")
+        .count()
+    }
+
+    // Regression test for #8518 — a credential-carrying DSN is evidence on its
+    // own; surfacing it must not depend on an unrelated `SECRET`/`PASSWORD`
+    // token sitting elsewhere in the file.
+    #[test]
+    fn flags_url_credential_in_file_naming_no_credential_keyword() {
+        let src = "fn connect() {\n    let db = \"postgres://admin:s3cretProd@db.example.com:5432/prod\";\n}\n";
+        assert_eq!(engine_findings(src), 1);
     }
 
     // Pattern 2 from #1495 — a test-fixture password inside a `#[cfg(test)]`
