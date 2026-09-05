@@ -9,14 +9,21 @@
 //! fine, their shape-checking callers are not. Values without the annotation
 //! (untyped or typed parameters, catch bindings) are out of scope: only an
 //! explicit `unknown` proves the author knew the value was unvalidated.
+//!
+//! Reads inside a branch guarded by a concrete-type narrowing of the same
+//! binding — `v instanceof C`, `Array.isArray(v)` — are typed reads of a
+//! declared member, not probes into an unvalidated bag, so they do not count.
+//! An object-ness gate narrows to no named type and keeps its branch in scope.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, identifier_is_unshadowed_global, span_contains};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    BinaryExpression, BinaryOperator, Expression, IdentifierReference, TSType, UnaryOperator,
+    Argument, BinaryExpression, BinaryOperator, Expression, IdentifierReference, LogicalOperator,
+    TSType, UnaryOperator,
 };
 use oxc_semantic::{NodeId, SymbolId};
+use oxc_span::{GetSpan, Span};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
@@ -36,8 +43,12 @@ enum ReadKind {
 
 struct Read {
     kind: ReadKind,
-    span_start: u32,
+    span: Span,
 }
+
+/// Where a binding carries a concrete type: the branch spans guarded by a
+/// narrowing that names one, per narrowed binding.
+type NarrowedBranches = FxHashMap<SymbolId, Vec<Span>>;
 
 pub struct Check;
 
@@ -53,7 +64,11 @@ impl OxcCheck for Check {
     ) -> Vec<Diagnostic> {
         // Validation reads grouped per (enclosing function, checked binding).
         let mut groups: FxHashMap<(NodeId, SymbolId), Vec<Read>> = FxHashMap::default();
+        let mut narrowings: Vec<(SymbolId, Span)> = Vec::new();
         for node in semantic.nodes().iter() {
+            if let Some(narrowing) = concrete_type_narrowing(node.kind(), semantic) {
+                narrowings.push(narrowing);
+            }
             let AstKind::BinaryExpression(bin) = node.kind() else { continue };
             let Some((ident, kind)) = classify(bin) else { continue };
             let Some(symbol) = resolved_symbol(ident, semantic) else { continue };
@@ -61,20 +76,17 @@ impl OxcCheck for Check {
                 continue;
             }
             let function = enclosing_function_id(node.id(), semantic);
-            groups
-                .entry((function, symbol))
-                .or_default()
-                .push(Read { kind, span_start: bin.span.start });
+            groups.entry((function, symbol)).or_default().push(Read { kind, span: bin.span });
         }
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        let narrowed = narrowed_branches(semantic, &narrowings);
 
         let mut fired: FxHashMap<NodeId, u32> = FxHashMap::default();
-        for ((function, _), reads) in &groups {
-            let member_count =
-                reads.iter().filter(|read| matches!(read.kind, ReadKind::Member)).count();
-            if member_count == 0 && reads.len() < 2 {
-                continue;
-            }
-            let first = reads.iter().map(|read| read.span_start).min().unwrap_or(0);
+        for ((function, symbol), reads) in &groups {
+            let branches = narrowed.get(symbol).map_or(&[][..], Vec::as_slice);
+            let Some(first) = first_shape_probe(reads, branches) else { continue };
             fired
                 .entry(*function)
                 .and_modify(|start| *start = (*start).min(first))
@@ -101,6 +113,94 @@ impl OxcCheck for Check {
             .collect();
         diagnostics.sort_by_key(|diagnostic| (diagnostic.line, diagnostic.column));
         diagnostics
+    }
+}
+
+/// Offset of the first hand-rolled shape check among `reads`, skipping the ones
+/// inside a branch where the binding carries a concrete type. `None` when what
+/// is left is legitimate narrowing rather than validation: no property-level
+/// check, and fewer than two literal comparisons on the binding itself.
+fn first_shape_probe(reads: &[Read], narrowed: &[Span]) -> Option<u32> {
+    let probes: Vec<&Read> = reads
+        .iter()
+        .filter(|read| !narrowed.iter().any(|branch| span_contains(*branch, read.span)))
+        .collect();
+    let member_count = probes.iter().filter(|read| matches!(read.kind, ReadKind::Member)).count();
+    if member_count == 0 && probes.len() < 2 {
+        return None;
+    }
+    probes.iter().map(|read| read.span.start).min()
+}
+
+/// A narrowing that gives a binding a concrete type, as the binding and the
+/// span of the test: `v instanceof C`, or `Array.isArray(v)`. An object-ness
+/// gate narrows to an unnamed bag whose properties stay `unknown`, so it is
+/// not one — probing those is what the rule reports.
+fn concrete_type_narrowing(
+    kind: AstKind,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<(SymbolId, Span)> {
+    match kind {
+        AstKind::BinaryExpression(bin) if bin.operator == BinaryOperator::Instanceof => {
+            let Expression::Identifier(ident) = &bin.left else { return None };
+            Some((resolved_symbol(ident, semantic)?, bin.span))
+        }
+        AstKind::CallExpression(call) => {
+            let Expression::StaticMemberExpression(callee) = &call.callee else { return None };
+            if callee.property.name.as_str() != "isArray" {
+                return None;
+            }
+            let Expression::Identifier(global) = &callee.object else { return None };
+            if global.name.as_str() != "Array" || !identifier_is_unshadowed_global(global, semantic)
+            {
+                return None;
+            }
+            let [Argument::Identifier(subject)] = call.arguments.as_slice() else { return None };
+            Some((resolved_symbol(subject, semantic)?, call.span))
+        }
+        _ => None,
+    }
+}
+
+/// Map each narrowed binding to the branch spans its narrowings guard: the
+/// consequent of an `if`/ternary whose test asserts one, and the right operand
+/// of an `&&` whose left does. A read there is a read of the narrowed type.
+fn narrowed_branches(
+    semantic: &oxc_semantic::Semantic,
+    narrowings: &[(SymbolId, Span)],
+) -> NarrowedBranches {
+    let mut branches = NarrowedBranches::default();
+    if narrowings.is_empty() {
+        return branches;
+    }
+    for node in semantic.nodes().iter() {
+        let (test, guarded) = match node.kind() {
+            AstKind::IfStatement(stmt) => (&stmt.test, stmt.consequent.span()),
+            AstKind::ConditionalExpression(cond) => (&cond.test, cond.consequent.span()),
+            AstKind::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+                (&logical.left, logical.right.span())
+            }
+            _ => continue,
+        };
+        for (symbol, narrowing) in narrowings {
+            if asserts_narrowing(test, *narrowing) {
+                branches.entry(*symbol).or_default().push(guarded);
+            }
+        }
+    }
+    branches
+}
+
+/// True when `test` holds only if the narrowing at `span` held: the test is
+/// that narrowing, or an `&&` chain one of whose operands is. A negation or an
+/// `||` breaks the implication and stops the walk.
+fn asserts_narrowing(test: &Expression, span: Span) -> bool {
+    match test {
+        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
+            asserts_narrowing(&logical.left, span) || asserts_narrowing(&logical.right, span)
+        }
+        Expression::ParenthesizedExpression(paren) => asserts_narrowing(&paren.expression, span),
+        other => other.span() == span,
     }
 }
 
@@ -394,6 +494,87 @@ mod tests {
              if (isRecord(error) && error.code === 'ENOENT') { return null; }\n  }\n}",
         );
         assert!(d.is_empty(), "{d:?}");
+    }
+
+    // Issue #8501: `Array.isArray` narrows to a real array, so `.length` is a
+    // typed read, not a probe into an unvalidated bag.
+    #[test]
+    fn allows_length_read_in_array_isarray_branch() {
+        let d = run_on(
+            "function filtersFromSearch(search: object, keys: readonly string[]) {\n  \
+             return keys.map((key) => {\n    \
+             const rawValue: unknown = search[key];\n    \
+             if (Array.isArray(rawValue) && rawValue.every((item) => typeof item === 'string')) \
+             {\n      return rawValue.length === 0 ? null : rawValue;\n    }\n    \
+             return null;\n  });\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_property_read_in_instanceof_branch() {
+        let d = run_on(
+            "function toTransportError(cause: unknown): Error {\n  \
+             if (cause instanceof DOMException && cause.name === 'AbortError') {\n    \
+             return cause;\n  }\n  return new Error('transport');\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_property_read_in_nested_instanceof_branch() {
+        let d = run_on(
+            "function toTransportError(cause: unknown): Error {\n  \
+             if (cause instanceof DOMException) {\n    \
+             if (cause.name === 'AbortError') { return cause; }\n  }\n  \
+             return new Error('transport');\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn allows_property_read_in_instanceof_ternary_branch() {
+        let d = run_on(
+            "function statusOf(value: unknown): number {\n  \
+             return value instanceof Response ? (value.status === 204 ? 0 : 1) : -1;\n}",
+        );
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    // The exemption is the guarded branch, not the whole function: a rejection
+    // guard leaves the hand-rolled validation after it in scope.
+    #[test]
+    fn flags_shape_check_outside_the_narrowed_branch() {
+        let d = run_on(
+            "function parse(value: unknown) {\n  \
+             if (Array.isArray(value)) { return null; }\n  \
+             if (isRecord(value) && typeof value.id === 'string') { return value; }\n  \
+             return null;\n}",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    // A negated narrowing asserts nothing inside the branch it guards.
+    #[test]
+    fn flags_shape_check_in_negated_narrowing_branch() {
+        let d = run_on(
+            "function parse(value: unknown) {\n  \
+             if (!Array.isArray(value)) {\n    \
+             return isRecord(value) && typeof value.id === 'string';\n  }\n  \
+             return false;\n}",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
+    }
+
+    // A shadowed `Array` says nothing about the built-in guard.
+    #[test]
+    fn flags_shape_check_under_shadowed_array_global() {
+        let d = run_on(
+            "function parse(Array: { isArray(v: unknown): boolean }, value: unknown) {\n  \
+             if (Array.isArray(value) && typeof value.id === 'string') { return value; }\n  \
+             return null;\n}",
+        );
+        assert_eq!(d.len(), 1, "{d:?}");
     }
 
     #[test]
