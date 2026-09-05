@@ -3,7 +3,6 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use std::path::Path;
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,10 +19,10 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        // `.test-d.ts`/`.test-d.tsx` are type-declaration test files where the
-        // `();(() => (<JSX/>))()` arrow-IIFE is the idiomatic way to evaluate a
-        // JSX expression as a statement for type-checking (tsd / expect-type).
-        if is_type_test_file(ctx.path) {
+        // In a tsd / expect-type type-test file the `(() => (<JSX/>))()`
+        // arrow-IIFE is the idiomatic way to evaluate a JSX expression as a
+        // statement for type-checking.
+        if ctx.file.is_type_test_file() {
             return;
         }
 
@@ -71,14 +70,6 @@ impl OxcCheck for Check {
     }
 }
 
-/// True for `*.test-d.ts` / `*.test-d.tsx` (and `.js`/`.jsx`) type-declaration
-/// test files. The `.test-d.` infix is the tsd / `expect-type` convention; an
-/// ordinary `.test.ts` (no `-d`) is unaffected.
-fn is_type_test_file(path: &Path) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    name.contains(".test-d.")
-}
-
 fn unwrap_parens<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> &'a oxc_ast::ast::Expression<'a> {
     let mut current = expr;
     while let oxc_ast::ast::Expression::ParenthesizedExpression(paren) = current {
@@ -107,8 +98,9 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
 
+    // Builds the real `FileCtx` from `path`, which the type-test-file guard reads.
     fn run_on(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, path)
+        crate::rules::test_helpers::run_rule_gated(&Check, source, path)
     }
 
     #[test]
@@ -135,8 +127,22 @@ mod tests {
     }
 
     #[test]
-    fn exempts_iife_in_test_d_ts() {
-        assert!(run_on("const foo = (() => (bar))();", "src/types.test-d.ts").is_empty());
+    fn exempts_iife_in_every_type_test_file_convention() {
+        // One shared spelling of "this is a tsd/dtslint type test", so a
+        // convention recognised for one type-test rule is recognised for all.
+        for path in [
+            "src/types.test-d.ts",
+            "src/types.types-test.ts",
+            "test-d/types.ts",
+            "test-tsd/types.ts",
+            "dtslint/types.ts",
+            "src/addDays/test.tp.ts",
+        ] {
+            assert!(
+                run_on("const foo = (() => (bar))();", path).is_empty(),
+                "IIFE in type-test file {path} must not be flagged"
+            );
+        }
     }
 
     #[test]

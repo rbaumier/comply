@@ -891,6 +891,15 @@ pub fn has_test_d_infix(path: &Path) -> bool {
         .is_some_and(|name| name.to_ascii_lowercase().contains(".test-d."))
 }
 
+/// True when the file name carries a `.types-test.` infix (e.g.
+/// `and.types-test.ts`), the spelling projects use for tsd-style type tests
+/// that live beside their source rather than in a `test-d/` directory.
+fn has_types_test_infix(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.to_ascii_lowercase().contains(".types-test."))
+}
+
 /// True when the file name carries a `.tp.` infix (e.g. `test.tp.ts`), the
 /// date-fns type-probe convention. Type-probe files exist solely to assert that
 /// the public API type-checks; they are never shipped or run as runtime code, so
@@ -928,15 +937,19 @@ const TYPE_TEST_DIR_SEGMENTS: &[&str] = &[
 ];
 
 /// True when `path` is a tsd/dtslint type-test file: one under a type-test
-/// directory ([`TYPE_TEST_DIR_SEGMENTS`]) or carrying a `.test-d.`/`.tp.`
-/// filename infix. A type-test file exists to assert type relationships
-/// (`expectType<number>(jsonify(value))`, `ConditionalSimplify<T, Function>`),
-/// so the banned wrapper/`Function` types it names are deliberately the subjects
-/// or inputs of those assertions — replacing them would change what is tested.
+/// directory ([`TYPE_TEST_DIR_SEGMENTS`]) or carrying a
+/// `.test-d.`/`.types-test.`/`.tp.` filename infix. A type-test file exists to
+/// assert type relationships (`expectType<number>(jsonify(value))`,
+/// `ConditionalSimplify<T, Function>`) and carries no runtime behaviour, so the
+/// constructs it names — banned wrapper/`Function` types, `any` test vectors,
+/// bare `@ts-expect-error` directives, annotated-but-unread callback parameters
+/// — are deliberately the subjects or inputs of those assertions; removing them
+/// would change what is tested.
 /// Narrower than `in_test_dir`: it does NOT cover ordinary `.test.`/`.spec.`
-/// unit tests, where the wrapper-/`Function`-type bans still apply.
+/// unit tests, where those bans still apply.
 pub fn is_type_test_file(path: &Path) -> bool {
     has_test_d_infix(path)
+        || has_types_test_infix(path)
         || has_type_probe_infix(path)
         || has_path_segment(path, TYPE_TEST_DIR_SEGMENTS)
 }
@@ -1912,6 +1925,8 @@ mod aux_path_tests {
         assert!(is_type_test_file(&PathBuf::from("__tests_dts__/config.ts")));
         assert!(is_type_test_file(&PathBuf::from("src/schema.test-d.ts")));
         assert!(is_type_test_file(&PathBuf::from("src/addDays/test.tp.ts")));
+        assert!(is_type_test_file(&PathBuf::from("src/and.types-test.ts")));
+        assert!(is_type_test_file(&PathBuf::from("src/and.types-test.tsx")));
         // Narrower than `in_test_dir`: ordinary unit-test files are NOT type
         // tests, so the wrapper-/`Function`-type bans still apply to them.
         assert!(!is_type_test_file(&PathBuf::from("src/widget.test.ts")));

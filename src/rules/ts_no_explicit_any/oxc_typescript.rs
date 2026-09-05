@@ -1,30 +1,13 @@
 //! ts-no-explicit-any oxc backend — flag TSAnyKeyword. tsd-style type-level
-//! test files (`test-d/` directory, `*.test-d.{ts,tsx}`, `*.types-test.{ts,tsx}`)
-//! are exempt: there `any` is a required test vector, not a production type.
+//! test files ([`crate::rules::file_ctx::FileCtx::is_type_test_file`]) are
+//! exempt: there `any` is a required test vector — it verifies how a type
+//! distributes over `any`, which differs from `unknown`/`never` — not a
+//! production escape hatch.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use std::sync::Arc;
-
-/// True when `path` is a tsd-style type-level test file, where `any` is a
-/// required test vector (verifying how a type distributes over `any`, which
-/// differs from `unknown`/`never`) rather than a production escape hatch.
-/// tsd convention: files under a `test-d/` directory, or named
-/// `*.test-d.{ts,tsx}` / `*.types-test.{ts,tsx}`.
-fn is_tsd_type_test_file(path: &std::path::Path) -> bool {
-    if path.components().any(|c| c.as_os_str() == "test-d") {
-        return true;
-    }
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| {
-            name.ends_with(".test-d.ts")
-                || name.ends_with(".test-d.tsx")
-                || name.ends_with(".types-test.ts")
-                || name.ends_with(".types-test.tsx")
-        })
-}
 
 pub struct Check;
 
@@ -40,7 +23,7 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if is_tsd_type_test_file(ctx.path) {
+        if ctx.file.is_type_test_file() {
             return;
         }
         let AstKind::TSAnyKeyword(kw) = node.kind() else {
@@ -84,6 +67,11 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
     }
 
+    // Builds the real `FileCtx` from `path`, which the type-test-file guard reads.
+    fn run_at(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_gated(&Check, src, path)
+    }
+
     #[test]
     fn flags_param_typed_any() {
         let src = "function f(x: any): number { return 0; }";
@@ -105,21 +93,27 @@ mod tests {
     #[test]
     fn flags_any_in_regular_src() {
         let src = "function f(x: any): number { return 0; }";
-        let diags = crate::rules::test_helpers::run_rule(&Check, src, "src/foo.ts");
-        assert_eq!(diags.len(), 1);
+        assert_eq!(run_at(src, "src/foo.ts").len(), 1);
     }
 
     #[test]
-    fn ignores_any_in_test_d_directory() {
+    fn ignores_any_in_every_type_test_file_convention() {
+        // One shared spelling of "this is a tsd/dtslint type test", so a
+        // convention recognised for one type-test rule is recognised for all.
         let src = "function f(x: any): number { return 0; }";
-        let diags = crate::rules::test_helpers::run_rule(&Check, src, "test-d/and.ts");
-        assert!(diags.is_empty());
-    }
-
-    #[test]
-    fn ignores_any_in_test_d_suffixed_file() {
-        let src = "function f(x: any): number { return 0; }";
-        let diags = crate::rules::test_helpers::run_rule(&Check, src, "and.test-d.ts");
-        assert!(diags.is_empty());
+        for path in [
+            "test-d/and.ts",
+            "and.test-d.ts",
+            "and.test-d.tsx",
+            "and.types-test.ts",
+            "test-tsd/and.ts",
+            "dtslint/and.ts",
+            "src/addDays/test.tp.ts",
+        ] {
+            assert!(
+                run_at(src, path).is_empty(),
+                "expected `any` to be exempt in type-test file {path}"
+            );
+        }
     }
 }
