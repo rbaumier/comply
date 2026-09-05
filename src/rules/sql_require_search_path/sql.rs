@@ -61,6 +61,19 @@ mod tests {
     }
 
     #[test]
+    fn allows_transaction_scoped_search_path_issue_8512() {
+        assert!(
+            run(
+                "/app/migrations/a.sql",
+                "SET LOCAL lock_timeout = '5s';\n\
+                 SET LOCAL search_path = pg_catalog, public;\n\
+                 ALTER TABLE \"x\" ADD COLUMN \"y\" numeric;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn skips_non_migration() {
         assert!(run("/app/src/schema.sql", "CREATE TABLE users (id INT);").is_empty());
     }

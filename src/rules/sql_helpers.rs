@@ -131,11 +131,39 @@ fn dml_shape_matches(lower: &str, verb: &str, clause: &str) -> bool {
     span_is_projection_shaped(projection)
 }
 
+/// `text` without a leading whole word `word`, or `None` when `text` does not
+/// start with that word. Both lowercase. Reads a statement's keywords
+/// left-to-right (`TO pg_catalog`, `IF NOT EXISTS t`).
+pub(crate) fn strip_leading_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let rest = text.strip_prefix(word)?;
+    if rest.as_bytes().first().is_some_and(|b| is_ident_byte(*b)) {
+        return None;
+    }
+    Some(rest)
+}
+
+/// `text` without a trailing whole word `word` and the whitespace around it, or
+/// `None` when `text` does not end with that word. Both lowercase. Reads the
+/// keywords leading up to a matched word right-to-left (`SET LOCAL` before
+/// `search_path`, `CREATE UNLOGGED` before `TABLE`).
+pub(crate) fn strip_trailing_word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
+    let trimmed = text.trim_end();
+    let start = trimmed.len().checked_sub(word.len())?;
+    if trimmed.get(start..)? != word {
+        return None;
+    }
+    let head = trimmed.get(..start)?;
+    if head.as_bytes().last().is_some_and(|b| is_ident_byte(*b)) {
+        return None;
+    }
+    Some(head.trim_end())
+}
+
 /// Byte range `(start, end)` of the first whole-word occurrence of `needle`
 /// (lowercase) in `haystack` (lowercase) at or after `from`, or `None`. A
 /// whole word is not flanked by identifier bytes, so `from` does not match
 /// inside `from_user`.
-fn find_word(haystack: &str, needle: &str, from: usize) -> Option<(usize, usize)> {
+pub(crate) fn find_word(haystack: &str, needle: &str, from: usize) -> Option<(usize, usize)> {
     let bytes = haystack.as_bytes();
     let needle = needle.as_bytes();
     if needle.is_empty() || bytes.len() < needle.len() {
@@ -564,6 +592,15 @@ mod tests {
     fn case_insensitive() {
         assert!(is_sql_string("update users set x = 1 where id = 2"));
         assert!(is_sql_string("Update Users Set X = 1 Where Id = 2"));
+    }
+
+    #[test]
+    fn strip_word_helpers_respect_word_boundaries() {
+        assert_eq!(strip_leading_word("to public", "to"), Some(" public"));
+        assert_eq!(strip_leading_word("to_char(x)", "to"), None);
+        assert_eq!(strip_trailing_word("set local ", "local"), Some("set"));
+        assert_eq!(strip_trailing_word("unset", "set"), None);
+        assert_eq!(strip_trailing_word("set", "set"), Some(""));
     }
 
     #[test]
