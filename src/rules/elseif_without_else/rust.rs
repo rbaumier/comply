@@ -4,19 +4,25 @@
 //! A chain that compiles without a final `else` is `()`-typed: Rust rejects a
 //! value-producing chain left open (E0317), so a missing branch never hands a
 //! caller a wrong value. What it can hide is work left undone for the remaining
-//! case, so the chain is flagged unless the code already says what happens then:
+//! case, so the chain is flagged unless the code already says what happens then.
 //!
-//! - **no fall-through** — every branch diverges, so control never reaches past
-//!   the chain;
-//! - **assertion guard** — every branch only asserts, and an assertion fires or
-//!   is elided, never silently does nothing;
-//! - **local accumulator** — every branch only stores a value: a local `let`, an
-//!   assignment, or a method call on a `let mut` binding of an enclosing scope,
-//!   so "leave it unchanged" is the remaining behavior. The shape proves a write,
-//!   not who owns what is written (see [`mutates_local_binding`]);
+//! One property of the chain as a whole says it:
+//!
 //! - **tail expression** — the chain stands directly above the value the
 //!   enclosing function answers with, so the chain and its remaining case share
 //!   one continuation and no `else` could hold anything the code does not say.
+//!
+//! Failing that, the chain is complete when every branch answers for itself —
+//! and the branches may answer differently, since each way is a claim about one
+//! branch and nothing else (see [`branch_answers_for_itself`]):
+//!
+//! - **no fall-through** — the branch diverges, so control never reaches past it;
+//! - **assertion guard** — it only asserts, and an assertion fires or is elided,
+//!   never silently does nothing;
+//! - **local accumulator** — it only stores a value: a local `let`, an
+//!   assignment, or a method call on a `let mut` binding of an enclosing scope,
+//!   so "leave it unchanged" is the remaining behavior. The shape proves a write,
+//!   not who owns what is written (see [`mutates_local_binding`]).
 //!
 //! Each is decided from the shape the branch has, not from the kind of node it
 //! is spelled with: divergence resolves the callee of a call (the shared
@@ -41,10 +47,10 @@ crate::ast_check! { on ["if_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
-    let branches = chain.branches.as_slice();
-    if branches.iter().all(|body| block_diverges(*body, source))
-        || branches.iter().all(|body| is_assertion_guard_block(*body, source))
-        || branches.iter().all(|body| is_local_accumulator_block(*body, source))
+    if chain
+        .branches
+        .iter()
+        .all(|body| branch_answers_for_itself(*body, source))
         || remaining_case_is_function_tail(node)
     {
         return;
@@ -97,6 +103,18 @@ impl<'tree> Chain<'tree> {
             }
         }
     }
+}
+
+/// True when `body`, one branch of the chain, settles on its own what the chain
+/// leaves for the remaining case — by diverging, by only asserting, or by only
+/// storing a value.
+///
+/// Each way is a claim about this branch alone, so a chain mixing them is as
+/// complete as one where every branch answers the same way.
+fn branch_answers_for_itself(body: Node, source: &[u8]) -> bool {
+    block_diverges(body, source)
+        || is_assertion_guard_block(body, source)
+        || is_local_accumulator_block(body, source)
 }
 
 /// What closes an `if_expression`.
@@ -482,7 +500,10 @@ fn f(a: bool, b: bool) {
     }
 
     #[test]
-    fn flags_branch_with_real_statement() {
+    fn allows_chain_mixing_an_asserting_and_an_accumulating_branch() {
+        // Each branch answers for itself — the assertion fires or is elided, the
+        // assignment leaves `x` at its prior value — so the chain is as complete
+        // as one whose branches all answer the same way.
         let src = r#"
 fn f(a: bool, b: bool) {
     let mut x = 0;
@@ -491,11 +512,10 @@ fn f(a: bool, b: bool) {
     } else if b {
         x = 1;
     }
+    record(x);
 }
 "#;
-        let d = run_on(src);
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].rule_id, "elseif-without-else");
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -531,23 +551,48 @@ fn f(a: bool, b: bool) {
     }
 
     #[test]
-    fn flags_chain_where_one_branch_does_not_diverge() {
-        // Negative control: the `else if` body does not diverge, so the
-        // missing `else` may be a real omission — still flagged.
+    fn allows_chain_mixing_a_diverging_and_an_accumulating_branch() {
+        // Repro from the issue: libm's `floorf`, vendored verbatim by
+        // mooman219/fontdue. One branch stores, the other returns, and the chain
+        // sits inside an `else` block, so no whole-chain shape covers it.
         let src = r#"
-fn f(a: bool, b: bool) {
-    let mut x = 0;
-    let mut y = 0;
-    if a {
-        return;
-    } else if b {
-        y = 2;
+fn floor(x: f32) -> f32 {
+    let mut ui = x.to_bits();
+    let e = (((ui >> 23) as i32) & 0xff) - 0x7f;
+    if e >= 0 {
+        ui &= !(0x007fffff >> e);
+    } else {
+        if ui >> 31 == 0 {
+            ui = 0;
+        } else if ui << 1 != 0 {
+            return -1.0;
+        }
     }
+    f32::from_bits(ui)
 }
 "#;
-        let d = run_on(src);
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].rule_id, "elseif-without-else");
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_chain_mixing_all_three_self_answering_branch_kinds() {
+        // Repro from the issue: an assignment, an assertion and a `return` in one
+        // chain. The kinds compose, so enumerating uniform chain shapes cannot
+        // close over them.
+        let src = r#"
+fn m4(a: bool, b: bool, c: bool, mut ui: u32) -> u32 {
+    if a {
+        ui = 0;
+    } else if b {
+        debug_assert!(c);
+    } else if c {
+        return 1;
+    }
+    ui += 1;
+    ui
+}
+"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
@@ -618,19 +663,20 @@ fn f(a: bool, b: bool) {
     }
 
     #[test]
-    fn flags_accumulator_with_a_return_branch() {
-        // Negative control: a branch returns — not a local update, still flagged
-        // (and it does not diverge in *every* branch, so the diverge exemption
-        // does not apply either).
+    fn flags_accumulator_with_an_acting_branch_inside_a_loop() {
+        // Negative control: one branch stores, the other acts on state the
+        // function does not declare — nothing answers for the remaining case,
+        // and the chain has no function tail below it.
         let src = r#"
-fn f(a: bool, b: bool) {
+fn f(items: &[i32], sink: &mut Vec<i32>) {
     let mut x = 0;
-    if a {
-        x = 1;
-    } else if b {
-        return;
+    for &i in items {
+        if i > 0 {
+            x = i;
+        } else if i < 0 {
+            sink.push(i);
+        }
     }
-    record(x);
 }
 "#;
         let d = run_on(src);
