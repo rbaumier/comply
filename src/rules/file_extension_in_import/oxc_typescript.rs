@@ -612,6 +612,42 @@ mod tests {
         );
     }
 
+    // Regression for #7834: TypeScript 5.8's `module:node18` is a pinned
+    // counterpart to `nodenext` — it derives each file's format from the nearest
+    // package.json `type` just like `node16`. A package without `"type":"module"`
+    // is therefore CommonJS and resolves extensionless relative imports through
+    // require(), so the rule must stay silent.
+    #[test]
+    fn skips_node18_module_without_type_field_issue_7834() {
+        let pkg = r#"{"name":"pkg","main":"dist/index.js"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"node18"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { x } from './util';\n",
+        );
+        assert!(
+            diags.is_empty(),
+            "CJS package on module:node18 (no type:module) resolves via require(): {diags:?}"
+        );
+    }
+
+    // Negative space for #7834: the same `node18` tsconfig with an ESM package
+    // scope makes each file ESM, where extensions are required.
+    #[test]
+    fn still_flags_node18_module_with_type_module_issue_7834() {
+        let pkg = r#"{"name":"pkg","type":"module"}"#;
+        let tsconfig = r#"{"compilerOptions":{"module":"node18"}}"#;
+        let diags = run_in_project(
+            &[("package.json", pkg), ("tsconfig.json", tsconfig)],
+            "import { x } from './util';\n",
+        );
+        assert_eq!(
+            diags.len(),
+            1,
+            "type:module on node18 is ESM — extensions still required: {diags:?}"
+        );
+    }
+
     // Regression for #7781: a CommonJS package whose tsconfig delegates
     // `module`/`moduleResolution` via `extends` into a rig config inside
     // node_modules (absent without `npm install`) is left with a tsconfig silent

@@ -5016,18 +5016,19 @@ impl ProjectCtx {
     ///   `moduleResolution:node` is governed by that closer tsconfig even when a
     ///   farther-up `package.json` is ESM.
     ///
-    /// - **`node16`/`nodenext`**: TypeScript/Node derive each file's module
-    ///   format from the nearest `package.json` `type` (marker `{"type":"module"}`
-    ///   manifests included; see [`nearest_package_type`]). Without
-    ///   `"type":"module"` the file is CommonJS; with it, ESM — so this returns
-    ///   true exactly when that manifest does not opt into ESM.
+    /// - **Node ESM module system** (see [`selects_node_esm_module_system`]):
+    ///   TypeScript/Node derive each file's module format from the nearest
+    ///   `package.json` `type` (marker `{"type":"module"}` manifests included; see
+    ///   [`nearest_package_type`]). Without `"type":"module"` the file is
+    ///   CommonJS; with it, ESM — so this returns true exactly when that manifest
+    ///   does not opt into ESM.
     ///
     /// - **Silent tsconfig**: the nearest tsconfig sets neither `module` nor
     ///   `moduleResolution` — typically because both are inherited from a base
     ///   config that is unresolvable without installed deps (`extends` into
     ///   `node_modules`). Node then decides the format from the same nearest
     ///   `package.json` `type`, so this falls back to it identically to the
-    ///   `node16`/`nodenext` case — CommonJS unless the manifest opts into ESM.
+    ///   Node-ESM case — CommonJS unless the manifest opts into ESM.
     ///
     /// Any positive ESM tsconfig signal (e.g. `module:esnext`,
     /// `moduleResolution:bundler`) returns false — callers keep their default
@@ -5035,10 +5036,8 @@ impl ProjectCtx {
     /// tsconfig governs `path`.
     ///
     /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
+    /// [`selects_node_esm_module_system`]: ProjectCtx::selects_node_esm_module_system
     pub fn is_commonjs_project(&self, path: &Path) -> bool {
-        fn is_node_next(m: &str) -> bool {
-            m.eq_ignore_ascii_case("node16") || m.eq_ignore_ascii_case("nodenext")
-        }
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
         };
@@ -5051,19 +5050,25 @@ impl ProjectCtx {
             .as_deref()
             .is_some_and(|m| CLASSIC.iter().any(|c| m.eq_ignore_ascii_case(c)));
         if !(module_is_cjs || resolution_is_classic) {
-            // No classic/commonjs-emit signal. Under `node16`/`nodenext`
-            // resolution — or when the tsconfig is entirely silent on module
-            // format (neither `module` nor `moduleResolution` set, e.g. both
-            // inherited from a base config that is unresolvable without installed
-            // deps) — TypeScript/Node derive each file's module format from the
-            // nearest `package.json` `type`: without `"type":"module"` the file is
+            // No classic/commonjs-emit signal. Under Node's ESM module system —
+            // or when the tsconfig is entirely silent on module format (neither
+            // `module` nor `moduleResolution` set, e.g. both inherited from a base
+            // config that is unresolvable without installed deps) —
+            // TypeScript/Node derive each file's module format from the nearest
+            // `package.json` `type`: without `"type":"module"` the file is
             // CommonJS (require-based, so extensionless relative imports resolve);
             // with it the file is ESM. Any other positive module signal
             // (e.g. `esnext`, `bundler`) keeps the ESM default.
-            let module_is_node_next = tsc.module.as_deref().is_some_and(is_node_next)
-                || tsc.module_resolution.as_deref().is_some_and(is_node_next);
+            let module_is_node_esm = tsc
+                .module
+                .as_deref()
+                .is_some_and(Self::selects_node_esm_module_system)
+                || tsc
+                    .module_resolution
+                    .as_deref()
+                    .is_some_and(Self::selects_node_esm_module_system);
             let tsconfig_is_silent = tsc.module.is_none() && tsc.module_resolution.is_none();
-            if module_is_node_next || tsconfig_is_silent {
+            if module_is_node_esm || tsconfig_is_silent {
                 return self.nearest_package_type(path) != ModuleType::Module;
             }
             return false;
@@ -5093,10 +5098,9 @@ impl ProjectCtx {
     /// JSON `import` must carry a `with { type: "json" }` import attribute. Both
     /// conditions must hold:
     ///
-    /// - the nearest tsconfig selects Node's ESM module system —
-    ///   `compilerOptions.module` or `moduleResolution` is
-    ///   `node16`/`node18`/`nodenext` (case-insensitive), directly or inherited
-    ///   through its `extends` chain; and
+    /// - the nearest tsconfig selects Node's ESM module system (see
+    ///   [`selects_node_esm_module_system`]), directly or inherited through its
+    ///   `extends` chain; and
     /// - the file's package scope is ESM — the nearest `package.json` declares
     ///   `"type":"module"` (see [`nearest_package_type`]). Under those module
     ///   systems a file without that field is CommonJS, where the JSON import
@@ -5108,22 +5112,35 @@ impl ProjectCtx {
     /// governs `path`.
     ///
     /// [`nearest_package_type`]: ProjectCtx::nearest_package_type
+    /// [`selects_node_esm_module_system`]: ProjectCtx::selects_node_esm_module_system
     pub fn requires_node_esm_import_attributes(&self, path: &Path) -> bool {
-        fn is_node_esm(m: &str) -> bool {
-            m.eq_ignore_ascii_case("node16")
-                || m.eq_ignore_ascii_case("node18")
-                || m.eq_ignore_ascii_case("nodenext")
-        }
         let Some(tsc) = self.nearest_tsconfig(path) else {
             return false;
         };
-        let module_is_node_esm = tsc.module.as_deref().is_some_and(is_node_esm)
-            || tsc.module_resolution.as_deref().is_some_and(is_node_esm);
+        let module_is_node_esm = tsc
+            .module
+            .as_deref()
+            .is_some_and(Self::selects_node_esm_module_system)
+            || tsc
+                .module_resolution
+                .as_deref()
+                .is_some_and(Self::selects_node_esm_module_system);
         module_is_node_esm && self.nearest_package_type(path) == ModuleType::Module
     }
 
-    /// The package-scope module type governing `path` under `node16`/`nodenext`
-    /// resolution: the `type` of the nearest enclosing `package.json`, counting
+    /// True when a tsconfig `module` / `moduleResolution` value selects Node's
+    /// ESM module system — `node16`, `node18` (TypeScript 5.8's pinned
+    /// counterpart to `nodenext`) or `nodenext`, case-insensitively. Under these,
+    /// and only these, each file's module format comes from its package scope
+    /// rather than from the compiler flag.
+    fn selects_node_esm_module_system(value: &str) -> bool {
+        ["node16", "node18", "nodenext"]
+            .iter()
+            .any(|m| value.eq_ignore_ascii_case(m))
+    }
+
+    /// The package-scope module type governing `path` under Node's ESM module
+    /// system: the `type` of the nearest enclosing `package.json`, counting
     /// bare `{"type":"module"}` marker manifests (whose sole purpose is to flag
     /// an ESM subtree, so they are authoritative here — unlike
     /// [`nearest_package_json`], which walks past them to the nearest package
