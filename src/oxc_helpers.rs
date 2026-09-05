@@ -814,6 +814,39 @@ pub fn jsx_element_name_is_component(name: &oxc_ast::ast::JSXElementName) -> boo
     )
 }
 
+/// Whether a JSX opening element carries a truthy `aria-hidden`, which removes
+/// the element and its subtree from the accessibility tree.
+///
+/// A bare `aria-hidden`, `aria-hidden="true"` and `aria-hidden={true}` are all
+/// truthy; `"false"`, `{false}` and any dynamic value are not, since a value the
+/// checker cannot resolve may well be hiding nothing.
+#[must_use]
+pub fn jsx_opening_element_is_aria_hidden(opening: &oxc_ast::ast::JSXOpeningElement) -> bool {
+    use oxc_ast::ast::{
+        JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression,
+    };
+    opening.attributes.iter().any(|attr_item| {
+        let JSXAttributeItem::Attribute(attr) = attr_item else {
+            return false;
+        };
+        let JSXAttributeName::Identifier(name) = &attr.name else {
+            return false;
+        };
+        if name.name.as_str() != "aria-hidden" {
+            return false;
+        }
+        match &attr.value {
+            // `<Icon aria-hidden />` — a valueless JSX attribute is `true`.
+            None => true,
+            Some(JSXAttributeValue::StringLiteral(lit)) => lit.value.as_str() == "true",
+            Some(JSXAttributeValue::ExpressionContainer(ec)) => {
+                matches!(&ec.expression, JSXExpression::BooleanLiteral(b) if b.value)
+            }
+            Some(_) => false,
+        }
+    })
+}
+
 /// True when the file declares a `@jsxImportSource` pragma whose value points to
 /// a non-React JSX runtime. Any value other than `react` / `react-dom` (or a
 /// `react`/`react-dom` subpath) names a non-React dialect (`hono/jsx`, a relative

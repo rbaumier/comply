@@ -1,11 +1,9 @@
 //! a11y-no-aria-hidden-on-focusable OxcCheck backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, jsx_opening_element_is_aria_hidden};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{
-    JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXElementName, JSXExpression,
-};
+use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXElementName};
 use std::sync::Arc;
 
 const FOCUSABLE_TAGS: &[&str] = &["button", "a", "input", "select", "textarea"];
@@ -37,63 +35,19 @@ impl OxcCheck for Check {
         };
         let tag = tag_ident.name.as_str();
 
-        let mut has_aria_hidden = false;
-        let mut has_tabindex = false;
-
-        for attr_item in &opening.attributes {
-            let JSXAttributeItem::Attribute(attr) = attr_item else {
-                continue;
-            };
-            let JSXAttributeName::Identifier(name_ident) = &attr.name else {
-                continue;
-            };
-            let name = name_ident.name.as_str();
-
-            if name == "aria-hidden" {
-                // Check value is truthy
-                match &attr.value {
-                    None => {
-                        // Bare `aria-hidden` without value — treated as true
-                        has_aria_hidden = true;
-                    }
-                    Some(JSXAttributeValue::StringLiteral(lit)) => {
-                        if lit.value.as_str() == "true" {
-                            has_aria_hidden = true;
-                        }
-                    }
-                    Some(JSXAttributeValue::ExpressionContainer(ec)) => {
-                        if let JSXExpression::BooleanLiteral(b) = &ec.expression {
-                            if b.value {
-                                has_aria_hidden = true;
-                            }
-                        } else {
-                            // Check source text for {true}
-                            let start = ec.span.start as usize;
-                            let end = ec.span.end as usize;
-                            if end <= ctx.source.len() {
-                                let text = &ctx.source[start..end];
-                                let inner = text
-                                    .trim_start_matches('{')
-                                    .trim_end_matches('}')
-                                    .trim();
-                                if inner == "true" {
-                                    has_aria_hidden = true;
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            if name == "tabIndex" || name == "tabindex" {
-                has_tabindex = true;
-            }
-        }
-
-        if !has_aria_hidden {
+        if !jsx_opening_element_is_aria_hidden(opening) {
             return;
         }
+
+        let has_tabindex = opening.attributes.iter().any(|attr_item| {
+            let JSXAttributeItem::Attribute(attr) = attr_item else {
+                return false;
+            };
+            let JSXAttributeName::Identifier(name_ident) = &attr.name else {
+                return false;
+            };
+            matches!(name_ident.name.as_str(), "tabIndex" | "tabindex")
+        });
 
         let is_focusable = FOCUSABLE_TAGS.contains(&tag) || has_tabindex;
         if is_focusable {
