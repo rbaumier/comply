@@ -231,7 +231,7 @@ fn span_is_projection_shaped(span: &str) -> bool {
 /// DDL keywords that may legally sit between the verb (`CREATE`/`ALTER`)
 /// and the object (`TABLE`/`TYPE`) — e.g. `CREATE OR REPLACE TYPE`,
 /// `CREATE GLOBAL TEMPORARY TABLE`, `CREATE UNLOGGED TABLE`.
-const DDL_MODIFIERS: &[&str] = &[
+pub(crate) const DDL_MODIFIERS: &[&str] = &[
     "or", "replace", "temp", "temporary", "global", "local", "unlogged",
 ];
 

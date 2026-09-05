@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                 any_sets_search_path = true;
                 continue;
             }
-            if first_ddl.is_none() && super::sql_creates_or_alters_table(&text) {
+            if first_ddl.is_none() && super::has_search_path_dependent_ddl(&text) {
                 let offset = match node.kind() {
                     AstKind::StringLiteral(lit) => lit.span.start as usize,
                     AstKind::TemplateLiteral(tpl) => tpl.span.start as usize,

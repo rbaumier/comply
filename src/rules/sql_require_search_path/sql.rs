@@ -14,7 +14,7 @@ impl TextCheck for Check {
         if crate::rules::sql_helpers::is_clickhouse_ddl(ctx.source) {
             return vec![];
         }
-        if !super::sql_creates_or_alters_table(ctx.source) {
+        if !super::has_search_path_dependent_ddl(ctx.source) {
             return vec![];
         }
         if super::sql_sets_search_path(ctx.source) {
@@ -68,6 +68,34 @@ mod tests {
                 "SET LOCAL lock_timeout = '5s';\n\
                  SET LOCAL search_path = pg_catalog, public;\n\
                  ALTER TABLE \"x\" ADD COLUMN \"y\" numeric;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fully_schema_qualified_migration_issue_8503() {
+        assert!(
+            run(
+                "/app/migrations/001.sql",
+                "SET LOCAL lock_timeout = '5s';\n\n\
+                 ALTER TABLE public.\"objective\" ADD COLUMN \"unit\" text DEFAULT 'euros' NOT NULL;"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_schema_qualified_create_table_issue_8491() {
+        assert!(
+            run(
+                "/app/migrations/20260831000000_article_group_model/migration.sql",
+                "SET LOCAL lock_timeout = '5s';\n\n\
+                 CREATE TABLE \"public\".\"article_group\" (\n\
+                 \t\"id\" uuid PRIMARY KEY,\n\
+                 \t\"name\" text NOT NULL\n\
+                 );\n\
+                 CREATE UNIQUE INDEX \"article_group_name_idx\" ON \"public\".\"article_group\" (\"name\");"
             )
             .is_empty()
         );
