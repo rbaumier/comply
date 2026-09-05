@@ -390,48 +390,6 @@ fn is_in_locale_dir(path: &std::path::Path) -> bool {
     })
 }
 
-/// Returns `true` when any whole path segment of `path` is a Nuxt directory
-/// whose files are loaded in filename order — `middleware` or `plugins`. Both
-/// live at the root in Nuxt 3 (`middleware/`, `plugins/`) and under `app/` in
-/// Nuxt 4 (`app/middleware/`, `app/plugins/`); the segment match covers both.
-/// Nuxt registers route middleware and plugins in alphabetical/numeric filename
-/// order, and both directories use the same leading-numeric load-order prefix
-/// convention. Gates the numeric-load-order-prefix allowance so it only applies
-/// to files in these ordered directories, not a like-named file elsewhere.
-/// See https://nuxt.com/docs/guide/directory-structure/plugins#registration-order.
-fn is_in_nuxt_ordered_dir(path: &std::path::Path) -> bool {
-    path.components()
-        .any(|c| matches!(c.as_os_str().to_str(), Some("middleware" | "plugins")))
-}
-
-/// Strips a leading numeric load-order prefix (`<digits>` followed by a `.`, `_`,
-/// or `-` separator) from a Nuxt `middleware`/`plugins` `file_name`, returning
-/// the remaining name. Nuxt registers route middleware and plugins in
-/// alphabetical/numeric filename order, so a leading `01.`, `0.` (also `01_`,
-/// `01-`) ordering prefix is a documented framework convention used to sequence
-/// them, not part of the author's chosen name. The prefix is removed so the
-/// convention is validated against the real name that follows
-/// (`01.auth.global.ts` → `auth.global.ts`, `0.setup-users.ts` → `setup-users.ts`).
-/// Returns `None` when there is no leading numeric prefix, so an ordinary
-/// filename is validated unchanged.
-/// See https://nuxt.com/docs/guide/directory-structure/plugins#registration-order.
-fn strip_numeric_order_prefix(file_name: &str) -> Option<&str> {
-    let digits = file_name.bytes().take_while(|b| b.is_ascii_digit()).count();
-    if digits == 0 {
-        return None;
-    }
-    let rest = &file_name[digits..];
-    let sep = rest.as_bytes().first()?;
-    if !matches!(sep, b'.' | b'_' | b'-') {
-        return None;
-    }
-    let name = &rest[1..];
-    if name.is_empty() {
-        return None;
-    }
-    Some(name)
-}
-
 fn is_ts_or_jsx_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.ends_with(".ts")
@@ -466,16 +424,12 @@ impl TextCheck for Check {
         let Some(file_name) = ctx.path.file_name().and_then(|s| s.to_str()) else {
             return Vec::new();
         };
-        // Nuxt route middleware and plugins in a `middleware/`/`plugins/`
-        // directory may carry a leading numeric load-order prefix
-        // (`01.auth.global.ts`, `0.setup-users.ts`) to sequence registration;
-        // strip it so the convention is validated against the real name that
-        // follows, not the numeric ordering segment.
-        let name_to_check = if is_in_nuxt_ordered_dir(ctx.path) {
-            strip_numeric_order_prefix(file_name).unwrap_or(file_name)
-        } else {
-            file_name
-        };
+        // A leading numeric ordering prefix (`01.auth.global.ts`,
+        // `0010-single-row.js`) is the sort key its consumer reads the directory
+        // by, not part of the author's chosen name; strip it so the convention is
+        // validated against the real name that follows.
+        let name_to_check =
+            crate::rules::path_utils::strip_numeric_ordering_prefix(file_name).unwrap_or(file_name);
         let stem = name_to_check.split('.').next().unwrap_or(name_to_check);
         if stem.is_empty() {
             return Vec::new();
@@ -1689,14 +1643,6 @@ mod tests {
         assert!(run("middleware/02-redirect.ts").is_empty());
     }
 
-    // Load-bearing scope guard for #5156: the numeric-prefix strip is gated on the
-    // `middleware/` directory — the same numeric-prefixed name elsewhere must STILL
-    // fire, since the stem `01` is not a valid convention name on its own.
-    #[test]
-    fn flags_numeric_prefix_outside_middleware_dir_issue_5156() {
-        assert_eq!(run("src/utils/01.auth.ts").len(), 1);
-    }
-
     // Guard: stripping the numeric prefix does not exempt a mis-cased remainder —
     // a snake_case middleware name after the prefix still fires.
     #[test]
@@ -1715,10 +1661,11 @@ mod tests {
     // leading digits is not a load-order prefix.
     #[test]
     fn rejects_malformed_numeric_prefix_unit_issue_5156() {
-        assert!(strip_numeric_order_prefix("01auth.ts").is_none());
-        assert!(strip_numeric_order_prefix("01.").is_none());
-        assert!(strip_numeric_order_prefix("auth.ts").is_none());
-        assert_eq!(strip_numeric_order_prefix("01.auth.ts"), Some("auth.ts"));
+        use crate::rules::path_utils::strip_numeric_ordering_prefix;
+        assert!(strip_numeric_ordering_prefix("01auth.ts").is_none());
+        assert!(strip_numeric_ordering_prefix("01.").is_none());
+        assert!(strip_numeric_ordering_prefix("auth.ts").is_none());
+        assert_eq!(strip_numeric_ordering_prefix("01.auth.ts"), Some("auth.ts"));
     }
 
     // Regression for #6190: Nuxt plugins in a `plugins/` directory may carry a
@@ -1742,20 +1689,75 @@ mod tests {
         assert!(run("app/plugins/2.analytics.server.ts").is_empty());
     }
 
-    // Load-bearing scope guard for #6190: the numeric-prefix strip is gated on
-    // the `plugins/`/`middleware/` directory — the same numeric-prefixed name
-    // elsewhere must STILL fire, since the stem `0` is not a valid convention
-    // name on its own.
-    #[test]
-    fn flags_numeric_prefix_outside_ordered_dir_issue_6190() {
-        assert_eq!(run("src/utils/0.setup-users.ts").len(), 1);
-    }
-
     // Guard: stripping the numeric prefix does not exempt a mis-cased remainder —
     // a snake_case plugin name after the prefix still fires, since the stem
     // `setup_users` is not kebab-case (and the project is not snake-dominant).
     #[test]
     fn flags_nuxt_plugin_numeric_prefix_bad_remainder_issue_6190() {
         assert_eq!(run("plugins/0.setup_users.ts").len(), 1);
+    }
+
+    // Regression for #8305: a leading zero-padded ordering prefix is the sort key
+    // its consumer reads the directory by — Docusaurus orders the doc-example
+    // sidebar by filename, exactly as Nuxt orders middleware registration — so it
+    // is stripped wherever it appears and the kebab-case remainder is what the
+    // convention validates.
+    #[test]
+    fn allows_numeric_ordering_prefix_in_docs_examples_issue_8305() {
+        assert!(run("site/docs/examples/select/0010-a-single-column.js").is_empty());
+        assert!(run("site/docs/examples/where/0051-not-null.js").is_empty());
+        assert!(
+            run("site/docs/examples/transactions/0012-controlled-transaction-w-savepoints.js")
+                .is_empty()
+        );
+    }
+
+    // The strip is not directory-gated: the same `<digits><sep><name>` shape is
+    // reduced to its remainder in ordinary source too.
+    #[test]
+    fn allows_numeric_ordering_prefix_outside_ordered_dirs_issue_8305() {
+        assert!(run("src/utils/01.auth.ts").is_empty());
+        assert!(run("src/utils/0.setup-users.ts").is_empty());
+    }
+
+    // Cross-backend agreement (#8305): the same prefixed stem must get one
+    // verdict, whichever directory it sits in.
+    #[test]
+    fn allows_same_prefixed_stem_in_every_directory_issue_8305() {
+        assert!(run("docs/examples/0010-single-row.js").is_empty());
+        assert!(run("middleware/0010-single-row.ts").is_empty());
+        assert!(run("docs/examples/single-row.js").is_empty());
+    }
+
+    // Guard (scope proof): the remainder after the prefix is still validated — a
+    // snake_case or malformed remainder still fires in a kebab-dominant project.
+    #[test]
+    fn flags_miscased_remainder_after_ordering_prefix_issue_8305() {
+        assert_eq!(run("docs/examples/0010-single_row.js").len(), 1);
+        assert_eq!(run("docs/examples/0010--single-row.js").len(), 1);
+    }
+
+    // Guard: a purely numeric stem has no remainder to validate — the `.` is the
+    // extension separator, so the digits are the whole name and still fire.
+    #[test]
+    fn flags_purely_numeric_stem_issue_8305() {
+        assert_eq!(run("docs/examples/0010.js").len(), 1);
+        assert_eq!(run("src/404.js").len(), 1);
+    }
+
+    // Guard: digits with no separator are part of the name, not a prefix on it.
+    #[test]
+    fn flags_digits_without_separator_issue_8305() {
+        assert_eq!(run("docs/examples/01auth.ts").len(), 1);
+    }
+
+    // Guard: only the first numeric segment is a prefix — a `YYYY_MM_DD_…`
+    // timestamp migration name keeps a digit-leading remainder and still fires.
+    #[test]
+    fn flags_timestamp_prefixed_migration_issue_8305() {
+        assert_eq!(
+            run("example/src/migrations/2021_09_18_14_05_20_create_user.ts").len(),
+            1
+        );
     }
 }

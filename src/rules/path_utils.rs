@@ -1139,6 +1139,42 @@ pub fn strip_specifier_query(spec: &str) -> &str {
     &spec[..cut]
 }
 
+/// Strips a leading numeric ordering prefix from `file_name` — one or more ASCII
+/// digits followed by a single `.`, `_` or `-` separator — returning the
+/// remaining file name.
+///
+/// A leading zero-padded ordering prefix exists because the consumer reads the
+/// directory in filename order: Nuxt registers `middleware/01.auth.global.ts`
+/// and `plugins/0.setup-users.ts` in filename order, Docusaurus orders sidebar
+/// entries by filename (`docs/examples/0010-single-row.js`), and migration
+/// runners and parser fixture suites (`0065_comment_newline.rs`) sort
+/// lexicographically. The digits are a sort key, not part of the author's chosen
+/// name, so the remainder is what a filename convention must be validated
+/// against. The prefix shape is the discriminator, so it is recognised wherever
+/// it appears rather than in a list of known ordered directories.
+///
+/// Returns `None` when there are no leading digits, when the digits are not
+/// followed by one of the three separators (`01auth.ts`), when nothing follows
+/// the separator (`01.`), or when the remainder carries no extension of its own
+/// (`0010.js`, `404.js`): there the `.` is the extension separator and the
+/// digits are the whole stem — a name in its own right, not a prefix on one.
+#[must_use]
+pub fn strip_numeric_ordering_prefix(file_name: &str) -> Option<&str> {
+    let digits = file_name.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &file_name[digits..];
+    if !matches!(rest.as_bytes().first(), Some(b'.' | b'_' | b'-')) {
+        return None;
+    }
+    let name = &rest[1..];
+    if !name.contains('.') {
+        return None;
+    }
+    Some(name)
+}
+
 /// True for an import specifier that traverses into a build-output or
 /// code-generated directory (`dist`/`build`/`out` bundles, `generated`/
 /// `__generated__`/`.prisma`/`prisma`/`gen` codegen output) or `node_modules`,
@@ -2066,6 +2102,29 @@ mod aux_path_tests {
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/__testfixtures__data/index.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("syntax-tests-data/foo.ts")));
         assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/app/login.ts")));
+    }
+
+    #[test]
+    fn numeric_ordering_prefix_strips_sort_key_only() {
+        // Every separator, in the ordered-directory and docs-example shapes.
+        assert_eq!(strip_numeric_ordering_prefix("01.auth.global.ts"), Some("auth.global.ts"));
+        assert_eq!(strip_numeric_ordering_prefix("0065_comment_newline.rs"), Some("comment_newline.rs"));
+        assert_eq!(strip_numeric_ordering_prefix("0010-single-row.js"), Some("single-row.js"));
+        // No digits, no separator after the digits, and nothing after the
+        // separator are all "not an ordering prefix".
+        assert!(strip_numeric_ordering_prefix("auth.ts").is_none());
+        assert!(strip_numeric_ordering_prefix("01auth.ts").is_none());
+        assert!(strip_numeric_ordering_prefix("01.").is_none());
+        // A purely numeric stem is a name, not a prefix: the `.` there is the
+        // extension separator, so nothing is stripped.
+        assert!(strip_numeric_ordering_prefix("404.js").is_none());
+        assert!(strip_numeric_ordering_prefix("0010.js").is_none());
+        // Only the leading numeric segment is a prefix — a timestamp keeps the
+        // rest of its digits.
+        assert_eq!(
+            strip_numeric_ordering_prefix("2021_09_18_create_user.ts"),
+            Some("09_18_create_user.ts")
+        );
     }
 
     #[test]
