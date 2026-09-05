@@ -1,12 +1,17 @@
 //! no-gratuitous-expression Rust backend.
 //!
-//! Flag boolean expressions that are always true or always false.
+//! Flag the two boolean shapes whose value is fixed by a literal operand: a
+//! literal `if true` / `if false` condition, and a `&& false` / `|| true`
+//! short-circuit.
 //!
-//! A `&& false` / `|| true` short-circuit is NOT flagged when its enclosing
-//! statement carries `#[allow(clippy::overly_complex_bool_expr)]` /
-//! `#[allow(clippy::nonminimal_bool)]` (the overlapping clippy lints — the
-//! author opted out), or when the operand adjacent to the literal is a
-//! `cfg!(...)` macro (a compile-time debug toggle, not a gratuitous constant).
+//! Neither shape is flagged when its enclosing statement carries
+//! `#[allow(clippy::overly_complex_bool_expr)]` / `#[allow(clippy::nonminimal_bool)]`
+//! (the overlapping clippy lints — the author opted out). A short-circuit is
+//! also spared when the operand adjacent to the literal is a `cfg!(...)` macro
+//! (a compile-time debug toggle, not a gratuitous constant), and `if false` is
+//! spared when it guards a non-empty body with no `else`: that body is
+//! type-checked on every build and never run, so removing it is a semantic edit
+//! rather than the syntactic reduction the remediation assumes.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use tree_sitter::Node;
@@ -32,33 +37,20 @@ impl ShortCircuit {
 }
 
 crate::ast_check! { on ["if_expression", "binary_expression"] => |node, source, ctx, diagnostics|
-match node.kind() {
+{
+    let message = match node.kind() {
         "if_expression" => {
             let Some(condition) = node.child_by_field_name("condition") else { return };
-            let Ok(cond_text) = condition.utf8_text(source) else { return };
-            let inner = cond_text.trim();
-            if inner == "true" {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-gratuitous-expression".into(),
-                    message: "Gratuitous expression: condition is always true.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            } else if inner == "false" {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-gratuitous-expression".into(),
-                    message: "Gratuitous expression: condition is always false.".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
+            if condition.kind() != "boolean_literal" {
+                return;
+            }
+            let Ok(literal) = condition.utf8_text(source) else { return };
+            match literal {
+                "true" => "Gratuitous expression: condition is always true.",
+                "false" if !is_compile_only_block(node) => {
+                    "Gratuitous expression: condition is always false."
+                }
+                _ => return,
             }
         }
         "binary_expression" => {
@@ -69,35 +61,35 @@ match node.kind() {
             // be a float, so this self-comparison form is left to
             // `no-identical-expressions` (which also exempts it). See #5788.
             let Some(short_circuit) = short_circuit_shape(node, source) else { return };
-            // `&& false` / `|| true` overlaps clippy's `overly_complex_bool_expr`
-            // / `nonminimal_bool`. An author who annotates the enclosing
-            // statement with `#[allow(clippy::overly_complex_bool_expr)]` (or
-            // `nonminimal_bool`, or `expect`) has explicitly opted out — defer to
-            // it, as for clippy `#[allow]` in other rules. This is the canonical
-            // manually-toggle-able debug block (flip `false` -> `true`), not a
-            // refactor leftover.
-            if crate::rules::rust_helpers::has_clippy_allow(
-                node,
-                source,
-                "overly_complex_bool_expr",
-            ) || crate::rules::rust_helpers::has_clippy_allow(node, source, "nonminimal_bool")
-                || operand_adjacent_to_literal_is_cfg(node, source)
-            {
+            if operand_adjacent_to_literal_is_cfg(node, source) {
                 return;
             }
-            let pos = node.start_position();
-            diagnostics.push(Diagnostic {
-                path: std::sync::Arc::clone(&ctx.path_arc),
-                line: pos.row + 1,
-                column: pos.column + 1,
-                rule_id: "no-gratuitous-expression".into(),
-                message: short_circuit.message().into(),
-                severity: Severity::Error,
-                span: None,
-            });
+            short_circuit.message()
         }
-        _ => {}
+        _ => return,
+    };
+    // Both shapes overlap clippy's `overly_complex_bool_expr` /
+    // `nonminimal_bool`. An author who annotates the enclosing statement with
+    // either lint (as `allow` or `expect`) has explicitly opted out — defer to
+    // it, as for clippy `#[allow]` in other rules. This is the canonical
+    // manually-toggle-able debug block (flip `false` -> `true`), not a refactor
+    // leftover.
+    if crate::rules::rust_helpers::has_clippy_allow(node, source, "overly_complex_bool_expr")
+        || crate::rules::rust_helpers::has_clippy_allow(node, source, "nonminimal_bool")
+    {
+        return;
     }
+    let pos = node.start_position();
+    diagnostics.push(Diagnostic {
+        path: std::sync::Arc::clone(&ctx.path_arc),
+        line: pos.row + 1,
+        column: pos.column + 1,
+        rule_id: "no-gratuitous-expression".into(),
+        message: message.into(),
+        severity: Severity::Error,
+        span: None,
+    });
+}
 }
 
 /// The constant forced on a `binary_expression` by a boolean literal operand of
@@ -124,6 +116,24 @@ fn short_circuit_shape(node: Node, source: &[u8]) -> Option<ShortCircuit> {
         "||" if has_operand("true") => Some(ShortCircuit::AlwaysTrue),
         _ => None,
     }
+}
+
+/// True if the `if_expression` is a compile-only block: a non-empty body and no
+/// `else`. Its statements are type-checked on every build and never executed —
+/// the shortest way in Rust to say "compile this, do not run it", used to keep
+/// hand-written catalogues in sync with the types they enumerate. Deleting it
+/// changes what the compiler sees, unlike an empty body or an `if false { .. }
+/// else { .. }` whose `else` branch is the live one.
+fn is_compile_only_block(node: Node) -> bool {
+    if node.child_by_field_name("alternative").is_some() {
+        return false;
+    }
+    let Some(body) = node.child_by_field_name("consequence") else {
+        return false;
+    };
+    let mut cursor = body.walk();
+    body.named_children(&mut cursor)
+        .any(|child| !crate::rules::rust_helpers::is_comment_node(child))
 }
 
 /// True if the operand on the opposite side of the literal `false`/`true` in a
@@ -177,13 +187,6 @@ mod tests {
         let d = run_on("fn f() { if true { do_stuff(); } }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("always true"));
-    }
-
-    #[test]
-    fn flags_if_false() {
-        let d = run_on("fn f() { if false { do_stuff(); } }");
-        assert_eq!(d.len(), 1);
-        assert!(d[0].message.contains("always false"));
     }
 
     #[test]
@@ -273,6 +276,49 @@ mod tests {
         let d = run_on("fn f(x: bool) { let _ = false && x; }");
         assert_eq!(d.len(), 1);
         assert!(d[0].message.contains("always false"));
+    }
+
+    #[test]
+    fn allows_compile_only_if_false_block() {
+        // dtolnay/syn tests/test_expr.rs:929 — the body is type-checked on every
+        // build and never run; deleting it drops that compile-time coverage.
+        let source = "fn iter(f: &mut dyn FnMut(Expr)) {\n\
+                      if false {\n\
+                          f(Expr::Path(ExprPath { attrs: Vec::new() }));\n\
+                      }\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_empty_if_false_block() {
+        // Nothing is compiled inside, so removing it is a syntactic reduction.
+        let d = run_on("fn f() { if false { } }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("always false"));
+    }
+
+    #[test]
+    fn flags_if_false_with_else() {
+        // The `else` branch is the live one; the `if` is noise.
+        let d = run_on("fn f() { if false { a(); } else { b(); } }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("always false"));
+    }
+
+    #[test]
+    fn allows_empty_if_false_with_clippy_allow() {
+        let source = "fn f() {\n\
+                      #[allow(clippy::nonminimal_bool)]\n\
+                      if false { }\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_if_true_with_clippy_allow() {
+        let source = "fn f() {\n\
+                      #[expect(clippy::overly_complex_bool_expr)]\n\
+                      if true { do_stuff(); }\n}";
+        assert!(run_on(source).is_empty());
     }
 
     // `x != x` / `x == x` is the IEEE 754 NaN-detection idiom, not a gratuitous
