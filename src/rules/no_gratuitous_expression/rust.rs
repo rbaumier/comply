@@ -9,6 +9,27 @@
 //! `cfg!(...)` macro (a compile-time debug toggle, not a gratuitous constant).
 
 use crate::diagnostic::{Diagnostic, Severity};
+use tree_sitter::Node;
+
+/// The constant a literal operand forces on a `&&`/`||` expression.
+#[derive(Clone, Copy)]
+enum ShortCircuit {
+    AlwaysFalse,
+    AlwaysTrue,
+}
+
+impl ShortCircuit {
+    fn message(self) -> &'static str {
+        match self {
+            Self::AlwaysFalse => {
+                "Gratuitous expression: expression is always false (short-circuited by `&& false`)."
+            }
+            Self::AlwaysTrue => {
+                "Gratuitous expression: expression is always true (short-circuited by `|| true`)."
+            }
+        }
+    }
+}
 
 crate::ast_check! { on ["if_expression", "binary_expression"] => |node, source, ctx, diagnostics|
 match node.kind() {
@@ -41,7 +62,13 @@ match node.kind() {
             }
         }
         "binary_expression" => {
-            let Ok(text) = node.utf8_text(source) else { return };
+            // Only a literal operand of `&&`/`||` is gratuitous. `x == x` /
+            // `x != x` is NOT flagged: it is the IEEE 754 NaN-detection idiom
+            // (`x != x` is true iff `x` is NaN, the only value not equal to
+            // itself). Without type inference the operand cannot be proven to
+            // be a float, so this self-comparison form is left to
+            // `no-identical-expressions` (which also exempts it). See #5788.
+            let Some(short_circuit) = short_circuit_shape(node, source) else { return };
             // `&& false` / `|| true` overlaps clippy's `overly_complex_bool_expr`
             // / `nonminimal_bool`. An author who annotates the enclosing
             // statement with `#[allow(clippy::overly_complex_bool_expr)]` (or
@@ -49,60 +76,53 @@ match node.kind() {
             // it, as for clippy `#[allow]` in other rules. This is the canonical
             // manually-toggle-able debug block (flip `false` -> `true`), not a
             // refactor leftover.
-            let short_circuit = (text.ends_with("&& false")
-                || text.contains("&& false)")
-                || text.contains("&& false;"))
-                || (text.ends_with("|| true")
-                    || text.contains("|| true)")
-                    || text.contains("|| true;"));
-            if short_circuit
-                && (crate::rules::rust_helpers::has_clippy_allow(
-                    node,
-                    source,
-                    "overly_complex_bool_expr",
-                ) || crate::rules::rust_helpers::has_clippy_allow(
-                    node,
-                    source,
-                    "nonminimal_bool",
-                ) || operand_adjacent_to_literal_is_cfg(node, source))
+            if crate::rules::rust_helpers::has_clippy_allow(
+                node,
+                source,
+                "overly_complex_bool_expr",
+            ) || crate::rules::rust_helpers::has_clippy_allow(node, source, "nonminimal_bool")
+                || operand_adjacent_to_literal_is_cfg(node, source)
             {
                 return;
             }
-            // Check `&& false` / `|| true`
-            if text.ends_with("&& false") || text.contains("&& false)") || text.contains("&& false;") {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-gratuitous-expression".into(),
-                    message: "Gratuitous expression: expression is always false (short-circuited by `&& false`).".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
-                return;
-            }
-            if text.ends_with("|| true") || text.contains("|| true)") || text.contains("|| true;") {
-                let pos = node.start_position();
-                diagnostics.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: pos.row + 1,
-                    column: pos.column + 1,
-                    rule_id: "no-gratuitous-expression".into(),
-                    message: "Gratuitous expression: expression is always true (short-circuited by `|| true`).".into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
-                return;
-            }
-            // `x == x` / `x != x` is NOT flagged: it is the IEEE 754
-            // NaN-detection idiom (`x != x` is true iff `x` is NaN, the only
-            // value not equal to itself). Without type inference the operand
-            // cannot be proven to be a float, so this self-comparison form is
-            // left to `no-identical-expressions` (which also exempts it). See
-            // issue #5788.
+            let pos = node.start_position();
+            diagnostics.push(Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: pos.row + 1,
+                column: pos.column + 1,
+                rule_id: "no-gratuitous-expression".into(),
+                message: short_circuit.message().into(),
+                severity: Severity::Error,
+                span: None,
+            });
         }
         _ => {}
+    }
+}
+
+/// The constant forced on a `binary_expression` by a boolean literal operand of
+/// a short-circuit operator: `x && false` / `false && x` is always false,
+/// `x || true` / `true || x` is always true. Any other operator, or a `&&`/`||`
+/// with no literal operand, yields `None`.
+///
+/// Reading the `operator` and `left`/`right` fields — rather than the node's
+/// text — is what keeps a closure out: `unwrap_or_else(|| true)` puts its `||`
+/// inside a `closure_expression` nested in an operand, never on the binary
+/// node's own operator or operand.
+fn short_circuit_shape(node: Node, source: &[u8]) -> Option<ShortCircuit> {
+    let operator = node.child_by_field_name("operator")?;
+    let left = node.child_by_field_name("left")?;
+    let right = node.child_by_field_name("right")?;
+    let has_operand = |literal: &str| {
+        [left, right].into_iter().any(|operand| {
+            operand.kind() == "boolean_literal"
+                && matches!(operand.utf8_text(source), Ok(text) if text == literal)
+        })
+    };
+    match operator.kind() {
+        "&&" if has_operand("false") => Some(ShortCircuit::AlwaysFalse),
+        "||" if has_operand("true") => Some(ShortCircuit::AlwaysTrue),
+        _ => None,
     }
 }
 
@@ -111,7 +131,7 @@ match node.kind() {
 /// toggle (`if cfg!(debug_assertions) && false { ... }`). Such an expression is
 /// an intentional manual switch — the author flips the literal to re-enable a
 /// gated path — not a gratuitous always-false/always-true constant.
-fn operand_adjacent_to_literal_is_cfg(node: tree_sitter::Node, source: &[u8]) -> bool {
+fn operand_adjacent_to_literal_is_cfg(node: Node, source: &[u8]) -> bool {
     let (Some(left), Some(right)) = (
         node.child_by_field_name("left"),
         node.child_by_field_name("right"),
@@ -228,6 +248,31 @@ mod tests {
         // An unrelated `#[allow(dead_code)]` must not suppress.
         let d = run_on("fn f(x: bool) {\n#[allow(dead_code)]\nlet _ = x && false;\n}");
         assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_closure_body_true_inside_and_chain() {
+        // apache/iceberg-rust crates/iceberg/src/delete_file_index.rs:190 — the
+        // `|| true` is a zero-argument closure body, not a logical-or operand.
+        let source = "fn f() {\n\
+                      let _ = seq_num\n\
+                          .map(|seq_num| entry.sequence_number() > Some(seq_num))\n\
+                          .unwrap_or_else(|| true)\n\
+                          && data_file.partition_spec_id == delete.partition_spec_id;\n}";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn allows_closure_body_true_inside_or_chain() {
+        let source = "fn f() { let _ = opt.unwrap_or_else(|| true) || other(); }";
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn flags_literal_false_as_left_operand() {
+        let d = run_on("fn f(x: bool) { let _ = false && x; }");
+        assert_eq!(d.len(), 1);
+        assert!(d[0].message.contains("always false"));
     }
 
     // `x != x` / `x == x` is the IEEE 754 NaN-detection idiom, not a gratuitous
