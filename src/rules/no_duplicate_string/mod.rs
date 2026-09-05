@@ -109,7 +109,7 @@ pub(super) fn collect_diagnostics(
         if should_ignore_string_node(node, source_bytes) {
             continue;
         }
-        if is_rust && rust::is_format_template_arg(node, source_bytes) {
+        if is_rust && rust::is_format_template_arg(node, source_bytes, content) {
             continue;
         }
         if is_rust && rust::is_cfg_macro_arg(node, source_bytes) {
