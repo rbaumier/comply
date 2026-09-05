@@ -1,7 +1,16 @@
-//! data-clumps Rust backend — flag structs sharing 3+ identical field names.
+//! data-clumps Rust backend — flag structs sharing 3+ identical fields.
 //!
-//! Walks the AST to find `struct_item` nodes, extracts their field names,
-//! and flags when the same 3-field subset appears in 2+ structs.
+//! Walks the AST to find `struct_item` nodes, extracts their fields, and flags
+//! when the same 3-field subset appears in 2+ structs.
+//!
+//! A field is identified by its name *and* its declared type: one shared type
+//! has to pick one type per field, so a name held as `f32` in one struct and
+//! `i32`/`usize` in another (a subpixel and a whole-pixel rectangle) names two
+//! different values and nothing can be extracted. Types are compared as
+//! normalised source text — whitespace collapsed, module path prefixes dropped
+//! so `font::Point` and `Point` agree — and a field whose type cannot be read
+//! matches nothing. `Option<T>` against `T`, `Arc<X>` against `Weak<X>` and
+//! `String` against `Cow<'a, str>` are all type disagreements under that rule.
 //!
 //! Borrowed "view" structs (a lifetime parameter plus at least one
 //! reference-typed field) are excluded: they intentionally mirror an owned
@@ -11,19 +20,6 @@
 //! declared generic type parameters (e.g. `g: G`, `init: Init`,
 //! `r: PhantomData<R>`) is also excluded: extracting it yields a struct that
 //! must re-declare the same parameters, so no duplication is removed.
-//!
-//! Fields sharing a name but disagreeing on optionality (`Option<T>` in one
-//! struct, bare `T` in another) also do not count toward a clump: no common
-//! type can hold both without dropping the mandatory side's all-present
-//! invariant or wrapping the optional side in a pointless `Option`, so there is
-//! nothing to extract.
-//!
-//! Strong/weak ownership-pair structs are excluded as well: when every shared
-//! field is `Arc<X>`/`Rc<X>` in one struct and `Weak<X>` in the other (same
-//! inner `X`), the two are a deliberate strong/weak counterpart pair (the
-//! `Weak` struct mirrors the owner's field names so `upgrade()` reconstructs
-//! the strong form). They cannot be merged — the wrapper changes from a strong
-//! to a weak handle — so they do not form a data clump.
 //!
 //! Structs carrying a layout-constraining `repr` attribute (`#[repr(C)]`,
 //! `#[repr(packed)]`, `#[repr(transparent)]`, `#[repr(align(N))]`, or any
@@ -59,34 +55,21 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
     collect_structs(node, source, &mut struct_fields);
     dedup_cfg_twins(&mut struct_fields);
 
-    let ptrs_by_line: FxHashMap<usize, &FxHashMap<String, (Strength, String)>> = struct_fields
-        .iter()
-        .map(|sf| (sf.line, &sf.smart_ptr_fields))
-        .collect();
-
     // For each 3-field subset, record every struct that contains it, noting
     // whether that struct types the subset entirely with its own declared
     // generic parameters (in which case extraction removes no duplication).
-    // Each subset field carries its optionality (`Option<T>` vs bare `T`) so a
-    // shared field name groups two structs only when both agree on it: a field
-    // that is optional in one struct and mandatory in the other cannot be
-    // factored into one shared type.
-    let mut subset_occurrences: FxHashMap<Vec<(String, bool)>, Vec<Occurrence>> =
-        FxHashMap::default();
+    // The subset key carries each field's declared type, so two structs group
+    // together only when they agree on what the shared names hold.
+    let mut subset_occurrences: FxHashMap<Vec<Field>, Vec<Occurrence>> = FxHashMap::default();
     for sf in &struct_fields {
-        for combo in combinations(&sf.names, 3) {
-            let all_generic = combo.iter().all(|f| sf.generic_param_only.contains(f));
-            let keyed: Vec<(String, bool)> = combo
-                .into_iter()
-                .map(|f| {
-                    let optional = sf.optional_fields.contains(&f);
-                    (f, optional)
-                })
-                .collect();
-            subset_occurrences.entry(keyed).or_default().push(Occurrence {
+        for combo in combinations(&sf.fields, 3) {
+            let all_generic = combo
+                .iter()
+                .all(|f| sf.generic_param_only.contains(&f.name));
+            subset_occurrences.entry(combo).or_default().push(Occurrence {
                 line: sf.line,
                 all_generic,
-                field_count: sf.names.len(),
+                field_count: sf.fields.len(),
             });
         }
     }
@@ -113,20 +96,10 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
             .filter(|o| !o.all_generic)
             .map(|o| o.line)
             .collect();
-        // A two-struct clash whose every shared field is `Arc<X>`/`Rc<X>` in one
-        // and `Weak<X>` in the other (same inner `X`) is a strong/weak ownership
-        // pair, not a data clump.
-        if flaggable.len() == 2
-            && let Some(&a) = ptrs_by_line.get(&flaggable[0])
-            && let Some(&b) = ptrs_by_line.get(&flaggable[1])
-            && is_strong_weak_pair(subset, a, b)
-        {
-            continue;
-        }
         if flaggable.len() >= 2 {
             let field_names = subset
                 .iter()
-                .map(|(name, _)| name.as_str())
+                .map(|f| format!("{}: {}", f.name, f.ty))
                 .collect::<Vec<_>>()
                 .join(", ");
             for &line in &flaggable {
@@ -171,6 +144,17 @@ struct Occurrence {
     field_count: usize,
 }
 
+/// A declared struct field, as it participates in a shared subset. Two fields
+/// are the same field only if both the name and the declared type agree — a
+/// shared type has one type per field, so a name that holds different types in
+/// two structs cannot be factored out.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Field {
+    name: String,
+    /// Declared type, normalised for comparison by `normalized_type_text`.
+    ty: String,
+}
+
 /// Per-struct field data gathered for clump detection.
 struct StructFields {
     line: usize,
@@ -183,27 +167,11 @@ struct StructFields {
     /// same-name definitions mutually exclusive. Same-name gated structs are
     /// versioned redefinitions collapsed to one before clump detection.
     cfg_gated: bool,
-    names: Vec<String>,
+    /// The struct's fields, sorted by name with duplicate names dropped.
+    fields: Vec<Field>,
     /// Field names whose type is determined solely by the struct's own declared
     /// generic type parameters.
     generic_param_only: FxHashSet<String>,
-    /// Field names whose declared type is `Option<…>`. A field optional in one
-    /// struct and mandatory in another cannot be merged into a common type, so
-    /// it must not count toward a shared clump.
-    optional_fields: FxHashSet<String>,
-    /// For each field typed as a single `Arc`/`Rc`/`Weak` smart pointer, its
-    /// strength and inner type text (`Weak<Mutex<S>>` → `(Weak, "Mutex<S>")`).
-    /// Used to recognise strong/weak ownership-pair structs.
-    smart_ptr_fields: FxHashMap<String, (Strength, String)>,
-}
-
-/// Strength of a reference-counted smart-pointer wrapper.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Strength {
-    /// `Arc<X>` or `Rc<X>` — owns a strong reference.
-    Strong,
-    /// `Weak<X>` — a non-owning back-reference.
-    Weak,
 }
 
 /// Recursively collect struct field sets from the AST.
@@ -214,10 +182,8 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
         }
         let declared = declared_type_param_names(node, source);
         // Look for field_declaration_list child.
-        let mut names: Vec<String> = Vec::new();
+        let mut fields: Vec<Field> = Vec::new();
         let mut generic_param_only: FxHashSet<String> = FxHashSet::default();
-        let mut optional_fields: FxHashSet<String> = FxHashSet::default();
-        let mut smart_ptr_fields: FxHashMap<String, (Strength, String)> = FxHashMap::default();
         let child_count = node.named_child_count();
         for i in 0..child_count {
             if let Some(child) = node.named_child(i)
@@ -229,26 +195,23 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                         && field.kind() == "field_declaration"
                         && let Some(name_node) = field.child_by_field_name("name")
                         && let Ok(name) = name_node.utf8_text(source)
+                        && let Some(ty) = field.child_by_field_name("type")
+                        && let Some(ty_text) = normalized_type_text(ty, source)
                     {
-                        names.push(name.to_string());
-                        if let Some(ty) = field.child_by_field_name("type") {
-                            if type_is_generic_param_only(ty, &declared, source) {
-                                generic_param_only.insert(name.to_string());
-                            }
-                            if type_is_option(ty, source) {
-                                optional_fields.insert(name.to_string());
-                            }
-                            if let Some(ptr) = smart_pointer_parts(ty, source) {
-                                smart_ptr_fields.insert(name.to_string(), ptr);
-                            }
+                        fields.push(Field {
+                            name: name.to_string(),
+                            ty: ty_text,
+                        });
+                        if type_is_generic_param_only(ty, &declared, source) {
+                            generic_param_only.insert(name.to_string());
                         }
                     }
                 }
             }
         }
-        names.sort();
-        names.dedup();
-        if names.len() >= 3
+        fields.sort_by(|a, b| a.name.cmp(&b.name));
+        fields.dedup_by(|a, b| a.name == b.name);
+        if fields.len() >= 3
             && !is_borrowed_view_struct(node)
             && !has_layout_repr_attr(node, source)
         {
@@ -261,10 +224,8 @@ fn collect_structs(node: tree_sitter::Node, source: &[u8], out: &mut Vec<StructF
                 line: node.start_position().row + 1,
                 name,
                 cfg_gated: has_cfg_gate(node, source),
-                names,
+                fields,
                 generic_param_only,
-                optional_fields,
-                smart_ptr_fields,
             });
         }
     }
@@ -357,17 +318,50 @@ fn type_is_generic_param_only(ty: tree_sitter::Node, declared: &[&str], source: 
     }
 }
 
-/// True if `ty` is `Option<…>`: a `generic_type` whose constructor identifier
-/// is `Option`. A field's optionality is a structural property of its type — a
-/// shared field name that is `Option<T>` in one struct and a bare `T` in
-/// another cannot be factored into a single shared type, so it must not count
-/// toward a data clump.
-fn type_is_option(ty: tree_sitter::Node, source: &[u8]) -> bool {
-    ty.kind() == "generic_type"
-        && ty
-            .child_by_field_name("type")
-            .and_then(|constructor| constructor.utf8_text(source).ok())
-            == Some("Option")
+/// The declared type of a field reduced to a comparable form: whitespace runs
+/// collapse (kept as one space only between two identifier characters, so
+/// `dyn Fn` stays two words while `Option < u16 >` becomes `Option<u16>`), and
+/// module path prefixes drop so `font::Point` and `Point` compare equal.
+/// `None` when the node's text is not valid UTF-8, in which case the field
+/// matches no other field.
+fn normalized_type_text(ty: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let raw = ty.utf8_text(source).ok()?;
+
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
+    let mut compact = String::with_capacity(raw.len());
+    let mut pending_space = false;
+    for ch in raw.chars() {
+        if ch.is_whitespace() {
+            pending_space = !compact.is_empty();
+            continue;
+        }
+        if pending_space
+            && is_ident_char(ch)
+            && compact.chars().next_back().is_some_and(is_ident_char)
+        {
+            compact.push(' ');
+        }
+        pending_space = false;
+        compact.push(ch);
+    }
+
+    // Drop every `segment::` prefix by rewinding to the start of the identifier
+    // run that precedes the separator.
+    let mut out = String::with_capacity(compact.len());
+    let mut segment_start = 0;
+    let mut chars = compact.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == ':' && chars.peek() == Some(&':') {
+            chars.next();
+            out.truncate(segment_start);
+            continue;
+        }
+        out.push(ch);
+        if !is_ident_char(ch) {
+            segment_start = out.len();
+        }
+    }
+    Some(out)
 }
 
 /// Names of the `type_identifier` generic parameters declared on the struct's
@@ -497,63 +491,17 @@ fn repr_attr_constrains_layout(attribute_item: tree_sitter::Node, source: &[u8])
     })
 }
 
-/// If `ty` is a single `Arc<X>`, `Rc<X>`, or `Weak<X>` smart-pointer wrapper,
-/// return its strength and the inner type text `X` (trimmed). Only the
-/// outermost wrapper is stripped — the inner text keeps any nested generics
-/// intact (`Arc<Mutex<Option<Ticker>>>` → `(Strong, "Mutex<Option<Ticker>>")`).
-/// Qualified paths (`std::sync::Arc<X>`) and non-wrapper types return `None`.
-fn smart_pointer_parts(ty: tree_sitter::Node, source: &[u8]) -> Option<(Strength, String)> {
-    if ty.kind() != "generic_type" {
-        return None;
-    }
-    let strength = match ty.child_by_field_name("type")?.utf8_text(source).ok()? {
-        "Arc" | "Rc" => Strength::Strong,
-        "Weak" => Strength::Weak,
-        _ => return None,
-    };
-    // `type_arguments` text is exactly `<…>`; stripping its delimiters removes
-    // only the outermost wrapper (tree-sitter guarantees the matching pair).
-    let inner = ty
-        .child_by_field_name("type_arguments")?
-        .utf8_text(source)
-        .ok()?
-        .trim()
-        .strip_prefix('<')?
-        .strip_suffix('>')?
-        .trim()
-        .to_string();
-    Some((strength, inner))
-}
-
-/// True when, for every field name in `subset`, both structs type it as a
-/// smart pointer of opposite strength over the same inner type — i.e. one is
-/// `Arc`/`Rc` and the other `Weak`, wrapping identical inner type text. All
-/// subset fields must satisfy this for the pair to be a strong/weak ownership
-/// counterpart rather than a data clump.
-fn is_strong_weak_pair(
-    subset: &[(String, bool)],
-    a: &FxHashMap<String, (Strength, String)>,
-    b: &FxHashMap<String, (Strength, String)>,
-) -> bool {
-    subset.iter().all(|(name, _)| match (a.get(name), b.get(name)) {
-        (Some((strength_a, inner_a)), Some((strength_b, inner_b))) => {
-            strength_a != strength_b && inner_a == inner_b
-        }
-        _ => false,
-    })
-}
-
 /// Generate all sorted subsets of size `k` from `items`.
-fn combinations(items: &[String], k: usize) -> Vec<Vec<String>> {
+fn combinations<T: Clone>(items: &[T], k: usize) -> Vec<Vec<T>> {
     let mut result = Vec::new();
     let mut combo = vec![0usize; k];
-    fn recurse(
-        items: &[String],
+    fn recurse<T: Clone>(
+        items: &[T],
         k: usize,
         start: usize,
         combo: &mut Vec<usize>,
         depth: usize,
-        result: &mut Vec<Vec<String>>,
+        result: &mut Vec<Vec<T>>,
     ) {
         if depth == k {
             result.push(combo[..k].iter().map(|&i| items[i].clone()).collect());
@@ -689,21 +637,24 @@ pub struct RealmRef<'a> {
         assert!(run_on(src).is_empty());
     }
 
+    /// The borrowed-view exclusion needs a reference-typed field, not merely a
+    /// lifetime parameter: a struct that carries `'a` in a non-reference field
+    /// still clumps with the struct whose fields it repeats.
     #[test]
     fn still_flags_lifetime_struct_without_reference_fields() {
         let src = r#"
-use std::borrow::Cow;
-
 struct Owned {
     x: String,
     y: String,
     z: String,
+    w: String,
 }
 
 struct Lazy<'a> {
-    x: Cow<'a, str>,
-    y: Cow<'a, str>,
+    x: String,
+    y: String,
     z: String,
+    tag: Tag<'a>,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
@@ -821,19 +772,22 @@ struct Vector {
         assert_eq!(run_on(src).len(), 2);
     }
 
+    /// Control for the strong/weak pair: smart pointers are not exempt in
+    /// themselves. Two structs holding the same `Arc<X>` fields agree on every
+    /// type and remain an extractable clump.
     #[test]
-    fn still_flags_arc_weak_with_different_inner_types() {
+    fn still_flags_matching_smart_pointer_fields() {
         let src = r#"
-struct Strong {
+struct Producer {
     a: Arc<Foo>,
     b: Arc<Bar>,
     c: Arc<Baz>,
 }
 
-struct Weakish {
-    a: Weak<Foo>,
-    b: Weak<Other>,
-    c: Weak<Baz>,
+struct Consumer {
+    a: Arc<Foo>,
+    b: Arc<Bar>,
+    c: Arc<Baz>,
 }
 "#;
         assert_eq!(run_on(src).len(), 2);
@@ -1191,6 +1145,120 @@ struct Dialer {
 }
 "#;
         assert!(run_on(src).is_empty());
+    }
+
+    /// fontdue's `OutlineBounds` (subpixels, `f32`) against `Metrics` (whole
+    /// pixels, `i32`/`usize`): the names are a rectangle's, shared on purpose,
+    /// but no shared type can hold both sets of types.
+    #[test]
+    fn no_fp_on_type_mismatch_issue_8253() {
+        let src = r#"
+pub struct OutlineBounds {
+    pub xmin: f32,
+    pub ymin: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+pub struct Metrics {
+    pub xmin: i32,
+    pub ymin: i32,
+    pub width: usize,
+    pub height: usize,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Control for the type comparison: the same names carrying the same types
+    /// are a clump, and the message names the types so the finding can be
+    /// checked at a glance.
+    #[test]
+    fn still_flags_matching_types_and_reports_them() {
+        let src = r#"
+pub struct A1 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub v: f32,
+}
+
+pub struct A2 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+"#;
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("[x: f32, y: f32, z: f32]"));
+    }
+
+    /// Widths alone differ (`f32` against `f64`), so nothing of the shared name
+    /// set survives the type comparison.
+    #[test]
+    fn no_fp_on_float_width_mismatch() {
+        let src = r#"
+struct P {
+    x: f32,
+    y: f32,
+    z: f32,
+    tag: u8,
+}
+
+struct Q {
+    x: f64,
+    y: f64,
+    z: f64,
+    tag: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// One disagreeing type drops the shared set from three fields to two,
+    /// below the clump threshold.
+    #[test]
+    fn no_fp_when_one_of_three_types_differs() {
+        let src = r#"
+struct P {
+    x: f32,
+    y: f32,
+    z: f32,
+    p_only: u8,
+}
+
+struct Q {
+    x: f32,
+    y: f32,
+    z: u32,
+    q_only: u8,
+}
+"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    /// Module path prefixes are not part of a type's identity: `font::Point`
+    /// and `Point` name the same type, so the clump is still found.
+    #[test]
+    fn still_flags_across_path_qualified_types() {
+        let src = r#"
+struct CubeCurve {
+    a: font::Point,
+    b: font::Point,
+    c: font::Point,
+    d: font::Point,
+}
+
+struct QuadCurve {
+    a: Point,
+    b: Point,
+    c: Point,
+    e: Point,
+}
+"#;
+        assert_eq!(run_on(src).len(), 2);
     }
 
     /// The saturation check only silences a *mixed* subset: a clump that is a
