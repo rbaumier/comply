@@ -7065,7 +7065,7 @@ pub fn is_react_display_name_assignment(assign: &oxc_ast::ast::AssignmentExpress
 /// head, and `delete o.p`; a TS assertion on the target (`o.p! = v`) puts the
 /// wrapper between `node` and the assignment. All of those read `false` here. For
 /// the broader "can a value be stored here" question, which also counts `++` and
-/// `+=` as writes, see `is_write_position` in `prefer-at`.
+/// `+=` as writes, see [`is_write_position`].
 #[must_use]
 pub fn is_plain_assignment_target(
     node: &oxc_semantic::AstNode,
@@ -7081,6 +7081,32 @@ pub fn is_plain_assignment_target(
     // The right operand shares this parent. Span identity is what separates the
     // store from the load in `o.p = o.p`.
     assign.operator == AssignmentOperator::Assign && assign.left.span() == node.kind().span()
+}
+
+/// True when the node at `node_span`, whose parent node is `parent`, occupies a
+/// position a value can be stored into — the left side of an assignment
+/// (`arr[0] = …`, `… += …`), the operand of an update (`arr[0]++`), a for-in /
+/// for-of binding, or a destructuring target.
+///
+/// Span identity pins the node to the target side, so the read on the right
+/// (`x = arr[0]`) is not a write. Unlike [`is_plain_assignment_target`], a
+/// compound assignment and an update count as writes: both store through the
+/// target even though they load it first.
+#[must_use]
+pub fn is_write_position(parent: oxc_ast::AstKind, node_span: oxc_span::Span) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_span::GetSpan;
+
+    match parent {
+        AstKind::UpdateExpression(_)
+        | AstKind::ArrayAssignmentTarget(_)
+        | AstKind::ObjectAssignmentTarget(_)
+        | AstKind::AssignmentTargetWithDefault(_) => true,
+        AstKind::AssignmentExpression(assign) => assign.left.span() == node_span,
+        AstKind::ForOfStatement(stmt) => stmt.left.span() == node_span,
+        AstKind::ForInStatement(stmt) => stmt.left.span() == node_span,
+        _ => false,
+    }
 }
 
 /// True when `name` matches a generic type parameter declared on any enclosing

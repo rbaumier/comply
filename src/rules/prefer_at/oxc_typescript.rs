@@ -1,29 +1,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_write_position};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{BinaryOperator, Expression};
 use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
-
-/// True when the computed member at `member_span` occupies a write position —
-/// the left side of an assignment (`arr[arr.length-1] = …`, `… += …`), the
-/// operand of an update (`arr[arr.length-1]++`), a for-in/of binding, or a
-/// destructuring target. `.at()` returns a value, not a reference, so it can
-/// never stand in those positions (`arr.at(-1) = …` is a hard syntax error);
-/// only reads should be flagged. The LHS of an assignment is matched by span so
-/// the read on the RHS (`x = arr[arr.length-1]`) still flags.
-fn is_write_position(parent: AstKind, member_span: Span) -> bool {
-    match parent {
-        AstKind::UpdateExpression(_)
-        | AstKind::ArrayAssignmentTarget(_)
-        | AstKind::ObjectAssignmentTarget(_)
-        | AstKind::AssignmentTargetWithDefault(_) => true,
-        AstKind::AssignmentExpression(assign) => assign.left.span() == member_span,
-        AstKind::ForOfStatement(stmt) => stmt.left.span() == member_span,
-        AstKind::ForInStatement(stmt) => stmt.left.span() == member_span,
-        _ => false,
-    }
-}
 
 /// True when the computed member at `member_span` is itself the `object` of an
 /// enclosing member expression — `arr[arr.length-1].prop` or
@@ -57,9 +37,9 @@ impl OxcCheck for Check {
         match node.kind() {
             // Pattern 1: `arr[arr.length - N]`
             AstKind::ComputedMemberExpression(member) => {
-                // `.at()` is not a valid assignment/update target, so a write
-                // position (`arr[arr.length-1] = …`, `++`, destructuring) must
-                // not be flagged — only reads.
+                // `.at()` returns a value, not a reference, so it can never
+                // stand in a write position (`arr.at(-1) = …` is a hard syntax
+                // error) — only reads are flaggable.
                 let parent = semantic.nodes().parent_node(node.id());
                 if is_write_position(parent.kind(), member.span) {
                     return;
