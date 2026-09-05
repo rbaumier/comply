@@ -639,11 +639,12 @@ impl TextCheck for Check {
         if is_nextra_meta_file(ctx.path) {
             return Vec::new();
         }
-        if ctx.project.nearest_package_json(ctx.path).is_some_and(|pkg| {
-            pkg.is_library
-                || pkg.has_bin
-                || is_script_entry_point(ctx.path, ctx.project.project_root.as_deref(), &pkg.script_entry_files)
-        }) {
+        if ctx
+            .project
+            .nearest_package_json(ctx.path)
+            .is_some_and(|pkg| pkg.is_library || pkg.has_bin)
+            || ctx.project.is_script_entry_file(ctx.path)
+        {
             return Vec::new();
         }
         // CLI-tool config file referenced by path from a `package.json` — a
@@ -1226,29 +1227,6 @@ fn is_custom_element_decorator(node: tree_sitter::Node, source: &[u8]) -> bool {
     callee
         .and_then(|id| id.utf8_text(source).ok())
         .is_some_and(is_custom_element_decorator_name)
-}
-
-/// True when `path` is listed as a CLI entry point in a `package.json`
-/// `scripts` value (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
-/// Compares the file's path relative to `project_root` (forward-slash,
-/// no leading `./`) against the extracted `script_entry_files` list.
-fn is_script_entry_point(
-    path: &Path,
-    project_root: Option<&Path>,
-    script_entry_files: &[String],
-) -> bool {
-    if script_entry_files.is_empty() {
-        return false;
-    }
-    let Some(root) = project_root else {
-        return false;
-    };
-    let rel = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    script_entry_files.iter().any(|entry| *entry == rel)
 }
 
 /// True when `path` is a file the project publishes as an entry point, whose

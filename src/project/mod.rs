@@ -126,7 +126,10 @@ pub struct PackageJson {
     pub ships_type_declarations: bool,
     /// Relative paths of source files that appear as CLI entry points in the
     /// `scripts` field (e.g. `"seed:dev": "bun run src/db/seed/dev.ts"`).
-    /// Stored with forward slashes and without a leading `./`.
+    /// Stored with forward slashes and without a leading `./`. An entry a Node
+    /// runner spelled without its extension (`node build-scripts/pull-metadata`)
+    /// is stored as written; [`ProjectCtx::is_script_entry_file`] resolves it
+    /// against the candidate file's own extension.
     pub script_entry_files: Vec<String>,
     /// Manifest-dir-relative path tokens this manifest references as a CLI tool's
     /// config file — consumed by the tool by path, never `import`-ed by a module:
@@ -510,21 +513,70 @@ fn read_uint(bytes: &[u8], i: &mut usize) -> Option<u32> {
     std::str::from_utf8(&bytes[start..*i]).ok()?.parse().ok()
 }
 
+/// Source extensions a script command spells out when it names a source file.
+const SCRIPT_SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"];
+
+/// Command heads that run their first non-flag argument as a script file. Node
+/// and the transpiling runners built on it resolve the extension themselves, so
+/// the argument names a source file even when it carries none (`node
+/// build-scripts/pull-google-metadata` runs `pull-google-metadata.js`). Runners
+/// whose first argument is usually a subcommand (`bun test`, `deno run`) are
+/// left out: their argument names no file.
+const SCRIPT_RUNNER_HEADS: &[&str] = &["node", "babel-node", "ts-node", "tsx", "esno"];
+
 /// Extract source-file paths from a package.json script command value.
 ///
-/// Splits the command by whitespace and keeps tokens that end with a known
-/// source extension (`.ts`, `.tsx`, `.mts`, `.js`, `.mjs`, `.cjs`). Surrounding
-/// shell quotes are trimmed first so a quoted subcommand fragment (e.g.
-/// `concurrently "node ./scripts/watch.mjs"` splits to `./scripts/watch.mjs"`)
-/// still matches its extension. Leading `./` is stripped so callers can compare
-/// against project-root-relative paths.
+/// Splits the command by whitespace and keeps two kinds of token: any that ends
+/// with a known source extension, and the first non-flag argument of a
+/// [`SCRIPT_RUNNER_HEADS`] runner, which names a source file whether or not it
+/// spells the extension out. Surrounding shell quotes are trimmed first so a
+/// quoted subcommand fragment (e.g. `concurrently "node ./scripts/watch.mjs"`
+/// splits to `./scripts/watch.mjs"`) still matches. Leading `./` is stripped so
+/// callers can compare against manifest-relative paths; an extensionless entry
+/// is resolved against the linted file's own extension by
+/// [`script_entry_matches`].
 fn extract_script_entry_files(cmd: &str) -> Vec<String> {
-    const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs"];
-    cmd.split_whitespace()
+    let tokens: Vec<&str> = cmd
+        .split_whitespace()
         .map(|token| token.trim_matches(|c| c == '"' || c == '\''))
-        .filter(|token| SOURCE_EXTS.iter().any(|ext| token.ends_with(ext)))
+        .collect();
+    let named_files = tokens
+        .iter()
+        .copied()
+        .filter(|token| has_script_source_ext(token));
+    let runner_arguments = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| SCRIPT_RUNNER_HEADS.contains(token))
+        .filter_map(|(head, _)| tokens[head + 1..].iter().find(|arg| !arg.starts_with('-')))
+        .copied()
+        .filter(|arg| !has_script_source_ext(arg));
+    named_files
+        .chain(runner_arguments)
         .map(|token| token.strip_prefix("./").unwrap_or(token).to_string())
         .collect()
+}
+
+/// True when `token` ends with one of [`SCRIPT_SOURCE_EXTS`].
+fn has_script_source_ext(token: &str) -> bool {
+    SCRIPT_SOURCE_EXTS.iter().any(|ext| token.ends_with(ext))
+}
+
+/// True when `entry`, a `script_entry_files` token resolved against
+/// `manifest_dir`, names `path`. An entry a runner spelled without an extension
+/// matches once `path`'s own source extension is dropped, which is how Node
+/// resolved it in the first place.
+fn script_entry_matches(manifest_dir: &Path, entry: &str, path: &Path) -> bool {
+    if manifest_dir.join(entry) == path {
+        return true;
+    }
+    let names_a_source_file = path
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| SCRIPT_SOURCE_EXTS.contains(&format!(".{ext}").as_str()));
+    Path::new(entry).extension().is_none()
+        && names_a_source_file
+        && path.with_extension("") == manifest_dir.join(entry)
 }
 
 /// Source extensions a CLI tool's config file carries when referenced by path.
@@ -4316,7 +4368,9 @@ impl ProjectCtx {
     /// part of the published `dist/`, so rules that constrain *published module*
     /// semantics (e.g. `node-no-top-level-await`) must not fire on it. The
     /// extracted entries are manifest-dir-relative, so the comparison joins each
-    /// onto the manifest directory and matches against `path`.
+    /// onto the manifest directory and matches against `path` — including the
+    /// extension the command may have left to Node to resolve, per
+    /// [`script_entry_matches`].
     pub fn is_script_entry_file(&self, path: &Path) -> bool {
         let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
             return false;
@@ -4326,7 +4380,7 @@ impl ProjectCtx {
         };
         pkg.script_entry_files
             .iter()
-            .any(|entry| manifest_dir.join(entry) == path)
+            .any(|entry| script_entry_matches(&manifest_dir, entry, path))
     }
 
     /// True when `path` only ever runs as repo automation: it is a script entry
@@ -4343,10 +4397,21 @@ impl ProjectCtx {
     /// qualifies, and a `src/` module a build script shares with the shipped
     /// entry point does not.
     ///
+    /// The walk runs only for a package that declares its product entry points
+    /// (`main`/`module`/`exports`/`publishConfig`, i.e. [`is_library`]). There a
+    /// script entry is provably not the product, so what it alone imports is
+    /// tooling. A package declaring none may be an application whose `start`
+    /// script launches it, and its modules stay product code — only the entry
+    /// file itself, executed directly, is exempt.
+    ///
     /// [`is_script_entry_file`]: ProjectCtx::is_script_entry_file
+    /// [`is_library`]: PackageJson::is_library
     pub fn is_script_tooling_module(&self, path: &Path) -> bool {
         if self.is_script_entry_file(path) {
             return true;
+        }
+        if !self.nearest_package_json(path).is_some_and(|pkg| pkg.is_library) {
+            return false;
         }
         let index = self.import_index();
         let mut visited: FxHashSet<PathBuf> = FxHashSet::from_iter([path.to_path_buf()]);
@@ -8338,7 +8403,7 @@ mod tests {
         load_with_files(&[
             (
                 "package.json",
-                r#"{"name":"libphonenumber-js","type":"module","scripts":{"gen":"node build-scripts/generate.js"}}"#,
+                r#"{"name":"libphonenumber-js","type":"module","module":"index.js","scripts":{"gen":"node build-scripts/generate.js"}}"#,
             ),
             (
                 "build-scripts/generate.js",
@@ -8369,7 +8434,7 @@ mod tests {
         let (dir, ctx) = load_with_files(&[
             (
                 "package.json",
-                r#"{"name":"shared","type":"module","scripts":{"gen":"node scripts/generate.js"}}"#,
+                r#"{"name":"shared","type":"module","module":"src/index.js","scripts":{"gen":"node scripts/generate.js"}}"#,
             ),
             ("scripts/generate.js", "import { fmt } from '../src/format.js';\nfmt();\n"),
             ("src/index.js", "import { fmt } from './format.js';\nexport const run = () => fmt();\n"),
@@ -8378,6 +8443,62 @@ mod tests {
         // `src/format.js` is reached from the build script *and* from the
         // library entry, so it is product code, not tooling.
         assert!(!ctx.is_script_tooling_module(&dir.path().join("src/format.js")));
+    }
+
+    #[test]
+    fn is_script_tooling_module_stops_at_an_applications_own_entry() {
+        let (dir, ctx) = load_with_files(&[
+            (
+                "package.json",
+                r#"{"name":"app","private":true,"type":"module","scripts":{"start":"node src/index.js"}}"#,
+            ),
+            ("src/index.js", "import { serve } from './service.js';\nserve();\n"),
+            ("src/service.js", "export function serve() {}\n"),
+        ]);
+        // The package declares no product entry, so `npm start` may well be
+        // launching the product itself: only the file the runner executes is
+        // exempt, not the application modules behind it.
+        assert!(ctx.is_script_tooling_module(&dir.path().join("src/index.js")));
+        assert!(!ctx.is_script_tooling_module(&dir.path().join("src/service.js")));
+    }
+
+    #[test]
+    fn is_script_entry_file_resolves_an_extensionless_runner_argument() {
+        // libphonenumber-js: `node build-scripts/pull-google-metadata …` lets
+        // Node resolve the `.js`, so the manifest never spells the extension.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"libphonenumber-js","scripts":{"pull":"node build-scripts/pull-google-metadata ./PhoneNumberMetadata.xml"}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx::empty();
+        assert!(ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-google-metadata.js")));
+        // A sibling the command never names stays out.
+        assert!(!ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-other-metadata.js")));
+        // The XML argument is not a runner argument and names no source file.
+        assert!(!ctx.is_script_entry_file(&dir.path().join("PhoneNumberMetadata.xml")));
+    }
+
+    #[test]
+    fn extract_script_entry_files_keeps_the_runner_argument_without_an_extension() {
+        assert_eq!(
+            extract_script_entry_files("node build-scripts/pull-google-metadata ./meta.xml"),
+            vec!["build-scripts/pull-google-metadata".to_string()]
+        );
+        // Flags between the runner and its script are skipped.
+        assert_eq!(
+            extract_script_entry_files("node --experimental-json-modules build-scripts/gen"),
+            vec!["build-scripts/gen".to_string()]
+        );
+        // An extension-bearing runner argument is captured once, not twice.
+        assert_eq!(
+            extract_script_entry_files("node ./scripts/build.mjs"),
+            vec!["scripts/build.mjs".to_string()]
+        );
+        // A command head that is not a script runner contributes nothing.
+        assert!(extract_script_entry_files("npm run metadata:generate").is_empty());
     }
 
     #[test]

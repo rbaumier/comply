@@ -1516,8 +1516,7 @@ mod tests {
         let file = dir.path().join(rel_file);
         let source = std::fs::read_to_string(&file).unwrap();
         crate::oxc_helpers::reset_file_caches();
-        let d = Diagnostic { path: Arc::from(file.as_path()), ..diag("unused") };
-        FILTER.keep_with_project(&d, Some(&source), &project)
+        FILTER.keep_with_project(&diag(file.to_str().unwrap()), Some(&source), &project)
     }
 
     const LUXON_PKG: &str = r#"{"name":"luxon","main":"./src/luxon.js"}"#;
