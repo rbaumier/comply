@@ -5,11 +5,6 @@ use crate::rules::boolean_prefix::has_boolean_prefix;
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
-const BOOLEAN_PREFIXES: &[&str] = &[
-    "is", "has", "should", "can", "will", "did", "show", "hide", "enable", "disable", "visible",
-    "active", "open", "loading", "loaded", "allow", "need", "must",
-];
-
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -84,14 +79,15 @@ fn is_boolean_expression(expr: &Expression, source: &str) -> bool {
                     | BinaryOperator::Instanceof
             )
         }
-        // A call to a boolean-prefixed function (`isExpanded(item)`, `hasFoo()`)
-        // returns a boolean by naming convention, so `expr && <JSX/>` cannot leak
-        // `0`/`""`. Uses the same camelCase-boundary predicate as the sibling
-        // `react-no-and-conditional-jsx` to keep the two `&&`-guard rules in parity.
+        // A boolean-prefixed name (`isExpanded(item)`, `hasFoo()`, `isReady`)
+        // is a boolean by naming convention, so `expr && <JSX/>` cannot leak
+        // `0`/`""`. Every arm keys on the same shared prefix predicate as the
+        // sibling `react-no-and-conditional-jsx`, so the two `&&`-guard rules
+        // stay in parity.
         Expression::CallExpression(call) => {
             matches!(&call.callee, Expression::Identifier(id) if has_boolean_prefix(id.name.as_str()))
         }
-        Expression::Identifier(ident) => looks_like_boolean_identifier(ident.name.as_str()),
+        Expression::Identifier(ident) => has_boolean_prefix(ident.name.as_str()),
         Expression::StaticMemberExpression(member) => {
             // `foo.value` is a Vue `Ref`/`ComputedRef` unwrap: the booleanness
             // belongs to the underlying object (`showText.value` → `showText`),
@@ -100,25 +96,20 @@ fn is_boolean_expression(expr: &Expression, source: &str) -> bool {
             if member.property.name.as_str() == "value" {
                 is_boolean_expression(&member.object, source)
             } else {
-                looks_like_boolean_identifier(member.property.name.as_str())
+                has_boolean_prefix(member.property.name.as_str())
             }
         }
         Expression::ComputedMemberExpression(_) => {
             let span = oxc_span::GetSpan::span(expr);
             let text = &source[span.start as usize..span.end as usize];
             let segment = text.rsplit('.').next().unwrap_or(text);
-            looks_like_boolean_identifier(segment)
+            has_boolean_prefix(segment)
         }
         Expression::ParenthesizedExpression(paren) => {
             is_boolean_expression(&paren.expression, source)
         }
         _ => false,
     }
-}
-
-fn looks_like_boolean_identifier(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    BOOLEAN_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
 #[cfg(test)]
@@ -230,5 +221,40 @@ mod tests {
     fn allows_boolean_prefixed_property() {
         let src = "const c = props.showText && <div>hi</div>;";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_non_camel_case_boolean_lookalike_identifier() {
+        // #7441/#7398: a name that merely begins with the prefix letters
+        // (`island`, `cancel`, `hasty`, `canvas`) is not boolean by convention
+        // and can still hold a number/string that leaks `0`/`""`.
+        assert_eq!(run_on("const a = island && <div>hi</div>;").len(), 1);
+        assert_eq!(run_on("const b = cancel && <div>hi</div>;").len(), 1);
+        assert_eq!(run_on("const c = hasty && <div>hi</div>;").len(), 1);
+        assert_eq!(run_on("const d = canvas && <div>hi</div>;").len(), 1);
+    }
+
+    #[test]
+    fn flags_non_camel_case_boolean_lookalike_property() {
+        // Same boundary rule on the member arm: `props.island` is not boolean.
+        assert_eq!(run_on("const a = props.island && <div>hi</div>;").len(), 1);
+        assert_eq!(run_on("const b = props.cancel && <div>hi</div>;").len(), 1);
+    }
+
+    #[test]
+    fn allows_with_prefixed_identifier() {
+        // #7398: `with` is part of the shared convention, so the identifier
+        // `withTimeBubble` is boolean exactly like the call `withTimeBubble()`.
+        assert!(run_on("const a = withTimeBubble && <div>hi</div>;").is_empty());
+        assert!(run_on("const b = withTimeBubble() && <div>hi</div>;").is_empty());
+    }
+
+    #[test]
+    fn allows_boolean_prefix_at_snake_case_boundary() {
+        // The convention holds at any word boundary, not only camelCase, so
+        // snake_case and SCREAMING_SNAKE booleans stay exempt.
+        assert!(run_on("const a = is_ready && <div>hi</div>;").is_empty());
+        assert!(run_on("const b = IS_READY && <div>hi</div>;").is_empty());
+        assert!(run_on("const c = props.is_ready && <div>hi</div>;").is_empty());
     }
 }
