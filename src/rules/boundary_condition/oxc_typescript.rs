@@ -2128,9 +2128,11 @@ fn is_nonempty_fixed_array_construction(new_expr: &NewExpression) -> bool {
 /// type arguments (see [`binding_declared_ts_type`]). The resolved type qualifies
 /// when it is a literal tuple (`[A, B]`, with a `readonly [...]` wrapper unwrapped)
 /// or a bare named alias that resolves to one (`type Semver = [number, number,
-/// number]`; see [`ts_type_resolves_to_nonempty_tuple`]). A generic reference
-/// standing alone (`LineSegment<T>`) stays unresolved — its tuple shape needs type
-/// information this native backend doesn't have.
+/// number]`; see [`ts_type_resolves_to_nonempty_tuple`]). An UNANNOTATED parameter
+/// falls back to the type its enclosing binding's declared function type supplies
+/// (see [`contextual_parameter_type`]). A generic reference standing alone
+/// (`LineSegment<T>`) stays unresolved — its tuple shape needs type information
+/// this native backend doesn't have.
 fn resolves_to_nonempty_tuple_type<'a>(
     ident: &IdentifierReference,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -2153,7 +2155,17 @@ fn resolves_to_nonempty_tuple_type<'a>(
         .chain(nodes.ancestor_kinds(decl_node_id))
     {
         let annotation = match kind {
-            AstKind::FormalParameter(param) => &param.type_annotation,
+            AstKind::FormalParameter(param) => match &param.type_annotation {
+                Some(ann) => {
+                    return ts_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic);
+                }
+                // The parameter declares nothing of its own, but the enclosing
+                // binding's function type may still supply its type.
+                None => {
+                    return contextual_parameter_type(param.span, decl_node_id, semantic)
+                        .is_some_and(|ty| ts_type_resolves_to_nonempty_tuple(ty, semantic));
+                }
+            },
             AstKind::VariableDeclarator(decl) => &decl.type_annotation,
             // Leaving the binding's own declaration without finding an annotation.
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Program(_) => {
@@ -2166,6 +2178,67 @@ fn resolves_to_nonempty_tuple_type<'a>(
             .is_some_and(|ann| ts_type_resolves_to_nonempty_tuple(&ann.type_annotation, semantic));
     }
     false
+}
+
+/// Returns the type an UNANNOTATED parameter receives from the function type
+/// declared on the binding its owning function initializes — `const seconds:
+/// (diff: [number, number]) => number = (diff) => diff[0] + …`. TypeScript
+/// propagates the annotation's parameter types onto the arrow/function expression
+/// assigned to that binding, so the parameter at `param_span` carries the declared
+/// parameter at the same index.
+///
+/// Resolution is purely syntactic and in-file: the owning function must be the
+/// declarator's initializer (only parentheses may sit in between — an `as`
+/// on the initializer would supply a different contextual type), the declarator
+/// must be annotated, and that annotation must be a `TSFunctionType` with an
+/// annotated parameter at the index. A rest parameter is not in `items`, so it
+/// never matches.
+fn contextual_parameter_type<'a>(
+    param_span: oxc_span::Span,
+    decl_node_id: oxc_semantic::NodeId,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<&'a TSType<'a>> {
+    let nodes = semantic.nodes();
+    let (fn_node_id, params) =
+        nodes
+            .ancestors(decl_node_id)
+            .find_map(|ancestor| match ancestor.kind() {
+                AstKind::ArrowFunctionExpression(arrow) => Some((ancestor.id(), &arrow.params)),
+                AstKind::Function(func) => Some((ancestor.id(), &func.params)),
+                _ => None,
+            })?;
+    let index = params.items.iter().position(|item| item.span == param_span)?;
+
+    let mut current = fn_node_id;
+    let declared = loop {
+        let parent_id = nodes.parent_id(current);
+        if parent_id == current {
+            return None;
+        }
+        match nodes.kind(parent_id) {
+            AstKind::ParenthesizedExpression(_) => current = parent_id,
+            AstKind::VariableDeclarator(decl) => break decl.type_annotation.as_ref()?,
+            _ => return None,
+        }
+    };
+    let TSType::TSFunctionType(fn_type) = peel_parenthesized_type(&declared.type_annotation) else {
+        return None;
+    };
+    fn_type
+        .params
+        .items
+        .get(index)
+        .and_then(|item| item.type_annotation.as_ref())
+        .map(|ann| &ann.type_annotation)
+}
+
+/// Strips `(...)` wrappers from a type, so an annotation written
+/// `((p: [A, B]) => R)` reaches the function type inside.
+fn peel_parenthesized_type<'a, 'b>(ty: &'b TSType<'a>) -> &'b TSType<'a> {
+    match ty {
+        TSType::TSParenthesizedType(paren) => peel_parenthesized_type(&paren.type_annotation),
+        _ => ty,
+    }
 }
 
 /// Returns true when the indexed receiver is a member access `obj.field` whose
@@ -6933,6 +7006,53 @@ mod tests {
         // At each level only the statements strictly before the one holding the
         // read count, so a guard written after it does not vouch it safe.
         let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_tuple_param_typed_by_the_binding_function_type_issue_8060() {
+        // Unleash `src/lib/util/timer.ts`: the parameter is unannotated, and its
+        // tuple type comes from the variable's function-type annotation.
+        let src = "const NS_TO_S = 1e9;\nconst seconds: (diff: [number, number]) => number = (diff) => diff[0] + diff[1] / NS_TO_S;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_function_expression_param_typed_by_the_binding_function_type_issue_8060() {
+        let src = "const f: (p: [number, number]) => number = function (p) { return p[0]; };";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_second_tuple_param_typed_by_the_binding_function_type_issue_8060() {
+        // The declared parameter is matched by index, not by position-agnostic search.
+        let src = "const f: (a: number[], b: [number, number]) => number = (a, b) => b[0];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_array_typed_param_from_the_binding_function_type_issue_8060() {
+        let src = "const f: (p: number[]) => number = (p) => p[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_param_whose_declared_index_is_not_a_tuple_issue_8060() {
+        let src = "const f: (a: [number, number], b: number[]) => number = (a, b) => b[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_unannotated_param_of_an_unannotated_binding_issue_8060() {
+        let src = "const f = (p) => p[0];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_callback_param_passed_through_a_call_issue_8060() {
+        // The arrow is an argument, not the declarator's initializer, so the
+        // binding's function type says nothing about its parameter.
+        let src = "const f: (p: [number, number]) => number = wrap((p) => p[0]);";
         assert_eq!(run_on(src).len(), 1);
     }
 
