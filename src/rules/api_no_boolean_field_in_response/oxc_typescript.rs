@@ -1,5 +1,8 @@
 //! api-no-boolean-field-in-response OXC backend — flag `boolean` properties
-//! in response-shaped interfaces/type aliases. A name ending in a strong
+//! in response-shaped interfaces/type aliases.
+//! The last direction word in a name decides its half.
+//! An inbound name such as `ObjectiveRequestBody` is skipped.
+//! Otherwise a name ending in a strong
 //! response suffix (`Response`, `Dto`, `Reply`, `Body`) qualifies on its own;
 //! the ambiguous suffixes `Result` and `Payload` qualify only when the shape
 //! also carries a response-shaped field (`data`, `error`, `status`, …), so
@@ -12,6 +15,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::identifier_words::split_identifier_words;
 use oxc_ast::ast::{PropertyKey, TSSignature, TSType, TSTypeName, TSTypeParameterDeclaration};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,6 +36,15 @@ const RESPONSE_SUFFIXES: &[&str] = &[
 /// field.
 const AMBIGUOUS_SUFFIXES: &[&str] = &["Result", "Payload"];
 
+/// Words naming the inbound half of an exchange.
+/// This is what the client sends.
+const REQUEST_DIRECTION_WORDS: &[&str] = &["Request", "Input", "Params", "Args"];
+
+/// Words naming the outbound half — what the server returns.
+/// `Body`, `Dto` and `Payload` are absent on purpose.
+/// They name the container, not the direction.
+const RESPONSE_DIRECTION_WORDS: &[&str] = &["Response", "Reply", "Result", "Output"];
+
 /// Field names typical of an HTTP-response envelope. Used to confirm an
 /// ambiguously-suffixed type is actually a response shape.
 const RESPONSE_SHAPED_FIELDS: &[&str] = &[
@@ -48,13 +61,43 @@ enum ResponseMatch {
     None,
 }
 
+/// Whether the name describes what the client sends.
+/// The last direction word in it decides.
+/// `ObjectiveRequestBody` is inbound; `RequestLogResponse` is not.
+/// A directionless name falls back to the suffix.
+fn names_request_shape(name: &str) -> bool {
+    split_identifier_words(name)
+        .filter_map(|word| {
+            if REQUEST_DIRECTION_WORDS
+                .iter()
+                .any(|w| word.eq_ignore_ascii_case(w))
+            {
+                Some(true)
+            } else if RESPONSE_DIRECTION_WORDS
+                .iter()
+                .any(|w| word.eq_ignore_ascii_case(w))
+            {
+                Some(false)
+            } else {
+                None
+            }
+        })
+        .last()
+        .unwrap_or(false)
+}
+
 fn classify_response_type(name: &str) -> ResponseMatch {
-    if RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s)) {
+    let by_suffix = if RESPONSE_SUFFIXES.iter().any(|s| name.ends_with(s)) {
         ResponseMatch::Strong
     } else if AMBIGUOUS_SUFFIXES.iter().any(|s| name.ends_with(s)) {
         ResponseMatch::Ambiguous
     } else {
+        return ResponseMatch::None;
+    };
+    if names_request_shape(name) {
         ResponseMatch::None
+    } else {
+        by_suffix
     }
 }
 
@@ -311,6 +354,50 @@ mod tests {
             "src/api/foo.ts",
         );
         assert_eq!(d.len(), 1, "a response-shaped field typed by a concrete wrapper over a generic must still flag: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_on_request_body_type() {
+        // Issue #8511: `Body` is carried by both directions.
+        // The `Request` word ahead of it names the inbound one.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "export type ObjectiveRequestBody = { name: string; forceAttainment: boolean };",
+            "src/api/features/objectives/test-helpers.ts",
+        );
+        assert!(d.is_empty(), "a request-body type must not be flagged as a response: {d:?}");
+    }
+
+    #[test]
+    fn no_fp_on_request_dto() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "export interface CreateUserRequestDto { name: string; sendWelcomeEmail: boolean }",
+            "src/api/users.ts",
+        );
+        assert!(d.is_empty(), "a request DTO must not be flagged as a response: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_response_after_a_request_word() {
+        // The trailing `Response` is the last direction word.
+        // The shape is a reply about requests.
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface RequestLogResponse { isRetried: boolean }",
+            "src/api/logs.ts",
+        );
+        assert_eq!(d.len(), 1, "a response naming a request must still fire: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_bare_body_suffix() {
+        let d = crate::rules::test_helpers::run_rule(
+            &Check,
+            "interface UserBody { isActive: boolean }",
+            "src/api/user.ts",
+        );
+        assert_eq!(d.len(), 1, "a directionless `Body` suffix must still fire: {d:?}");
     }
 
     #[test]
