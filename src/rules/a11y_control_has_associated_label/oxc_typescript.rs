@@ -1,7 +1,7 @@
 //! a11y-control-has-associated-label OxcCheck backend.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, jsx_opening_element_is_aria_hidden};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElementName,
@@ -10,6 +10,23 @@ use oxc_ast::ast::{
 use std::sync::Arc;
 
 const INTERACTIVE_ELEMENTS: &[&str] = &["button", "input", "select", "textarea"];
+
+/// Whether a child reaches the accessibility tree and can therefore name the
+/// element that owns it. An `aria-hidden` child — the decorative icon of an
+/// icon-only control — is excluded from the accessible name computation.
+fn child_contributes_accessible_name(child: &JSXChild) -> bool {
+    match child {
+        JSXChild::Text(text) => !text.value.trim().is_empty(),
+        JSXChild::Element(element) => {
+            !jsx_opening_element_is_aria_hidden(&element.opening_element)
+        }
+        JSXChild::ExpressionContainer(ec) => {
+            !matches!(ec.expression, JSXExpression::EmptyExpression(_))
+        }
+        JSXChild::Fragment(_) => true,
+        JSXChild::Spread(_) => true,
+    }
+}
 
 pub struct Check;
 
@@ -91,23 +108,15 @@ impl OxcCheck for Check {
             return;
         }
 
-        // For <button> elements, check parent JSXElement for text content
+        // `button` is a name-from-content role: content reaching the
+        // accessibility tree already names it, so no `aria-label` is required.
         if tag == "button"
-            && let Some(parent) = semantic.nodes().ancestors(node.id()).nth(1)
-                && let AstKind::JSXElement(element) = parent.kind() {
-                    let has_content = element.children.iter().any(|child| match child {
-                        JSXChild::Text(text) => !text.value.trim().is_empty(),
-                        JSXChild::Element(_) => true,
-                        JSXChild::ExpressionContainer(ec) => {
-                            !matches!(ec.expression, JSXExpression::EmptyExpression(_))
-                        }
-                        JSXChild::Fragment(_) => true,
-                        JSXChild::Spread(_) => true,
-                    });
-                    if has_content {
-                        return;
-                    }
-                }
+            && let Some(parent) = semantic.nodes().ancestors(node.id()).next()
+            && let AstKind::JSXElement(element) = parent.kind()
+            && element.children.iter().any(child_contributes_accessible_name)
+        {
+            return;
+        }
 
         // Check for <label htmlFor="<id>"> or <label for="<id>"> anywhere in the file
         let maybe_id = opening.attributes.iter().find_map(|attr_item| {
@@ -266,6 +275,40 @@ mod tests {
     #[test]
     fn still_flags_bare_input_without_label_ancestor() {
         assert_eq!(run_on(r#"const x = <input type="text" />;"#).len(), 1);
+    }
+
+    // Regression #8499: `button` is a name-from-content role — a text child names it.
+    #[test]
+    fn no_fp_on_button_with_dynamic_text_child() {
+        assert!(run_on(r#"
+            const C = ({ row, setEditing }) => (
+                <button type="button" onClick={() => setEditing(true)} className="text-left">
+                    {row.name}
+                </button>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn no_fp_on_button_with_static_text_child() {
+        assert!(run_on(r#"
+            const C = ({ setEditing }) => (
+                <button type="button" onClick={() => setEditing(true)} className="text-left">
+                    Nom statique
+                </button>
+            );
+        "#).is_empty());
+    }
+
+    #[test]
+    fn still_flags_icon_only_button() {
+        assert_eq!(run_on(r#"
+            const C = ({ onClear }) => (
+                <button type="button" onClick={onClear}>
+                    <XIcon aria-hidden="true" />
+                </button>
+            );
+        "#).len(), 1);
     }
 
     // Guard: a sibling <label> (not an ancestor) does not satisfy implicit association.
