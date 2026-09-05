@@ -27,11 +27,15 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     if has_outer_attribute_path(node, source, &["deprecated"]) { return; }
 
     // `get_and_<verb>` (e.g. `get_and_reset`, `get_and_clear`, `get_and_take`)
-    // is a compound read-modify-write operation — atomically read the value AND
-    // mutate it — mirroring the `fetch_and_*` atomics. Here `get` is the first
-    // half of the compound verb, not a dispensable accessor prefix; stripping it
-    // yields the nonsensical `and_reset`. Matched on the `and` segment, so
-    // `get_android` (bare name `android`) is still flagged.
+    // names a compound read-modify-write operation, mirroring the `fetch_and_*`
+    // atomics. This guard tests the *name*: `get` is the first half of a
+    // conjunction, so the remainder is not a noun the method could be renamed to
+    // — stripping the prefix yields the nonsensical `and_reset`. The rename is
+    // impossible for the same reason as the keyword and digit-leading guards
+    // below. (The write itself is caught structurally by `mutates_receiver`, but
+    // a read-modify-write through interior mutability — `self.idle_ns.swap(0,
+    // SeqCst)` behind `&self` — writes nothing the AST can see.) Matched on the
+    // `and` segment, so `get_android` (bare name `android`) is still flagged.
     if name[4..].starts_with("and_") { return; }
 
     // `get_or_<verb>` / `get_mut_or_<verb>` (e.g. `get_or_default`,
@@ -136,6 +140,15 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
     // "drop the `get_`" rename does not apply.
     if wraps_foreign_call(node, source) { return; }
 
+    // A method that writes to `self` performs a state transition, not a field
+    // read: `fn get_sixlowpan_fragment_tag(&mut self) -> u16 { let tag = self.tag;
+    // self.tag = self.tag.wrapping_add(1); tag }` hands out a fresh value on every
+    // call, the way `AtomicU16::fetch_add` does. RFC 344's C-GETTER covers methods
+    // that expose a field; renaming a `fetch_add` to the field-read spelling
+    // `self.sixlowpan_fragment_tag()` promises idempotence the body does not have.
+    // A `&self` receiver cannot assign to `self`, so plain accessors never match.
+    if mutates_receiver(node) { return; }
+
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
         &name_node,
@@ -143,6 +156,44 @@ crate::ast_check! { on ["function_item"] prefilter = ["get_"] => |node, source, 
         format!("Accessor `{name}` uses `get_` prefix — rename to `{}`. Reserve `get` for fallible operations.", &name[4..]),
         Severity::Error,
     ));
+}
+
+/// True when the method body writes to a place rooted at the receiver — an
+/// assignment or compound assignment whose left-hand side resolves back to
+/// `self` (`self.tag = …`, `self.id += 1`, `*self.slot = …`, `self.buf[0] = …`).
+/// Such a method transitions the receiver's state instead of exposing it, so it
+/// is not the C-GETTER the rename targets.
+fn mutates_receiver(func: tree_sitter::Node) -> bool {
+    let Some(body) = func.child_by_field_name("body") else {
+        return false;
+    };
+    contains_self_assignment(body)
+}
+
+/// Recursively scan `node` for an `assignment_expression` or
+/// `compound_assignment_expr` whose assigned place is rooted at `self`.
+fn contains_self_assignment(node: tree_sitter::Node) -> bool {
+    if matches!(node.kind(), "assignment_expression" | "compound_assignment_expr")
+        && node.child_by_field_name("left").is_some_and(is_self_rooted)
+    {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(contains_self_assignment)
+}
+
+/// True when a place expression bottoms out at the `self` receiver, walking
+/// through the field, index, dereference and grouping wrappers that can appear
+/// on the left of an assignment.
+fn is_self_rooted(place: tree_sitter::Node) -> bool {
+    match place.kind() {
+        "self" => true,
+        "field_expression" => place.child_by_field_name("value").is_some_and(is_self_rooted),
+        "index_expression" | "unary_expression" | "parenthesized_expression" => {
+            place.named_child(0).is_some_and(is_self_rooted)
+        }
+        _ => false,
+    }
 }
 
 /// True when the method body contains an `unsafe` block that delegates to a
@@ -868,6 +919,47 @@ mod tests {
         impl Span {\n\
             pub fn get_years(&self) -> i16 { self.years }\n\
         }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_get_prefix_read_modify_write_body_issue_8343() {
+        // smoltcp's 6LoWPAN fragment-tag allocator advances the counter, so every
+        // call yields a different value — a `fetch_add`, not a field read. Two
+        // datagrams sharing a tag are reassembled into each other, which is what
+        // the field-read spelling `self.sixlowpan_fragment_tag()` would promise.
+        let src = "impl InterfaceInner {\n\
+            fn get_sixlowpan_fragment_tag(&mut self) -> u16 {\n\
+                let tag = self.tag;\n\
+                self.tag = self.tag.wrapping_add(1);\n\
+                tag\n\
+            }\n\
+        }";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_get_prefix_compound_assignment_to_self_issue_8343() {
+        // `self.id += 1` is the same read-modify-write shape as a plain assignment.
+        let src = "impl Ids {\n    fn get_next_id(&mut self) -> u32 { self.id += 1; self.id }\n}";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_get_prefix_mut_receiver_that_writes_nothing_issue_8343() {
+        // `&mut self` alone is not the discriminator — handing out a mutable borrow
+        // of a field is a genuine C-GETTER, and so is reading one.
+        let src = "impl Terminal {\n\
+            fn get_buffer_mut(&mut self) -> &mut Vec<u8> { &mut self.buffer }\n\
+            fn get_cached(&mut self) -> &str { &self.cached }\n\
+        }";
+        assert_eq!(run(src).len(), 2);
+    }
+
+    #[test]
+    fn flags_get_prefix_reading_field_method_issue_8343() {
+        // A `&self` body that only reads cannot assign to `self` — still a getter.
+        let src = "impl Bag {\n    fn get_count(&self) -> usize { self.items.len() }\n}";
         assert_eq!(run(src).len(), 1);
     }
 }
