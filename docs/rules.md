@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2060 rules across 152 categories.
+2059 rules across 152 categories.
 
 ## Categories
 
@@ -10,7 +10,7 @@
 - [accessibility > performance](#accessibility-performance) (2 rules)
 - [accessibility > ui](#accessibility-ui) (2 rules)
 - [api](#api) (8 rules)
-- [api-design](#api-design) (7 rules)
+- [api-design](#api-design) (6 rules)
 - [architecture](#architecture) (2 rules)
 - [async](#async) (4 rules)
 - [axum > correctness](#axum-correctness) (1 rules)
@@ -243,7 +243,6 @@
 |------|-------------|-------------|
 | `api-branded-id-types` | Entity IDs in public API signatures must use branded types, not raw string/number. | Introduce a branded type such as `type OrderId = string & { readonly __brand: 'OrderId' }` and use it instead of `string`/`number` for ID parameters. |
 | `api-no-internal-ids-in-response` | Response DTOs must not expose internal column names, sequential IDs, or implementation fields. | Rename the field to its public counterpart (e.g. `user_id` → `userId`, `pk` → `id`) and drop implementation-only columns from the response shape. |
-| `api-no-nullable-variant-fields` | Interfaces must not encode state via clusters of optional fields; use discriminated unions. | Replace the optional cluster with a `status: 'cancelled'; cancelReason: string; cancelledAt: string` variant in a discriminated union. |
 | `api-put-vs-patch` | PUT handlers with Partial<> payloads should use PATCH instead. | If the handler accepts fields-provided-only semantics, register it with `.patch(...)`. Keep `.put(...)` for full-resource replacement. |
 | `api-response-envelope-consistency` | Mixing `{ data: ... }` envelopes with raw returns forces every client to branch. | Pick one shape for the file (envelope or raw) and apply it to every response. |
 | `api-route-version-prefix` | API routes must start with a version prefix (/v1/, /v2/, …). | Prefix the route path with a version segment, e.g. `/v1/users`. If routes are mounted on a versioned sub-router, disable this rule for that file. |
