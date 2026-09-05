@@ -86,6 +86,18 @@ export function build() {}"#;
     }
 
     #[test]
+    fn guillemets_are_punctuation_not_words() {
+        let src = "// Report it before the guards blame « Code client vide ».\nconst count = 1;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn a_slash_and_an_em_dash_are_punctuation_not_words() {
+        let src = "\"use no memo\"; // RHF register() / formState proxy breaks under React Compiler — see docs/agents/frontend-patterns.md\nexport const a = 1;";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn jsdoc_example_bodies_count_too() {
         let src = r#"/**
  * Builds the client.
