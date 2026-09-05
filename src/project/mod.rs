@@ -2535,12 +2535,13 @@ impl CargoManifest {
     }
 
     /// True when the crate builds at least one binary target: a `[[bin]]`
-    /// table is declared, `src/main.rs` exists next to the manifest, or a
-    /// `.rs` file sits directly under `src/bin/` (a binary target Cargo
-    /// auto-discovers on the 2018+ edition, the default). Unlike
-    /// [`is_binary_only`], this stays true for application crates (e.g. CLIs)
-    /// that also carry a `[lib]` purely to share code between their own
-    /// binaries — those crates still own their stdout.
+    /// table is declared, `src/main.rs` exists next to the manifest, or
+    /// `src/bin/` holds one of the two layouts Cargo auto-discovers a binary
+    /// from on the 2018+ edition (the default) — a direct-child `.rs` file, or
+    /// a direct-child directory holding a `main.rs`. Unlike [`is_binary_only`],
+    /// this stays true for application crates (e.g. CLIs) that also carry a
+    /// `[lib]` purely to share code between their own binaries — those crates
+    /// still own their stdout.
     ///
     /// `autobins = false` (which disables `src/bin/` auto-discovery) is not
     /// honored: the manifest parser does not track it, and turning off
@@ -2551,15 +2552,17 @@ impl CargoManifest {
         if self.has_bin_table || self.manifest_dir.join("src/main.rs").is_file() {
             return true;
         }
-        // Any `.rs` file directly under `src/bin/` is an auto-discovered binary
-        // target. Only direct-child files count (not nested dirs, not non-`.rs`
-        // entries); a missing `src/bin/` yields `Err` and no match.
+        // Only direct children of `src/bin/` are targets, in either of Cargo's
+        // two shapes: the `foo.rs` file and the `foo/main.rs` directory. A
+        // missing `src/bin/` yields `Err` and no match.
         let Ok(entries) = std::fs::read_dir(self.manifest_dir.join("src/bin")) else {
             return false;
         };
         entries.filter_map(Result::ok).any(|entry| {
-            entry.file_type().is_ok_and(|file_type| file_type.is_file())
-                && entry.path().extension().is_some_and(|ext| ext == "rs")
+            let path = entry.path();
+            let names_rs_file = entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && path.extension().is_some_and(|ext| ext == "rs");
+            names_rs_file || path.join("main.rs").is_file()
         })
     }
 
@@ -9281,18 +9284,33 @@ path = "tools/tool.rs"
             "a crate with only src/lib.rs declares no binary"
         );
 
-        // A src/bin/ holding only non-`.rs` entries (a README, a nested dir) is
-        // not a binary target.
+        // Cargo's nested auto-bin layout: `src/bin/<name>/main.rs` is a binary
+        // target too, so a lib.rs crate carrying one ships an executable.
+        let nested_bin = TempDir::new().unwrap();
+        std::fs::create_dir_all(nested_bin.path().join("src/bin/foo")).unwrap();
+        std::fs::write(nested_bin.path().join("src/lib.rs"), "").unwrap();
+        std::fs::write(nested_bin.path().join("src/bin/foo/main.rs"), "fn main() {}").unwrap();
+        let nested_manifest =
+            CargoManifest::parse("[package]\nname = \"nested\"\n", nested_bin.path().to_path_buf())
+                .unwrap();
+        assert!(
+            nested_manifest.declares_binary(),
+            "src/bin/<name>/main.rs is an auto-discovered binary target"
+        );
+
+        // A src/bin/ holding only non-`.rs` entries (a README, a nested dir
+        // with no main.rs) is not a binary target.
         let no_rs = TempDir::new().unwrap();
         std::fs::create_dir_all(no_rs.path().join("src/bin/helper")).unwrap();
         std::fs::write(no_rs.path().join("src/lib.rs"), "").unwrap();
         std::fs::write(no_rs.path().join("src/bin/README.md"), "").unwrap();
+        std::fs::write(no_rs.path().join("src/bin/helper/lib.rs"), "").unwrap();
         let no_rs_manifest =
             CargoManifest::parse("[package]\nname = \"nors\"\n", no_rs.path().to_path_buf())
                 .unwrap();
         assert!(
             !no_rs_manifest.declares_binary(),
-            "src/bin/ without a direct-child .rs file declares no binary"
+            "src/bin/ without a direct-child .rs file or a <name>/main.rs declares no binary"
         );
 
         // The pre-existing forms still hold: an explicit [[bin]] table, and a
