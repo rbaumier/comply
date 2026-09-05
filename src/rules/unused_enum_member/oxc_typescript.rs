@@ -216,34 +216,36 @@ impl OxcCheck for Check {
                         mark_all_members_used(enum_name, members, &mut used);
                     }
                 }
+                // A qualified name spells out one member, in type space
+                // (`x: Food.Pizza`) or through a query (`typeof Food.Pizza`);
+                // the walker funnels both spellings into this node. Deeper
+                // qualification (`NS.Food.Pizza`) has a qualified name on the
+                // left, which names no tracked enum.
+                AstKind::TSQualifiedName(qualified) => {
+                    if let TSTypeName::IdentifierReference(obj) = &qualified.left {
+                        let obj_name = obj.name.as_str();
+                        if enums.contains_key(obj_name) {
+                            used.insert((
+                                obj_name.to_string(),
+                                qualified.right.name.as_str().to_string(),
+                            ));
+                        }
+                    }
+                }
                 // `typeof EnumName` projects the enum object into type space. Any
                 // use of that projection can reach every member — `keyof typeof E`,
                 // `(typeof E)[keyof typeof E]`, `Record<keyof typeof E, T>`,
-                // `x: typeof E`. So the whole enum counts as referenced. Only a
-                // qualified query (`typeof E.Member`) narrows to a single member.
-                AstKind::TSTypeQuery(query) => match &query.expr_name {
-                    TSTypeQueryExprName::IdentifierReference(id) => {
+                // `x: typeof E`. So the whole enum counts as referenced. A query
+                // naming no local binding (`typeof import("…")`, `typeof this.x`)
+                // exempts nothing.
+                AstKind::TSTypeQuery(query) => {
+                    if let TSTypeQueryExprName::IdentifierReference(id) = &query.expr_name {
                         let enum_name = id.name.as_str();
                         if let Some(members) = enums.get(enum_name) {
                             mark_all_members_used(enum_name, members, &mut used);
                         }
                     }
-                    TSTypeQueryExprName::QualifiedName(qualified) => {
-                        if let TSTypeName::IdentifierReference(obj) = &qualified.left {
-                            let obj_name = obj.name.as_str();
-                            if enums.contains_key(obj_name) {
-                                used.insert((
-                                    obj_name.to_string(),
-                                    qualified.right.name.as_str().to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    // `typeof import("…")` and `typeof this.x` cannot name a
-                    // local enum.
-                    TSTypeQueryExprName::TSImportType(_)
-                    | TSTypeQueryExprName::ThisExpression(_) => {}
-                },
+                }
                 _ => {}
             }
         }
@@ -683,6 +685,51 @@ const g = Color.Green;
         let diags = run(source);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("Blue"));
+    }
+
+    // Regression for #8380 — a member named in type position (`x: Food.Pizza`)
+    // spells the member out just like `typeof Food.Pizza` does.
+    #[test]
+    fn type_position_qualified_name_marks_only_the_named_member_used() {
+        let annotation = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+declare const x: Food.Pizza;
+"#;
+        let diags = run(annotation);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Taco"));
+
+        // Nested inside type arguments.
+        let type_argument = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+}
+export type NotPizza = Exclude<Food, Food.Pizza>;
+"#;
+        let diags = run(type_argument);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Taco"));
+    }
+
+    // Both spellings compose: only the member neither of them names stays dead.
+    #[test]
+    fn value_and_type_space_qualified_names_compose() {
+        let source = r#"
+enum Food {
+    Pizza = "pizza",
+    Taco = "taco",
+    Fries = "fries",
+}
+export type A = typeof Food.Pizza;
+export type B = Food.Taco;
+"#;
+        let diags = run(source);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("Fries"));
     }
 
     // An ordinary runtime unit test without type assertions still flags a
