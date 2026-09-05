@@ -143,6 +143,17 @@ pub struct ExportedSymbol {
     /// `false` for any other export shape (destructuring binding, function, class,
     /// non-factory or compound initializer, re-export, type).
     pub is_pinia_store_factory: bool,
+    /// `true` when this is a single `const`/`let`/`var` binding initialized
+    /// directly with a Vue deep `reactive(...)` call. The exported value is a
+    /// reactive proxy: its properties are the intended mutation point, and
+    /// reading one returns the property's own value rather than a trackable
+    /// source — the cross-file analogue of the local `reactive()` binding
+    /// `oxc_helpers::is_vue_deep_reactive_receiver` resolves. `shallowReactive`
+    /// is excluded: its proxy converts only the root level, so it answers a
+    /// different question and would be wrong to conflate here. `false` for any
+    /// other export shape (destructuring binding, function, class, non-factory
+    /// or compound initializer, re-export, type).
+    pub is_vue_reactive_object: bool,
     /// How many leading arguments this export binds to *positional* parameters,
     /// when it is a callable whose parameter list is statically visible — a
     /// `function` declaration, or a `const`/`let`/`var` binding initialized
@@ -1748,6 +1759,7 @@ fn extract_vue(parser: &mut Parser, source: &str, path: &Path) -> Option<(PathBu
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
+            is_vue_reactive_object: false,
             bound_positional_params: None,
             callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
@@ -2596,6 +2608,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -2613,6 +2626,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
+            is_vue_reactive_object: false,
             bound_positional_params: None,
             callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
@@ -2660,6 +2674,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -2684,6 +2699,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
+            is_vue_reactive_object: false,
             bound_positional_params: default_export_bound_positional_params(node, source),
             callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
@@ -2724,6 +2740,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                             is_primitive_literal: false,
                             is_vue_ref_factory: false,
                             is_pinia_store_factory: false,
+                            is_vue_reactive_object: false,
                             bound_positional_params: fn_bound_positional_params(inner),
                             callable_member_bounds: Vec::new(),
                             is_string_literal_const: false,
@@ -2777,6 +2794,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: fn_bound_positional_params(child),
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -2799,6 +2817,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -2829,9 +2848,19 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                 let is_primitive_literal = name_node.kind() == "identifier"
                     && declarator_binds_primitive_literal(decl, source);
                 let is_vue_ref_factory = name_node.kind() == "identifier"
-                    && declarator_binds_vue_ref_factory(decl, source);
+                    && declarator_binds_call_to(decl, source, crate::oxc_helpers::VUE_REF_FACTORIES);
                 let is_pinia_store_factory = name_node.kind() == "identifier"
-                    && declarator_binds_pinia_store_factory(decl, source);
+                    && declarator_binds_call_to(
+                        decl,
+                        source,
+                        &[crate::oxc_helpers::PINIA_STORE_FACTORY],
+                    );
+                let is_vue_reactive_object = name_node.kind() == "identifier"
+                    && declarator_binds_call_to(
+                        decl,
+                        source,
+                        crate::oxc_helpers::VUE_DEEP_REACTIVE_FACTORIES,
+                    );
                 let bound_positional_params = declarator_bound_positional_params(decl);
                 // Parity with the same-file const-string predicate in
                 // security_detect_non_literal_regexp: a single-identifier `const`
@@ -2853,6 +2882,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                         is_primitive_literal,
                         is_vue_ref_factory,
                         is_pinia_store_factory,
+                        is_vue_reactive_object,
                         bound_positional_params,
                         // Member bounds need the module's type declarations,
                         // which only the oxc extractor resolves (see
@@ -2879,6 +2909,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -2901,6 +2932,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -2924,6 +2956,7 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -3009,12 +3042,16 @@ fn declarator_binds_string_literal(decl: Node) -> bool {
     }
 }
 
-/// True when the declarator's initializer is a direct call to a Vue ref factory
-/// (`ref(…)` / `shallowRef(…)` / `customRef(…)` / `computed(…)`, the shared
-/// `oxc_helpers::VUE_REF_FACTORIES` set). The exported binding is then a `Ref<T>`
-/// wrapper mutated through `.value`. The callee must be a plain identifier, so a
-/// member call (`vue.ref(…)`) or non-factory call is not matched.
-fn declarator_binds_vue_ref_factory(decl: Node, source: &[u8]) -> bool {
+/// True when the declarator's initializer is a direct call to one of `factories`
+/// — `export const x = ref(0)`, `export const useX = defineStore(id, …)`,
+/// `export const store = reactive({…})`. The callee must be a plain identifier,
+/// so a member call (`vue.ref(…)`) or a non-factory call does not match.
+///
+/// The name alone is the evidence recorded here: whether it really is Vue's or
+/// Pinia's is verified on the consumer side, which owns the importing module's
+/// symbol table (`oxc_helpers::is_vue_ref_binding`,
+/// `oxc_helpers::is_pinia_store_binding`).
+fn declarator_binds_call_to(decl: Node, source: &[u8], factories: &[&str]) -> bool {
     let Some(value) = decl.child_by_field_name("value") else {
         return false;
     };
@@ -3027,31 +3064,7 @@ fn declarator_binds_vue_ref_factory(decl: Node, source: &[u8]) -> bool {
     callee.kind() == "identifier"
         && callee
             .utf8_text(source)
-            .is_ok_and(|name| crate::oxc_helpers::VUE_REF_FACTORIES.contains(&name))
-}
-
-/// True when the declarator's initializer is a direct call to Pinia's
-/// `defineStore` factory (`export const useX = defineStore(id, …)`). The exported
-/// binding is then a store factory whose `useXStore()` result is a reactive store
-/// instance mutated by direct state-property writes. The callee must be a plain
-/// identifier, so a member call (`pinia.defineStore(…)`) or non-factory call is
-/// not matched. Mirrors [`declarator_binds_vue_ref_factory`]; import provenance
-/// (`defineStore` from `pinia`) is verified on the consumer side
-/// (`oxc_helpers::is_pinia_store_binding`), exactly as for the Vue ref-factory flag.
-fn declarator_binds_pinia_store_factory(decl: Node, source: &[u8]) -> bool {
-    let Some(value) = decl.child_by_field_name("value") else {
-        return false;
-    };
-    if value.kind() != "call_expression" {
-        return false;
-    }
-    let Some(callee) = value.child_by_field_name("function") else {
-        return false;
-    };
-    callee.kind() == "identifier"
-        && callee
-            .utf8_text(source)
-            .is_ok_and(|name| name == crate::oxc_helpers::PINIA_STORE_FACTORY)
+            .is_ok_and(|name| factories.contains(&name))
 }
 
 /// Walk a destructuring binding pattern and push every introduced
@@ -3407,6 +3420,7 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: oxc_default_export_bound_positional_params(
                         &export.declaration,
                         &semantic,
@@ -3945,6 +3959,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -3977,6 +3992,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: crate::oxc_helpers::bound_positional_params(
                         &func.params,
                     ),
@@ -3998,6 +4014,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -4022,18 +4039,23 @@ fn oxc_extract_export_named(
                                     | Expression::BooleanLiteral(_)
                             )
                         });
-                // Parity with the tree-sitter `declarator_binds_vue_ref_factory`:
-                // a single plain-identifier binding initialized directly with a
-                // Vue ref factory call (`export const x = ref()`).
-                let is_vue_ref_factory =
+                // Parity with the tree-sitter `declarator_binds_call_to`: only a
+                // single plain-identifier binding initialized directly with the
+                // factory call carries the flag (`export const x = ref()`,
+                // `export const useX = defineStore(…)`,
+                // `export const store = reactive({…})`).
+                let binds_factory_call = |factories: &'static [&'static str]| {
                     matches!(&decl.id, BindingPattern::BindingIdentifier(_))
-                        && decl.init.as_ref().is_some_and(oxc_init_is_vue_ref_factory);
-                // Parity with the tree-sitter `declarator_binds_pinia_store_factory`:
-                // a single plain-identifier binding initialized directly with a
-                // `defineStore(...)` call (`export const useX = defineStore(…)`).
+                        && decl
+                            .init
+                            .as_ref()
+                            .is_some_and(|init| oxc_init_is_call_to(init, factories))
+                };
+                let is_vue_ref_factory = binds_factory_call(crate::oxc_helpers::VUE_REF_FACTORIES);
                 let is_pinia_store_factory =
-                    matches!(&decl.id, BindingPattern::BindingIdentifier(_))
-                        && decl.init.as_ref().is_some_and(oxc_init_is_pinia_store_factory);
+                    binds_factory_call(&[crate::oxc_helpers::PINIA_STORE_FACTORY]);
+                let is_vue_reactive_object =
+                    binds_factory_call(crate::oxc_helpers::VUE_DEEP_REACTIVE_FACTORIES);
                 // Parity with the tree-sitter `declarator_bound_positional_params`:
                 // the positional-parameter bound of a binding initialized with an
                 // arrow or function expression (`export const f = (x) => …`).
@@ -4072,6 +4094,7 @@ fn oxc_extract_export_named(
                         is_primitive_literal,
                         is_vue_ref_factory,
                         is_pinia_store_factory,
+                        is_vue_reactive_object,
                         bound_positional_params,
                         callable_member_bounds: callable_member_bounds.clone(),
                         is_string_literal_const,
@@ -4091,6 +4114,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -4108,6 +4132,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -4125,6 +4150,7 @@ fn oxc_extract_export_named(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -4147,6 +4173,7 @@ fn oxc_extract_export_named(
                     is_primitive_literal: false,
                     is_vue_ref_factory: false,
                     is_pinia_store_factory: false,
+                    is_vue_reactive_object: false,
                     bound_positional_params: None,
                     callable_member_bounds: Vec::new(),
                     is_string_literal_const: false,
@@ -4190,6 +4217,7 @@ fn oxc_extract_cjs_export(
             is_primitive_literal: false,
             is_vue_ref_factory: false,
             is_pinia_store_factory: false,
+            is_vue_reactive_object: false,
             bound_positional_params: None,
             callable_member_bounds: Vec::new(),
             is_string_literal_const: false,
@@ -4309,6 +4337,7 @@ fn oxc_extract_export_all(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,
@@ -4330,6 +4359,7 @@ fn oxc_extract_export_all(
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
+        is_vue_reactive_object: false,
         bound_positional_params: None,
         callable_member_bounds: Vec::new(),
         is_string_literal_const: false,
@@ -4349,23 +4379,12 @@ fn oxc_extract_params(func: &oxc_ast::ast::Function) -> Vec<String> {
     result
 }
 
-/// oxc equivalent of tree-sitter `declarator_binds_vue_ref_factory`: true when
-/// `init` is a direct call to a Vue ref factory (the shared
-/// `oxc_helpers::VUE_REF_FACTORIES` set) whose callee is a plain identifier.
-fn oxc_init_is_vue_ref_factory(init: &oxc_ast::ast::Expression) -> bool {
+/// oxc equivalent of tree-sitter [`declarator_binds_call_to`]: true when `init`
+/// is a direct call to one of `factories` whose callee is a plain identifier.
+fn oxc_init_is_call_to(init: &oxc_ast::ast::Expression, factories: &[&str]) -> bool {
     use oxc_ast::ast::Expression;
     matches!(init, Expression::CallExpression(call) if matches!(&call.callee,
-        Expression::Identifier(callee)
-            if crate::oxc_helpers::VUE_REF_FACTORIES.contains(&callee.name.as_str())))
-}
-
-/// oxc analogue of tree-sitter [`declarator_binds_pinia_store_factory`]: `init`
-/// is a direct call to `defineStore(...)` with a plain-identifier callee.
-fn oxc_init_is_pinia_store_factory(init: &oxc_ast::ast::Expression) -> bool {
-    use oxc_ast::ast::Expression;
-    matches!(init, Expression::CallExpression(call) if matches!(&call.callee,
-        Expression::Identifier(callee)
-            if callee.name.as_str() == crate::oxc_helpers::PINIA_STORE_FACTORY))
+        Expression::Identifier(callee) if factories.contains(&callee.name.as_str())))
 }
 
 /// The positional-parameter bounds of a declarator's callable members, from the
@@ -5628,6 +5647,7 @@ fn extract_rust_item(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
         is_primitive_literal: false,
         is_vue_ref_factory: false,
         is_pinia_store_factory: false,
+        is_vue_reactive_object: false,
         bound_positional_params: None,
         callable_member_bounds: Vec::new(),
         is_string_literal_const: false,
@@ -5708,6 +5728,7 @@ fn extract_rust_use(
                 is_primitive_literal: false,
                 is_vue_ref_factory: false,
                 is_pinia_store_factory: false,
+                is_vue_reactive_object: false,
                 bound_positional_params: None,
                 callable_member_bounds: Vec::new(),
                 is_string_literal_const: false,

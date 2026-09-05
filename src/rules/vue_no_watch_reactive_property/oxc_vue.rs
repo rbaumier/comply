@@ -326,7 +326,48 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
+    use crate::files::{Language, SourceFile};
+    use crate::project::ProjectCtx;
     use std::path::PathBuf;
+
+    /// Run the rule on `target_rel` inside a tempdir holding `files`, with a real
+    /// `ProjectCtx` so cross-module resolution goes through a populated
+    /// `ImportIndex`. Returns the tempdir so it outlives the diagnostics.
+    fn run_on_project(
+        files: &[(&str, &str)],
+        target_rel: &str,
+    ) -> (tempfile::TempDir, Vec<Diagnostic>) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut source_files = Vec::new();
+        for (rel, content) in files {
+            let path = dir.path().join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, content).unwrap();
+            if let Some(language) = Language::from_path(&path) {
+                source_files.push(SourceFile { path, language });
+            }
+        }
+        let refs: Vec<&SourceFile> = source_files.iter().collect();
+        let config = Config::default();
+        let project = ProjectCtx::load(&refs, &config);
+
+        let target = dir.path().join(target_rel);
+        let source = std::fs::read_to_string(&target).unwrap();
+        let canon = std::fs::canonicalize(&target).unwrap();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_vue_updated::language())
+            .expect("vue grammar");
+        let tree = parser.parse(&source, None).expect("parse");
+        let diags = Check.check(
+            &CheckCtx::for_test_with_project(&canon, &source, &project),
+            &tree,
+        );
+        (dir, diags)
+    }
 
     fn run(script_body: &str) -> Vec<Diagnostic> {
         let source = format!("<script setup lang=\"ts\">\n{script_body}\n</script>\n");
@@ -438,6 +479,99 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    /// #8218: a proxy created in another module is a proxy all the same — the
+    /// property read is as much a snapshot as a local one's.
+    #[test]
+    fn flags_property_of_imported_reactive_object() {
+        let (_dir, diags) = run_on_project(
+            &[
+                (
+                    "src/store.ts",
+                    "import { reactive } from 'vue'\nexport const store = reactive({ count: 0 })\n",
+                ),
+                (
+                    "src/Counter.vue",
+                    "<script setup lang=\"ts\">\n\
+                     import { watch } from 'vue'\n\
+                     import { store } from './store'\n\
+                     watch(store.count, cb)\n\
+                     </script>\n",
+                ),
+            ],
+            "src/Counter.vue",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    /// Through the barrel re-export a store module is normally reached by.
+    #[test]
+    fn flags_property_of_reactive_object_reexported_by_a_barrel() {
+        let (_dir, diags) = run_on_project(
+            &[
+                (
+                    "src/stores/counter.ts",
+                    "import { reactive } from 'vue'\nexport const store = reactive({ count: 0 })\n",
+                ),
+                ("src/stores/index.ts", "export { store } from './counter'\n"),
+                (
+                    "src/Counter.vue",
+                    "<script setup lang=\"ts\">\n\
+                     import { watch } from 'vue'\n\
+                     import { store } from './stores'\n\
+                     watch(store.count, cb)\n\
+                     </script>\n",
+                ),
+            ],
+            "src/Counter.vue",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    /// A local binding shadowing the import wins: `store` here is a plain object,
+    /// and nothing proves a proxy.
+    #[test]
+    fn allows_local_binding_shadowing_an_imported_reactive_object() {
+        let (_dir, diags) = run_on_project(
+            &[
+                (
+                    "src/store.ts",
+                    "import { reactive } from 'vue'\nexport const store = reactive({ count: 0 })\n",
+                ),
+                (
+                    "src/Counter.vue",
+                    "<script setup lang=\"ts\">\n\
+                     import { watch } from 'vue'\n\
+                     import { store as remoteStore } from './store'\n\
+                     const store = { count: 0 }\n\
+                     watch(store.count, cb)\n\
+                     </script>\n",
+                ),
+            ],
+            "src/Counter.vue",
+        );
+        assert!(diags.is_empty());
+    }
+
+    /// An imported binding that is not a reactive proxy proves nothing.
+    #[test]
+    fn allows_property_of_an_imported_plain_object() {
+        let (_dir, diags) = run_on_project(
+            &[
+                ("src/config.ts", "export const config = { count: 0 }\n"),
+                (
+                    "src/Counter.vue",
+                    "<script setup lang=\"ts\">\n\
+                     import { watch } from 'vue'\n\
+                     import { config } from './config'\n\
+                     watch(config.count, cb)\n\
+                     </script>\n",
+                ),
+            ],
+            "src/Counter.vue",
+        );
+        assert!(diags.is_empty());
     }
 
     #[test]

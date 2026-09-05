@@ -5867,8 +5867,11 @@ pub(crate) const VUE_REF_FACTORIES: &[&str] = &["ref", "shallowRef", "customRef"
 
 /// Vue 3 reactive-object factory whose proxy converts every nesting level: a
 /// nested object read back off the proxy is itself a proxy, so a property write at
-/// any depth (`state.pageable.total = x`) drives reactivity.
-const VUE_DEEP_REACTIVE_FACTORIES: &[&str] = &["reactive"];
+/// any depth (`state.pageable.total = x`) drives reactivity. Shared with the
+/// cross-file `ImportIndex` extractor (`import_index.rs`) so an imported proxy is
+/// recognized against the same factory set — the single source of truth,
+/// mirroring [`VUE_REF_FACTORIES`].
+pub(crate) const VUE_DEEP_REACTIVE_FACTORIES: &[&str] = &["reactive"];
 
 /// Vue 3 reactive-object factory whose proxy tracks only its own root-level
 /// properties — nested values are stored and exposed as-is, with no deep
@@ -6581,6 +6584,10 @@ pub fn is_vue_reactive_object_target(
 ///
 /// `shallowReactive()` is deliberately absent: it proxies the root object only,
 /// so a write below the root drives no reactivity and is an ordinary mutation.
+///
+/// The proxy may be created in this module or in another one it is imported from
+/// (see [`binding_is_imported_vue_reactive_object`]) — a `reactive()` call is a
+/// deep proxy wherever it runs.
 #[must_use]
 pub fn is_vue_deep_reactive_receiver(
     object: &oxc_ast::ast::Expression,
@@ -6590,7 +6597,57 @@ pub fn is_vue_deep_reactive_receiver(
 ) -> bool {
     root_identifier_of_expr(object).is_some_and(|base| {
         is_vue_factory_binding(base, semantic, VUE_DEEP_REACTIVE_FACTORIES, project, path)
+            || binding_is_imported_vue_reactive_object(base, semantic, project, path)
     })
+}
+
+/// True when `ident` is imported from another project module whose matching
+/// export binds a Vue deep `reactive(...)` proxy (`export const store =
+/// reactive({…})`). Confirms `ident` actually resolves to an import binding (so a
+/// same-named local that shadows the import is not treated as the import), then
+/// resolves its source module and original export name via the
+/// [`ImportIndex`](crate::project::ImportIndex) and checks that module's export
+/// table — following one `export { name } from './origin'` re-export hop — for a
+/// reactive-object binding. Mirrors [`binding_is_imported_vue_ref`]; resolution is
+/// purely structural (binding provenance + import records + the exporting
+/// module's declaration shape).
+fn binding_is_imported_vue_reactive_object(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
+    if !binding_resolves_to_import(ident, semantic) {
+        return false;
+    }
+    let name = ident.name.as_str();
+    let index = project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let canon = index.canonical(path);
+    index.get_imports(&canon).iter().any(|imp| {
+        imp.local_name == name
+            && imp.source_path.as_deref().is_some_and(|src| {
+                export_is_vue_reactive_object(index, src, &imp.imported_name)
+            })
+    })
+}
+
+/// True when `file` exports `name` as a Vue deep `reactive(...)` binding,
+/// directly or through a single `export { name } from './origin'` re-export hop
+/// (the centralized-state-module + barrel pattern common in Vue codebases).
+/// Mirrors [`export_is_vue_ref_factory`].
+fn export_is_vue_reactive_object(
+    index: &crate::project::ImportIndex,
+    file: &Path,
+    name: &str,
+) -> bool {
+    let exports_reactive_object = |f: &Path| {
+        index.get_exports(f).iter().any(|e| e.name == name && e.is_vue_reactive_object)
+    };
+    exports_reactive_object(file)
+        || index.reexport_target(file, name).is_some_and(exports_reactive_object)
 }
 
 /// The object literal a binding's initializer call was given as its first
