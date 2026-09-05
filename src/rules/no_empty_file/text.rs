@@ -75,12 +75,16 @@ impl TextCheck for Check {
             if stem == "index" {
                 return Vec::new();
             }
-            // A file its own `package.json` names as an entry target is a
-            // placeholder the declaration keeps alive: an `exports` subpath that
-            // ships types only still needs its runtime condition to resolve to a
-            // file. Both halves of the remediation are wrong there — deleting the
-            // file breaks resolution, and there is no content to add.
-            if ctx.project.is_package_entry_file(ctx.path) {
+            // A file the project's own configuration names by path is a
+            // placeholder the declaration keeps alive: a `package.json` entry
+            // target (an `exports` subpath that ships types only still needs its
+            // runtime condition to resolve to a file), or a file a tool loads by
+            // path (a Jest `setupFilesAfterEnv` entry, resolved before every test
+            // file). Both halves of the remediation are wrong there — deleting
+            // the file breaks resolution, and there is no content to add.
+            if ctx.project.is_package_entry_file(ctx.path)
+                || ctx.project.is_config_referenced_entry_file(ctx.path)
+            {
                 return Vec::new();
             }
         }
@@ -273,19 +277,47 @@ mod tests {
     }
 
     #[test]
+    fn jest_setup_file_named_by_package_json_not_flagged_issue_8127() {
+        // minisearch's `src/testSetup/jest.js`: Jest resolves the
+        // `setupFilesAfterEnv` entry before every test file, so the file must
+        // exist; its only line is an ESLint environment directive.
+        let files: Vec<(&str, &str)> = vec![
+            (
+                "package.json",
+                r#"{
+                     "name": "minisearch",
+                     "jest": {
+                       "transform": { "\\.(js|ts)$": "ts-jest" },
+                       "testRegex": "\\.test\\.(ts|js)$",
+                       "setupFilesAfterEnv": ["<rootDir>/src/testSetup/jest.js"]
+                     }
+                   }"#,
+            ),
+            ("src/testSetup/jest.js", "/* eslint-env jest */\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files, "src/testSetup/jest.js");
+        assert!(
+            diags.is_empty(),
+            "a Jest setup file named by package.json must not be flagged, got: {diags:?}"
+        );
+    }
+
+    #[test]
     fn empty_file_no_config_names_still_flagged() {
-        // Negative space for #3328: the exemption covers the declared paths, not
-        // every file of a project that declares some. An empty module nothing
-        // points at is still a forgotten file.
+        // Negative space for #3328 / #8127: the exemption covers the declared
+        // paths, not every file of a project that declares some. An empty module
+        // nothing points at is still a forgotten file.
         let files: Vec<(&str, &str)> = vec![
             (
                 "package.json",
                 r#"{
                      "name": "@vitest/browser",
-                     "exports": { "./matchers": { "default": "./dummy.js" } }
+                     "exports": { "./matchers": { "default": "./dummy.js" } },
+                     "jest": { "setupFilesAfterEnv": ["<rootDir>/src/testSetup/jest.js"] }
                    }"#,
             ),
             ("dummy.js", ""),
+            ("src/testSetup/jest.js", "/* eslint-env jest */\n"),
             ("src/helpers.js", "\n"),
         ];
         let (_dir, diags) = run_on_project(&files, "src/helpers.js");
