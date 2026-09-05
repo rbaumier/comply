@@ -6,12 +6,10 @@
 //! substring search with no collection to index — a `Map`/`Set` cannot answer a
 //! substring query. The two method names alone therefore prove nothing, so they
 //! are flagged only when the receiver is provably an array
-//! ([`crate::oxc_helpers::expression_is_array`]: an array literal, an
-//! array-producing call, or a binding whose declaration carries an array type
-//! annotation or an array initializer). A receiver whose type cannot be resolved
-//! — an imported binding, an untyped parameter, a call into another module — is
-//! left alone: the rule is a performance suggestion, so a miss costs nothing
-//! while a wrong hit asks for a rewrite that cannot be written.
+//! ([`crate::oxc_helpers::expression_is_array`]). A receiver whose type cannot be
+//! resolved — an imported binding, an untyped parameter, a call into another
+//! module — is left alone: the rule is a performance suggestion, so a miss costs
+//! nothing while a wrong hit asks for a rewrite that cannot be written.
 //!
 //! The other exceptions:
 //! a `.includes()`/`.indexOf()` whose sole argument is a string literal is a
@@ -44,7 +42,9 @@
 //! is still detected).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, expression_is_array, iterating_callback_element_index,
+};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
     Argument, BinaryOperator, CallExpression, ChainElement, Expression, IdentifierReference,
@@ -56,12 +56,6 @@ use std::sync::Arc;
 pub struct Check;
 
 const LOOKUP_METHODS: &[&str] = &["find", "findIndex", "filter", "includes", "indexOf"];
-/// Methods whose callback is invoked once per element of the receiver — a
-/// per-iteration context. Covers the iterator methods (`forEach`/`map`/…) plus
-/// the predicate-taking lookups (`filter`/`find`/`findIndex`): a lookup nested in
-/// such a callback runs per element.
-const CALLBACK_ITERATING_METHODS: &[&str] =
-    &["forEach", "map", "flatMap", "reduce", "some", "every", "filter", "find", "findIndex"];
 /// Methods whose presence in a `filter`/`find`/`findIndex` callback body marks a
 /// membership scan of a collection — the O(n*m) work a `Map`/`Set` could replace.
 /// `.has()` is deliberately absent: `Array.prototype` has no `has`, so a `.has()`
@@ -424,24 +418,23 @@ enum IterationBinding {
     Element(Span),
 }
 
-/// The name of the method whose callback is invoked once per element of the
-/// receiver (`.forEach`/`.map`/`.filter`/`.find`/…) — a per-iteration context the
-/// rule treats as a loop body. `None` for any other callee.
-fn iterating_method<'a>(call: &'a CallExpression<'_>) -> Option<&'a str> {
+/// The position of the element parameter in the callback of `call`, when `call`
+/// invokes that callback once per element of its receiver
+/// (`.forEach`/`.map`/`.filter`/`.find`/…) — a per-iteration context the rule
+/// treats as a loop body. `None` for any other callee.
+fn iterating_call_element_index(call: &CallExpression<'_>) -> Option<usize> {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return None;
     };
-    let method = member.property.name.as_str();
-    CALLBACK_ITERATING_METHODS.contains(&method).then_some(method)
+    iterating_callback_element_index(member.property.name.as_str())
 }
 
-/// The binding an iterating callback gives the current element: `reduce` passes
-/// the accumulator first and the element second, every other iterating method
-/// passes the element first. `Anonymous` when the argument is not an inline
-/// function or declares no such parameter — there is then no element binding to
-/// compare a receiver against.
+/// The binding an iterating callback gives the current element, at
+/// `element_index` in its parameter list. `Anonymous` when the argument is not an
+/// inline function or declares no such parameter — there is then no element
+/// binding to compare a receiver against.
 fn callback_element_binding(
-    method: &str,
+    element_index: usize,
     callback: &oxc_semantic::AstNode<'_>,
 ) -> IterationBinding {
     let params = match callback.kind() {
@@ -449,7 +442,6 @@ fn callback_element_binding(
         AstKind::Function(func) => &func.params,
         _ => return IterationBinding::Anonymous,
     };
-    let element_index = usize::from(method == "reduce");
     let Some(element) = params.items.get(element_index) else {
         return IterationBinding::Anonymous;
     };
@@ -501,7 +493,7 @@ fn enclosing_iteration<'a>(
             // leave the walk to the `CallExpression` arm below.
             AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
                 if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
-                    && iterating_method(call).is_some()
+                    && iterating_call_element_index(call).is_some()
                 {
                     child = ancestor;
                     continue;
@@ -515,10 +507,10 @@ fn enclosing_iteration<'a>(
             // stage of a sequential pipeline (`a.filter(…).map(…)`) that runs
             // once, not per iteration — keep walking up.
             AstKind::CallExpression(call) => {
-                if let Some(method) = iterating_method(call)
+                if let Some(element_index) = iterating_call_element_index(call)
                     && !call.callee.span().contains_inclusive(child.kind().span())
                 {
-                    return Some(callback_element_binding(method, child));
+                    return Some(callback_element_binding(element_index, child));
                 }
             }
 
@@ -1821,6 +1813,97 @@ export function getStableInterpolationReplacers(values: string[]): Record<string
         let diags = run(r#"
 for (const x of xs) {
     const m = (bigList ?? []).find((v) => v.id === x.id);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_includes_on_array_defaulted_receiver_in_loop() {
+        // Both branches of `tags ?? []` are arrays — the annotated (optional)
+        // parameter and the literal — so the receiver is one whichever branch
+        // runs, and the `String.prototype` reading that spares an unproven
+        // receiver does not apply.
+        let diags = run(r#"
+export function countSeen(names: string[], tags?: string[]) {
+    let seen = 0;
+    for (const name of names) {
+        if ((tags ?? []).includes(name)) {
+            seen++;
+        }
+    }
+    return seen;
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn no_fp_on_array_default_over_an_unproven_left_operand_in_loop() {
+        // The `[]` fallback covers the nullish branch only: `candidates` may be
+        // a string or an array-like, and neither answers a `Map`/`Set` rewrite.
+        assert!(
+            run(r#"
+for (const x of xs) {
+    if ((candidates ?? []).includes(x.id)) {
+        seen++;
+    }
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_logical_and_over_array_operands_includes_in_loop() {
+        // `&&` is not a default — its value never comes from the left operand —
+        // so it carries none of the evidence `??`/`||` do.
+        assert!(
+            run(r#"
+export function countSeen(names: string[], tags?: string[]) {
+    let seen = 0;
+    for (const name of names) {
+        if ((tags && []).includes(name)) {
+            seen++;
+        }
+    }
+    return seen;
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_index_of_on_iterating_callback_array_param() {
+        // `a` is the third parameter of a `.filter()` callback over an
+        // array-annotated receiver — the `Array.prototype` contract passes the
+        // iterated array there, so the per-element `.indexOf()` is the quadratic
+        // dedup the rule targets.
+        let diags = run(r#"
+export function unique(values: string[]) {
+    return values.filter((v, i, a) => a.indexOf(v) === i);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_includes_on_destructured_array_typed_member_in_loop() {
+        // `tags` destructures a member the same-file `Ctx` declares `string[]`,
+        // so the receiver is an array even though its own binding carries no
+        // annotation.
+        let diags = run(r#"
+type Ctx = { tags: string[]; label: string };
+
+export function countKnown({ tags }: Ctx, xs: string[]) {
+    let seen = 0;
+    for (const x of xs) {
+        if (tags.includes(x)) {
+            seen++;
+        }
+    }
+    return seen;
 }
 "#);
         assert_eq!(diags.len(), 1);

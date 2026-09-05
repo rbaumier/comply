@@ -3600,8 +3600,22 @@ fn callee_produces_array(callee: &oxc_ast::ast::Expression) -> bool {
     ARRAY_PRODUCING_METHODS.contains(&member.property.name.as_str())
 }
 
+/// Whether `op` defaults its left operand: `??` and `||` both evaluate to the
+/// left operand when it supplies a value and to the right operand otherwise, so
+/// a property proven of BOTH operands is proven of the expression.
+///
+/// The right operand alone proves nothing: `x || []` says the author expects `x`
+/// to be nullish/falsy or array-*like*, and an array-like is not an array — a DOM
+/// `CSSRuleList`/`NodeList` defaulted that way still has no `Array.prototype`.
+/// `&&` is not a default at all: its value never comes from the left operand.
+fn is_array_defaulting_operator(op: oxc_ast::ast::LogicalOperator) -> bool {
+    use oxc_ast::ast::LogicalOperator;
+    matches!(op, LogicalOperator::Coalesce | LogicalOperator::Or)
+}
+
 /// Whether an initializer expression evaluates to an array: an array literal,
-/// `new Array(...)`, or an array-producing method/static call.
+/// `new Array(...)`, an array-producing method/static call, or a `??`/`||`
+/// default whose two branches are both arrays.
 fn initializer_is_array(expr: &oxc_ast::ast::Expression) -> bool {
     use oxc_ast::ast::Expression;
     match expr {
@@ -3611,6 +3625,11 @@ fn initializer_is_array(expr: &oxc_ast::ast::Expression) -> bool {
             Expression::Identifier(id) if id.name.as_str() == "Array"
         ),
         Expression::CallExpression(call) => callee_produces_array(&call.callee),
+        Expression::LogicalExpression(logical) => {
+            is_array_defaulting_operator(logical.operator)
+                && initializer_is_array(&logical.left)
+                && initializer_is_array(&logical.right)
+        }
         Expression::ParenthesizedExpression(paren) => initializer_is_array(&paren.expression),
         Expression::TSAsExpression(as_expr) => {
             type_is_array(&as_expr.type_annotation) || initializer_is_array(&as_expr.expression)
@@ -3621,10 +3640,113 @@ fn initializer_is_array(expr: &oxc_ast::ast::Expression) -> bool {
     }
 }
 
+/// The 0-based position of the current-element parameter in the callback an
+/// `Array.prototype` iterating method invokes, or `None` when `method` names no
+/// such per-element callback. `reduce` passes the accumulator first and the
+/// element second; every other iterating method passes the element first.
+///
+/// The rest of the callback contract follows from that position: the element's
+/// index comes next, and the iterated array itself right after — `(element,
+/// index, array)`, and `(accumulator, element, index, array)` for `reduce`.
+///
+/// The method is matched by NAME, which `Array.prototype` does not own: a custom
+/// `map`/`filter` on any object answers the same. Callers that read a conclusion
+/// about the receiver out of this contract must prove the receiver is an array
+/// separately.
+#[must_use]
+pub fn iterating_callback_element_index(method: &str) -> Option<usize> {
+    match method {
+        "reduce" => Some(1),
+        "forEach" | "map" | "flatMap" | "some" | "every" | "filter" | "find" | "findIndex" => {
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
+/// True when `ident` resolves to the parameter an iterating callback receives the
+/// **iterated array** in — the third parameter of a `(element, index, array)`
+/// callback, the fourth of `reduce`'s `(accumulator, element, index, array)` — of
+/// a callback passed as the first argument to a method call whose receiver is
+/// itself array-evident.
+///
+/// The receiver test is what makes the parameter's array-ness structural rather
+/// than a method-name guess: `db.collection.map((d, i, all) => …)` and any other
+/// 3-arity custom callback resolve to an unproven receiver and stay `false`.
+///
+/// Resolves the binding via `reference_id` → symbol → declaration node, then
+/// walks up to the function it parameterises, mirroring
+/// [`is_reduce_accumulator_param`]. A binding nested inside a destructuring
+/// pattern at that position (`(e, i, [first]) => …`) binds an element of the
+/// array, not the array, and is not matched.
+fn is_iterating_callback_array_param(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::Expression;
+    use oxc_span::GetSpan;
+
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let nodes = semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+
+    let mut param_index = None;
+    for ancestor in nodes.ancestors(decl_node_id) {
+        match ancestor.kind() {
+            AstKind::FormalParameters(params) => {
+                param_index = params
+                    .items
+                    .iter()
+                    .position(|param| binding_pattern_leaf_symbol(&param.pattern) == Some(sym_id));
+                if param_index.is_none() {
+                    return false;
+                }
+            }
+            AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
+                let Some(param_index) = param_index else {
+                    return false;
+                };
+                let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind() else {
+                    return false;
+                };
+                let Expression::StaticMemberExpression(member) = &call.callee else {
+                    return false;
+                };
+                let Some(element_index) =
+                    iterating_callback_element_index(member.property.name.as_str())
+                else {
+                    return false;
+                };
+                if param_index != element_index + 2 {
+                    return false;
+                }
+                let fn_span = ancestor.kind().span();
+                let is_callback = call
+                    .arguments
+                    .first()
+                    .and_then(|arg| arg.as_expression())
+                    .is_some_and(|arg| arg.span() == fn_span);
+                return is_callback && expression_is_array(&member.object, semantic);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Resolve an identifier reference to its declaration and decide whether that
 /// declaration proves the binding holds an array — a `let`/`const`/`var`
 /// declarator carrying an array type annotation or initialised from an
-/// array-producing expression, or a parameter typed as an array.
+/// array-producing expression, a parameter typed as an array, a binding
+/// destructured from a typed object whose member is declared an array, or the
+/// iterated-array parameter of a callback an array-evident receiver iterates.
 fn binding_is_array(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
@@ -3640,28 +3762,33 @@ fn binding_is_array(
     };
     let nodes = semantic.nodes();
     let decl_id = scoping.symbol_declaration(symbol_id);
-    match nodes.kind(decl_id) {
+    let declared_directly = match nodes.kind(decl_id) {
         AstKind::VariableDeclarator(decl) => {
-            if let Some(type_ann) = &decl.type_annotation
-                && type_is_array(&type_ann.type_annotation)
-            {
-                return true;
-            }
-            decl.init.as_ref().is_some_and(initializer_is_array)
+            decl.type_annotation
+                .as_ref()
+                .is_some_and(|ann| type_is_array(&ann.type_annotation))
+                || decl.init.as_ref().is_some_and(initializer_is_array)
         }
         AstKind::FormalParameter(param) => param
             .type_annotation
             .as_ref()
             .is_some_and(|ann| type_is_array(&ann.type_annotation)),
         _ => false,
-    }
+    };
+    declared_directly
+        || binding_declared_ts_type(ident, semantic).is_some_and(type_is_array)
+        || is_iterating_callback_array_param(ident, semantic)
 }
 
 /// Whether `expr` is demonstrably an array. An array literal is one directly; an
 /// array-producing expression (`new Array(...)`, `[...].map()`, `Array.from(x)`,
-/// `Object.keys(o)`, `str.split(...)`) is one; an identifier is one only if its
-/// binding carries an array type annotation (`T[]`/`readonly T[]`/`Array<T>`/
-/// `ReadonlyArray<T>`) or is initialised from an array-producing expression.
+/// `Object.keys(o)`, `str.split(...)`) is one; a `??`/`||` default whose two
+/// branches are both arrays (`tags ?? []`) is one; an identifier is one only if
+/// its binding carries an array type annotation
+/// (`T[]`/`readonly T[]`/`Array<T>`/`ReadonlyArray<T>`), is initialised from an
+/// array-producing expression, destructures a member declared with an array type,
+/// or is the iterated-array parameter of a callback an array-evident receiver
+/// iterates.
 ///
 /// A receiver's *name* is never evidence — names do not determine type. A
 /// receiver whose type cannot be proven an array (an untyped parameter, a
@@ -3677,6 +3804,11 @@ pub fn expression_is_array(
     match expr {
         Expression::ArrayExpression(_) => true,
         Expression::NewExpression(_) | Expression::CallExpression(_) => initializer_is_array(expr),
+        Expression::LogicalExpression(logical) => {
+            is_array_defaulting_operator(logical.operator)
+                && expression_is_array(&logical.left, semantic)
+                && expression_is_array(&logical.right, semantic)
+        }
         Expression::Identifier(ident) => binding_is_array(ident, semantic),
         Expression::ParenthesizedExpression(paren) => {
             expression_is_array(&paren.expression, semantic)

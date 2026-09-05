@@ -135,4 +135,16 @@ mod tests {
         let d = run_on("const arr: number[] = [1];\nconst out = [...arr, 3].map((x) => x + 1);");
         assert_eq!(d.len(), 0);
     }
+
+    #[test]
+    fn does_not_flag_spread_of_an_array_like_defaulted_to_an_empty_array() {
+        // A `|| []` fallback covers the nullish branch only: here the left
+        // operand is a DOM `CSSRuleList`, array-LIKE but carrying no
+        // `Array.prototype`, so the spread is what supplies `.map` and dropping
+        // the copy would break the call.
+        let d = run_on(
+            "const texts = [...(style.sheet?.cssRules || [])].map((r) => r.cssText).join('');",
+        );
+        assert_eq!(d.len(), 0);
+    }
 }

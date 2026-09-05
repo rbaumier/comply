@@ -1641,4 +1641,51 @@ mod tests {
         "#;
         assert!(run(src).is_empty());
     }
+
+    #[test]
+    fn ignores_push_on_binding_defaulted_from_an_unproven_left_operand() {
+        // `store.get(key) || []` proves nothing about what `.get()` returned —
+        // the fallback covers the nullish branch only — so the binding is not
+        // shown to be an array and the mutation stays unflagged.
+        let src = r#"
+            function add(store, key, fn) {
+                const handlers = store.get(key) || [];
+                handlers.push(fn);
+                store.set(key, handlers);
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sort_on_iterating_callback_array_param_of_unknown_receiver() {
+        // `source` is an untyped parameter, so `.map()` here is any method of
+        // that name: its callback's third parameter is not proven to be the
+        // iterated array, and the mutation stays unflagged.
+        let src = r#"
+            function apply(source) {
+                source.map((item, index, all) => {
+                    all.sort();
+                    return item;
+                });
+            }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_sort_on_iterating_callback_array_param_of_array_receiver() {
+        // Control for the two negatives above: over an array-annotated receiver
+        // the same third parameter IS the iterated array, and sorting it in place
+        // mutates the caller's array.
+        let src = r#"
+            function apply(source: string[]) {
+                source.map((item, index, all) => {
+                    all.sort();
+                    return item;
+                });
+            }
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
 }
