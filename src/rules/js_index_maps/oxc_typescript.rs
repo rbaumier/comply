@@ -1,6 +1,6 @@
 //! OxcCheck backend for js-index-maps — flag a bare-identifier
-//! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
-//! as a possible O(n*m) array scan.
+//! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` that runs once
+//! per iteration as a possible O(n*m) array scan.
 //!
 //! `.includes()`/`.indexOf()` also exist on `String.prototype`, where they are a
 //! substring search with no collection to index — a `Map`/`Set` cannot answer a
@@ -29,6 +29,11 @@
 //! lookup table one binding removed, so the scan is O(1), not flagged (an
 //! empty-array init like `const seen = []` is a growing accumulator and IS
 //! still flagged);
+//! a receiver that IS the element the enclosing iteration binds
+//! (`for (const {rows} of groups) rows.filter(...)`) is a different, smaller
+//! collection on every pass, so the total work is linear in the elements seen
+//! rather than the O(n*m) rescan of one invariant collection, and it is not
+//! flagged;
 //! a `filter`/`find`/`findIndex` whose callback does no membership lookup against
 //! a captured collection has nothing a `Map`/`Set` could replace — in particular
 //! a `.has()` callback already performs the O(1) keyed-collection lookup this
@@ -42,10 +47,10 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BinaryOperator, CallExpression, ChainElement, Expression, LogicalOperator,
-    VariableDeclarationKind,
+    Argument, BinaryOperator, CallExpression, ChainElement, Expression, IdentifierReference,
+    LogicalOperator, VariableDeclarationKind,
 };
-use oxc_span::GetSpan;
+use oxc_span::{GetSpan, Span};
 use std::sync::Arc;
 
 pub struct Check;
@@ -153,7 +158,18 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !is_inside_loop(node, semantic) {
+        let Some(iteration) = enclosing_iteration(node, semantic) else {
+            return;
+        };
+
+        // Scanning the element the iteration itself binds
+        // (`for (const {rows} of groups) rows.filter(...)`) walks a different,
+        // smaller collection on every pass: the total is linear in the elements
+        // seen, not one invariant collection rescanned n times, so there is no
+        // `Map` to hoist out of the loop.
+        if let IterationBinding::Element(element) = iteration
+            && receiver_is_iteration_element(&member.object, element, semantic)
+        {
             return;
         }
 
@@ -336,56 +352,116 @@ fn callback_does_captured_lookup<'a>(
     })
 }
 
-/// True when `expr`'s root identifier resolves to a binding declared OUTSIDE
-/// `callback_span` — a value captured from the enclosing scope (or an
-/// unresolved/global name). The root of a member chain is its head object
-/// (`item` for `item.id`, `items` for `items[i].id`). Literals and other
-/// non-identifier-rooted operands are never free variables.
-fn operand_is_free_variable<'a>(
-    expr: &Expression<'a>,
-    callback_span: oxc_span::Span,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
+/// The head identifier of an expression: the identifier itself, or the object a
+/// member chain is rooted in (`item` for `item.id`, `items` for `items[i].id`).
+/// `None` when the expression is not rooted in an identifier (a literal, a call,
+/// a `??` default).
+fn root_identifier<'a, 'b>(expr: &'b Expression<'a>) -> Option<&'b IdentifierReference<'a>> {
     let mut cursor = expr;
-    let id = loop {
+    loop {
         match cursor {
-            Expression::Identifier(id) => break id,
-            Expression::StaticMemberExpression(m) => cursor = &m.object,
-            Expression::ComputedMemberExpression(m) => cursor = &m.object,
-            _ => return false,
+            Expression::Identifier(id) => return Some(id),
+            Expression::StaticMemberExpression(member) => cursor = &member.object,
+            Expression::ComputedMemberExpression(member) => cursor = &member.object,
+            _ => return None,
         }
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return true;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        // Unresolved reference: not a callback-local binding — a free name the
-        // callback compares against (`x.id === key` where `key` is captured).
-        return true;
-    };
-    let decl_span = semantic
-        .nodes()
-        .kind(scoping.symbol_declaration(sym_id))
-        .span();
-    !callback_span.contains_inclusive(decl_span)
+    }
 }
 
-/// True when `call`'s callback is invoked once per element of the receiver
-/// (`.forEach`/`.map`/`.filter`/`.find`/…), so the rule treats that callback as
-/// a loop body.
-fn call_iterates_via_callback(call: &CallExpression<'_>) -> bool {
-    matches!(
-        &call.callee,
-        Expression::StaticMemberExpression(member)
-            if CALLBACK_ITERATING_METHODS.contains(&member.property.name.as_str())
+/// The span of the declaration `ident` resolves to, or `None` when the reference
+/// resolves to no binding in this file — a global, or a name whose declaration
+/// lives in another module.
+fn binding_declaration_span(
+    ident: &IdentifierReference<'_>,
+    semantic: &oxc_semantic::Semantic<'_>,
+) -> Option<Span> {
+    let scoping = semantic.scoping();
+    let symbol_id = scoping.get_reference(ident.reference_id.get()?).symbol_id()?;
+    Some(
+        semantic
+            .nodes()
+            .kind(scoping.symbol_declaration(symbol_id))
+            .span(),
     )
 }
 
-fn is_inside_loop<'a>(
-    node: &oxc_semantic::AstNode<'a>,
+/// True when `expr`'s root identifier resolves to a binding declared OUTSIDE
+/// `callback_span` — a value captured from the enclosing scope (or an
+/// unresolved/global name, which is never a callback-local binding). Literals
+/// and other non-identifier-rooted operands are never free variables.
+fn operand_is_free_variable<'a>(
+    expr: &Expression<'a>,
+    callback_span: Span,
     semantic: &'a oxc_semantic::Semantic<'a>,
 ) -> bool {
+    let Some(ident) = root_identifier(expr) else {
+        return false;
+    };
+    binding_declaration_span(ident, semantic)
+        .is_none_or(|decl_span| !callback_span.contains_inclusive(decl_span))
+}
+
+/// True when the flagged receiver is the element the enclosing iteration binds,
+/// or a value destructured from it — `element` is the span of that binding.
+fn receiver_is_iteration_element<'a>(
+    receiver: &Expression<'a>,
+    element: Span,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> bool {
+    root_identifier(receiver)
+        .and_then(|ident| binding_declaration_span(ident, semantic))
+        .is_some_and(|decl_span| element.contains_inclusive(decl_span))
+}
+
+/// What the innermost enclosing per-iteration region binds for each pass.
+#[derive(Clone, Copy)]
+enum IterationBinding {
+    /// A `for`/`while`/`do..while` head — the iteration binds no element.
+    Anonymous,
+    /// The span of the binding holding the current element: the `for..of` /
+    /// `for..in` left-hand pattern, or the element parameter of an iterating
+    /// callback.
+    Element(Span),
+}
+
+/// The name of the method whose callback is invoked once per element of the
+/// receiver (`.forEach`/`.map`/`.filter`/`.find`/…) — a per-iteration context the
+/// rule treats as a loop body. `None` for any other callee.
+fn iterating_method<'a>(call: &'a CallExpression<'_>) -> Option<&'a str> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    let method = member.property.name.as_str();
+    CALLBACK_ITERATING_METHODS.contains(&method).then_some(method)
+}
+
+/// The binding an iterating callback gives the current element: `reduce` passes
+/// the accumulator first and the element second, every other iterating method
+/// passes the element first. `Anonymous` when the argument is not an inline
+/// function or declares no such parameter — there is then no element binding to
+/// compare a receiver against.
+fn callback_element_binding(
+    method: &str,
+    callback: &oxc_semantic::AstNode<'_>,
+) -> IterationBinding {
+    let params = match callback.kind() {
+        AstKind::ArrowFunctionExpression(arrow) => &arrow.params,
+        AstKind::Function(func) => &func.params,
+        _ => return IterationBinding::Anonymous,
+    };
+    let element_index = usize::from(method == "reduce");
+    let Some(element) = params.items.get(element_index) else {
+        return IterationBinding::Anonymous;
+    };
+    IterationBinding::Element(element.span)
+}
+
+/// The innermost per-iteration region enclosing `node`, or `None` when `node`
+/// does not run per iteration.
+fn enclosing_iteration<'a>(
+    node: &oxc_semantic::AstNode<'a>,
+    semantic: &'a oxc_semantic::Semantic<'a>,
+) -> Option<IterationBinding> {
     let nodes = semantic.nodes();
     // `child` is the node we ascended from on each step — the subtree of the
     // current ancestor that contains `node`. It distinguishes an iterator
@@ -395,7 +471,7 @@ fn is_inside_loop<'a>(
         match ancestor.kind() {
             AstKind::ForStatement(_)
             | AstKind::WhileStatement(_)
-            | AstKind::DoWhileStatement(_) => return true,
+            | AstKind::DoWhileStatement(_) => return Some(IterationBinding::Anonymous),
 
             // `for..of` / `for..in`: a call in the ITERABLE expression
             // (`for (const x of <HERE>)`) runs once before the loop, not per
@@ -404,19 +480,19 @@ fn is_inside_loop<'a>(
             // walking to catch an OUTER loop that would repeat the whole `for..of`.
             AstKind::ForOfStatement(for_of) => {
                 if child.kind().span() != for_of.right.span() {
-                    return true;
+                    return Some(IterationBinding::Element(for_of.left.span()));
                 }
             }
             AstKind::ForInStatement(for_in) => {
                 if child.kind().span() != for_in.right.span() {
-                    return true;
+                    return Some(IterationBinding::Element(for_in.left.span()));
                 }
             }
 
             // Named function/class/method boundaries — hoisted definitions
             // don't necessarily execute per iteration.
-            AstKind::Function(f) if f.id.is_some() => return false,
-            AstKind::Class(_) => return false,
+            AstKind::Function(f) if f.id.is_some() => return None,
+            AstKind::Class(_) => return None,
 
             // Arrow / anonymous-function boundaries stop the walk: a callback
             // passed to an ordinary call (`bench(...)`/`group(...)`) does not run
@@ -425,12 +501,12 @@ fn is_inside_loop<'a>(
             // leave the walk to the `CallExpression` arm below.
             AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
                 if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
-                    && call_iterates_via_callback(call)
+                    && iterating_method(call).is_some()
                 {
                     child = ancestor;
                     continue;
                 }
-                return false;
+                return None;
             }
 
             // A callback-iterating method (`.forEach`/`.map`/`.filter`/…) is a
@@ -439,10 +515,10 @@ fn is_inside_loop<'a>(
             // stage of a sequential pipeline (`a.filter(…).map(…)`) that runs
             // once, not per iteration — keep walking up.
             AstKind::CallExpression(call) => {
-                if call_iterates_via_callback(call)
+                if let Some(method) = iterating_method(call)
                     && !call.callee.span().contains_inclusive(child.kind().span())
                 {
-                    return true;
+                    return Some(callback_element_binding(method, child));
                 }
             }
 
@@ -450,7 +526,7 @@ fn is_inside_loop<'a>(
         }
         child = ancestor;
     }
-    false
+    None
 }
 
 #[cfg(test)]
@@ -1600,10 +1676,131 @@ for (const c of configs) {
     }
 
     #[test]
+    fn no_fp_on_imported_const_array_includes_in_loop() {
+        // Regression for #8229 shape 1a: the constant lives in a neighbouring
+        // module, so this file holds no evidence of what `VERBOSE_VALUES` is —
+        // the same verdict as the local declaration below.
+        assert!(
+            run(r#"
+import { VERBOSE_VALUES } from './values.js';
+export const check = (verbose) => {
+    for (const fdVerbose of verbose) {
+        if (!VERBOSE_VALUES.includes(fdVerbose)) { throw new TypeError('bad'); }
+    }
+};
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_local_const_array_includes_in_loop_matching_imported_verdict() {
+        // #8229: the local twin of the fixture above — a fixed-size lookup table.
+        // Moving the `const` across a module boundary must not change the verdict.
+        assert!(
+            run(r#"
+const LOCAL_VALUES = ['none', 'short', 'full'];
+export const check = (verbose) => {
+    for (const fdVerbose of verbose) {
+        if (!LOCAL_VALUES.includes(fdVerbose)) { throw new TypeError('bad'); }
+    }
+};
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_imported_set_has_in_filter_callback() {
+        // Regression for #8229 shape 2a: the `.has()` predicate IS the O(1) index
+        // the diagnostic asks for, whether the `Set` is declared here or imported.
+        assert!(
+            run(r#"
+import { TRANSFORM_TYPES } from './values.js';
+export const pick = (fileDescriptors) => {
+    for (const { stdioItems } of fileDescriptors) {
+        const transformItems = stdioItems.filter(({ type }) => TRANSFORM_TYPES.has(type));
+        void transformItems;
+    }
+};
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_destructured_param_property_includes_in_loop() {
+        // Regression for #8229 shape 4: `message` is destructured from a parameter
+        // and carries no type — `.includes()` on it may well be the substring
+        // search it is here.
+        assert!(
+            run(r#"
+export const isSerializationError = ({ message }, patterns) =>
+    patterns.some((pattern) => message.includes(pattern));
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_filter_over_iteration_element_in_flat_map() {
+        // Regression for #8229 shape 5: each pass filters the element's OWN
+        // `stdioItems`, a different collection every time — the total is linear in
+        // the items seen, not one invariant collection rescanned.
+        assert!(
+            run(r#"
+export const otherItems = (fileDescriptors, type) => fileDescriptors
+    .flatMap(({ stdioItems }) => stdioItems
+        .filter((stdioItem) => stdioItem.type === type));
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_fp_on_filter_over_for_of_element_binding() {
+        // #8229: the `for..of` spelling of the same shape — the receiver is the
+        // element the loop binds.
+        assert!(
+            run(r#"
+for (const { stdioItems } of fileDescriptors) {
+    const kept = stdioItems.filter((item) => item.id === needle);
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_invariant_collection_scanned_inside_element_binding_loop() {
+        // #8229 negative space: the iteration-element exemption must not cover a
+        // collection declared OUTSIDE the loop — that one is rescanned in full on
+        // every pass, the O(n*m) the rule targets.
+        let diags = run(r#"
+const catalogue = getCatalogue();
+for (const { stdioItems } of fileDescriptors) {
+    const kept = catalogue.filter((item) => item.id === stdioItems.id);
+}
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn still_flags_includes_on_reduce_accumulator_in_loop() {
+        // #8229 negative space: `reduce` passes the accumulator first and the
+        // element second, so the growing accumulator is NOT the iteration element
+        // — scanning it per pass is the quadratic dedup the rule targets.
+        let diags = run(r#"
+const deduped = ids.reduce((acc: string[], id) => acc.includes(id) ? acc : [...acc, id], []);
+"#);
+        assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
     fn no_fp_on_string_element_callback_param_includes() {
-        // Regression for #8047: `v` is an element of a `string[]`, so
-        // `v.includes(pattern)` is `String.prototype.includes` — a substring
-        // search a `Set` cannot answer.
+        // Regression for #8047: `v` is the element `values.some(...)` binds, and
+        // `String.prototype.includes` on it is a substring search — flagging it
+        // asks for a `Set` that cannot answer the question.
         assert!(
             run(r#"
 export function getStableInterpolationReplacers(values: string[]): Record<string, string> {
