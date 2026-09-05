@@ -2887,6 +2887,77 @@ pub fn file_impls_trait_for_type(
     false
 }
 
+/// The base name of the type targeted by the nearest enclosing inherent `impl`
+/// block (`impl Span`, `impl<'a> Span<'a>`, `impl crate::span::Span` all yield
+/// `Span`). `None` when `node` is not inside an `impl` block, or when the
+/// nearest one is a trait impl (`impl Trait for Type`) — a trait impl
+/// contributes to the trait's namespace, not the type's inherent one.
+pub fn enclosing_inherent_impl_type<'a>(node: Node, source: &'a [u8]) -> Option<&'a str> {
+    let mut cur = node;
+    while let Some(parent) = cur.parent() {
+        if parent.kind() == "impl_item" {
+            if parent.child_by_field_name("trait").is_some() {
+                return None;
+            }
+            let target = parent.child_by_field_name("type")?;
+            return Some(base_type_name(target.utf8_text(source).ok()?));
+        }
+        cur = parent;
+    }
+    None
+}
+
+/// True when the type whose base name is `type_name` declares a method named
+/// `method_name` in an inherent `impl` block anywhere in the file.
+///
+/// Rust resolves inherent methods per type, not per `impl` block: `E0592`
+/// rejects two same-named methods on one type however many blocks they are
+/// spread across. Rules that ask "does this name already exist on the type?"
+/// must therefore search every `impl <Type>` block, regardless of its position,
+/// its `#[cfg]` gating, or an unrelated `impl Trait for Type` sitting between
+/// them. The target is matched on its base name, so generic and
+/// lifetime-parameterized blocks (`impl<T> Span<T>`) count as the same type.
+pub fn type_has_inherent_method(
+    node: Node,
+    source: &[u8],
+    type_name: &str,
+    method_name: &str,
+) -> bool {
+    let root = root_node(node);
+    let mut cursor = root.walk();
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if current.kind() == "impl_item"
+            && current.child_by_field_name("trait").is_none()
+            && let Some(target) = current.child_by_field_name("type")
+            && target
+                .utf8_text(source)
+                .is_ok_and(|text| base_type_name(text) == type_name)
+            && let Some(body) = current.child_by_field_name("body")
+            && declares_method(body, source, method_name)
+        {
+            return true;
+        }
+        for child in current.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+/// True when an `impl` block's `declaration_list` holds a `function_item` named
+/// `method_name`.
+fn declares_method(declaration_list: Node, source: &[u8], method_name: &str) -> bool {
+    let mut cursor = declaration_list.walk();
+    declaration_list.children(&mut cursor).any(|item| {
+        item.kind() == "function_item"
+            && item
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                == Some(method_name)
+    })
+}
+
 /// True if `node` is nested inside a module that is not publicly visible — an
 /// enclosing `mod_item` declared `pub(crate)`, `pub(super)`, `pub(in path)`, or
 /// with no visibility modifier at all.
