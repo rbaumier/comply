@@ -132,9 +132,12 @@ pub struct PackageJson {
     /// against the candidate file's own extension.
     pub script_entry_files: Vec<String>,
     /// Manifest-dir-relative path tokens this manifest references as a CLI tool's
-    /// config file — consumed by the tool by path, never `import`-ed by a module:
-    /// the `.ts`/`.mjs`/… tokens in every `scripts` command, the path entries in
-    /// `eslintConfig.extends`, and the path tokens in every `lint-staged` command.
+    /// config or entry file — consumed by the tool by path, never `import`-ed by a
+    /// module: the `.ts`/`.mjs`/… tokens in every `scripts` command, the path
+    /// entries in `eslintConfig.extends`, the path tokens in every `lint-staged`
+    /// command, and the path values of the `jest` config block (Jest reads its
+    /// configuration from that key and loads the files it names — setup files,
+    /// global setup/teardown, module mocks — by path).
     /// A leading `./` is stripped but `../` segments are preserved, so a monorepo
     /// package's `"build": "rollup -c ../../scripts/rollup/config.mjs"` keeps the
     /// hop back to the shared config; resolution against the declaring manifest's
@@ -582,6 +585,12 @@ fn script_entry_matches(manifest_dir: &Path, entry: &str, path: &Path) -> bool {
 /// Source extensions a CLI tool's config file carries when referenced by path.
 const CONFIG_REFERENCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
+/// True when `token` ends with one of [`CONFIG_REFERENCE_EXTS`] — it names a
+/// file rather than a directory, a glob root, or a pattern.
+fn has_config_reference_ext(token: &str) -> bool {
+    CONFIG_REFERENCE_EXTS.iter().any(|ext| token.ends_with(ext))
+}
+
 /// True when `token` looks like a manifest-relative path to a source-extension
 /// config file (it ends in a known extension and is not an npm package
 /// specifier). A bare `eslint:recommended` / `prettier` extends entry, or a
@@ -589,10 +598,55 @@ const CONFIG_REFERENCE_EXTS: &[&str] = &[".ts", ".tsx", ".mts", ".cts", ".js", "
 /// relative/absolute path (`./scripts/eslint/preset.js`, `../shared/config.mjs`)
 /// names a file in the repo.
 fn is_config_reference_token(token: &str) -> bool {
-    if !CONFIG_REFERENCE_EXTS.iter().any(|ext| token.ends_with(ext)) {
-        return false;
+    has_config_reference_ext(token)
+        && (token.starts_with("./") || token.starts_with("../") || token.starts_with('/'))
+}
+
+/// Normalize a string appearing anywhere in a `jest` config block to the
+/// manifest-dir-relative path it names, or `None` when it names no file in the
+/// repo. `<rootDir>` is Jest's placeholder for the directory holding the config
+/// — the manifest directory, since the config lives in `package.json` — so
+/// `<rootDir>/src/testSetup/jest.js` denotes `src/testSetup/jest.js`. A
+/// `./`-relative token is a path the same way it is in a command. Anything else
+/// is a package specifier (`ts-jest`, `jsdom`), a glob, or a regex, and a token
+/// without a source extension names a directory (`<rootDir>/src` in `roots`),
+/// not a file.
+fn normalize_jest_path_token(token: &str) -> Option<String> {
+    match token.strip_prefix("<rootDir>/") {
+        Some(rel) => has_config_reference_ext(rel).then(|| normalize_config_reference(rel)),
+        None => is_config_reference_token(token).then(|| normalize_config_reference(token)),
     }
-    token.starts_with("./") || token.starts_with("../") || token.starts_with('/')
+}
+
+/// Collect every file path the `jest` config block of `json` names. Jest reads
+/// its configuration from the `jest` key of `package.json` and loads the files
+/// it points at — `setupFiles`/`setupFilesAfterEnv`, `globalSetup`/
+/// `globalTeardown`, `snapshotResolver`, `moduleNameMapper` targets — by path
+/// before any test runs, never through a module `import`. Every string in the
+/// block is examined rather than a fixed list of keys: a path-shaped value is a
+/// file Jest resolves whichever option carries it, and
+/// [`normalize_jest_path_token`] drops the values that name a package, a
+/// directory, or a pattern.
+fn collect_jest_referenced_files(json: &Value, out: &mut Vec<String>) {
+    fn walk(node: &Value, out: &mut Vec<String>) {
+        match node {
+            Value::String(s) => out.extend(normalize_jest_path_token(s)),
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            Value::Object(map) => {
+                for value in map.values() {
+                    walk(value, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(block) = json.get("jest") {
+        walk(block, out);
+    }
 }
 
 /// Normalize a config-reference path token to the form stored in
@@ -605,12 +659,13 @@ fn normalize_config_reference(token: &str) -> String {
 
 /// Collect every manifest-relative path token a CLI tool consumes by path rather
 /// than through a module `import`: the source-extension tokens of each `scripts`
-/// command, the path entries of `eslintConfig.extends`, and the path tokens of
-/// each `lint-staged` command. Each is a config file a build/lint tool loads by
-/// path (`rollup -c …/config.mjs`, `extends: ["./preset.js"]`,
-/// `"*.ts": "eslint -c …/preset.js --fix"`), so its exports have no in-repo
-/// importer yet are live. Package-name `extends` entries (`eslint:recommended`,
-/// `@scope/preset`) are not paths and are dropped.
+/// command, the path entries of `eslintConfig.extends`, the path tokens of
+/// each `lint-staged` command, and the path values of the `jest` config block.
+/// Each is a file a build/lint/test tool loads by path (`rollup -c …/config.mjs`,
+/// `extends: ["./preset.js"]`, `"*.ts": "eslint -c …/preset.js --fix"`,
+/// `setupFilesAfterEnv: ["<rootDir>/src/testSetup/jest.js"]`), so it must exist
+/// and its exports have no in-repo importer yet are live. Package-name `extends`
+/// entries (`eslint:recommended`, `@scope/preset`) are not paths and are dropped.
 fn collect_config_referenced_files(json: &serde_json::Value) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
 
@@ -630,6 +685,7 @@ fn collect_config_referenced_files(json: &serde_json::Value) -> Vec<String> {
 
     out.extend(from_commands("scripts"));
     out.extend(from_commands("lint-staged"));
+    collect_jest_referenced_files(json, &mut out);
 
     // `eslintConfig.extends`: a single string or an array of strings, each a
     // path or a package specifier. Keep only the path entries.
@@ -4543,11 +4599,14 @@ impl ProjectCtx {
         reached_script_entry
     }
 
-    /// True when `path` is a CLI tool's config file referenced by path from a
-    /// `package.json` — a build/lint tool loads it by path (`rollup -c
-    /// scripts/rollup/config.mjs`, `eslintConfig.extends: ["./preset.js"]`,
-    /// `lint-staged`'s `"eslint -c scripts/eslint/preset.js"`), never through a
-    /// module `import`, so its exports have no in-repo importer yet are live.
+    /// True when `path` is a file a CLI tool loads by path because a
+    /// `package.json` names it — a build/lint/test tool reads it by path (`rollup
+    /// -c scripts/rollup/config.mjs`, `eslintConfig.extends: ["./preset.js"]`,
+    /// `lint-staged`'s `"eslint -c scripts/eslint/preset.js"`, `jest`'s
+    /// `setupFilesAfterEnv: ["<rootDir>/src/testSetup/jest.js"]`), never through a
+    /// module `import`. The tool resolves the declared path before it runs, so the
+    /// file must exist whatever it contains, and its exports have no in-repo
+    /// importer yet are live.
     ///
     /// Unlike [`is_script_entry_file`], which consults only the file's *nearest*
     /// manifest, this scans the root manifest and every workspace-root manifest:
@@ -8821,6 +8880,57 @@ mod tests {
         assert!(!ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-other-metadata.js")));
         // The XML argument is not a runner argument and names no source file.
         assert!(!ctx.is_script_entry_file(&dir.path().join("PhoneNumberMetadata.xml")));
+    }
+
+    #[test]
+    fn jest_block_paths_are_config_referenced_files() {
+        // Regression for #8127 (minisearch): Jest reads its config from the
+        // `jest` key and resolves `setupFilesAfterEnv` before every test file,
+        // so the named file is consumed by path. `<rootDir>` is the manifest
+        // directory, and the stored token is manifest-dir-relative.
+        let pkg = PackageJson::parse(
+            r#"{
+                 "name": "minisearch",
+                 "jest": {
+                   "transform": { "\\.(js|ts)$": "ts-jest" },
+                   "testRegex": "\\.test\\.(ts|js)$",
+                   "testEnvironment": "jsdom",
+                   "roots": ["<rootDir>/src"],
+                   "setupFilesAfterEnv": ["<rootDir>/src/testSetup/jest.js"],
+                   "globalSetup": "./scripts/globalSetup.ts",
+                   "moduleNameMapper": { "\\.css$": "<rootDir>/__mocks__/styleMock.js" }
+                 }
+               }"#,
+        )
+        .unwrap();
+        let referenced = pkg.config_referenced_files;
+        assert!(referenced.contains(&"src/testSetup/jest.js".to_string()));
+        assert!(referenced.contains(&"scripts/globalSetup.ts".to_string()));
+        assert!(referenced.contains(&"__mocks__/styleMock.js".to_string()));
+        // A package specifier, a regex, and a directory name no file.
+        assert!(!referenced.iter().any(|entry| entry == "ts-jest"));
+        assert!(!referenced.iter().any(|entry| entry == "jsdom"));
+        assert!(!referenced.iter().any(|entry| entry == "src"));
+    }
+
+    #[test]
+    fn is_config_referenced_entry_file_recognizes_a_jest_setup_file() {
+        // Regression for #8127: the predicate resolves the `<rootDir>`-anchored
+        // token against the declaring manifest's directory.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"minisearch","jest":{"setupFilesAfterEnv":["<rootDir>/src/testSetup/jest.js"]}}"#,
+        )
+        .unwrap();
+
+        let ctx = ProjectCtx {
+            project_root: Some(dir.path().to_path_buf()),
+            ..ProjectCtx::empty()
+        };
+        assert!(ctx.is_config_referenced_entry_file(&dir.path().join("src/testSetup/jest.js")));
+        // A sibling the config never names stays out.
+        assert!(!ctx.is_config_referenced_entry_file(&dir.path().join("src/testSetup/other.js")));
     }
 
     #[test]
