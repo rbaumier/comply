@@ -7,9 +7,63 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
+use oxc_ast::ast::{Expression, UnaryOperator};
 use oxc_span::Span;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Reports whether every operand of the logical chain is a bare identifier.
+///
+/// The walk descends the logical spine plus the two transparent wrappers a
+/// boolean operand can carry — parentheses and `!`. Every other expression
+/// kind is an operand that still holds an unnamed expression: a call, a
+/// member access, a comparison, `typeof x`.
+fn every_operand_is_named(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(_) => true,
+        Expression::ParenthesizedExpression(paren) => every_operand_is_named(&paren.expression),
+        Expression::UnaryExpression(un) => {
+            un.operator == UnaryOperator::LogicalNot && every_operand_is_named(&un.argument)
+        }
+        Expression::LogicalExpression(log) => {
+            every_operand_is_named(&log.left) && every_operand_is_named(&log.right)
+        }
+        _ => false,
+    }
+}
+
+/// Reports whether the chain `node_id` belongs to already names every one of
+/// its operands — the remediation has been applied and the diagnostic has
+/// nothing left to ask for.
+///
+/// An operator expression directly under another operator expression
+/// continues that one's chain, so the question is settled on the outermost
+/// operator of the chain. A ternary root is never already named: its branches
+/// are values, not the boolean parts the remediation asks to name.
+fn chain_is_named(node_id: oxc_semantic::NodeId, nodes: &oxc_semantic::AstNodes) -> bool {
+    let mut root = node_id;
+    loop {
+        let parent = nodes.parent_id(root);
+        match nodes.kind(parent) {
+            AstKind::LogicalExpression(_) | AstKind::ConditionalExpression(_) => root = parent,
+            _ => break,
+        }
+    }
+    match nodes.kind(root) {
+        AstKind::LogicalExpression(log) => {
+            every_operand_is_named(&log.left) && every_operand_is_named(&log.right)
+        }
+        _ => false,
+    }
+}
+
+/// What one source line accumulates: how many operators it carries, where the
+/// leftmost one starts, and whether any of them still asks for a name.
+struct LineOps {
+    count: usize,
+    anchor: Span,
+    needs_names: bool,
+}
 
 pub struct Check;
 
@@ -32,7 +86,11 @@ impl OxcCheck for Check {
         // Alongside the count, keep the span of the leftmost operator expression
         // on the line: the count decides whether to report, that span decides
         // where. Reporting the line at column 1 would point at the indentation.
-        let mut ops_per_line: BTreeMap<usize, (usize, Span)> = BTreeMap::new();
+        //
+        // A line is left alone when every operator on it belongs to a chain
+        // whose operands are all bare identifiers: the remediation asks for
+        // names, and each operand already carries one.
+        let mut ops_per_line: BTreeMap<usize, LineOps> = BTreeMap::new();
         for node in semantic.nodes().iter() {
             let span = match node.kind() {
                 AstKind::LogicalExpression(expr) => expr.span,
@@ -40,19 +98,29 @@ impl OxcCheck for Check {
                 _ => continue,
             };
             let (line, _) = byte_offset_to_line_col(ctx.source, span.start as usize);
-            let entry = ops_per_line.entry(line).or_insert((0, span));
-            entry.0 += 1;
+            let entry = ops_per_line.entry(line).or_insert(LineOps {
+                count: 0,
+                anchor: span,
+                needs_names: false,
+            });
+            entry.count += 1;
             // Node iteration order is not specified, so keep the earliest
             // start seen rather than assuming the first one is it.
-            if span.start < entry.1.start {
-                entry.1 = span;
+            if span.start < entry.anchor.start {
+                entry.anchor = span;
+            }
+            // One operator that still asks for a name settles the line, so
+            // stop walking chains once the line is known to report.
+            if !entry.needs_names {
+                entry.needs_names = !chain_is_named(node.id(), semantic.nodes());
             }
         }
 
         ops_per_line
             .into_values()
-            .filter(|&(count, _)| count >= max_ops)
-            .map(|(_, span)| {
+            .filter(|ops| ops.count >= max_ops && ops.needs_names)
+            .map(|ops| {
+                let span = ops.anchor;
                 Diagnostic::at_offset(
                     Arc::clone(&ctx.path_arc),
                     ctx.source,
@@ -217,7 +285,41 @@ mod tests {
         // expression: each `&&` is a `LogicalExpression` node attributed to the
         // expression's start line, so the line-wrapped form is flagged like the
         // single-line one.
-        let src = "const ok =\n  a &&\n  b &&\n  c &&\n  d &&\n  e;";
+        let src = "const ok =\n  a.p() &&\n  b.q() &&\n  c.r() &&\n  d.s() &&\n  e.t();";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Regression for rbaumier/comply#8114 — every operand is already a named
+    /// binding, so the remediation is applied and the diagnostic asks for
+    /// nothing.
+    #[test]
+    fn allows_chain_whose_operands_are_all_named() {
+        let src = "const ok = a && b && c && d && e;";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// `??` counts as a logical operator, so a chain of names reaches the
+    /// threshold — and is left alone like the `&&` form.
+    #[test]
+    fn allows_nullish_chain_of_named_operands() {
+        let src = "const ok = a ?? b ?? c ?? d ?? e;";
+        assert!(run_on(src).is_empty());
+    }
+
+    /// A ternary's branches are values, not the boolean parts the remediation
+    /// asks to name, so a ternary-rooted line keeps firing even when every
+    /// identifier in it is bare.
+    #[test]
+    fn flags_ternary_rooted_line_of_named_operands() {
+        let src = "const x = a && b && c && d ? e : f;";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// The guard covers the line, not one chain of it: a second chain with an
+    /// inline operand keeps the line flagged.
+    #[test]
+    fn flags_line_whose_second_chain_has_an_inline_operand() {
+        let src = "const a1 = p && q && r; const b1 = s && t && u.v();";
         assert_eq!(run_on(src).len(), 1);
     }
 }

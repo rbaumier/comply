@@ -6,9 +6,16 @@
 //! nothing. What one diagnostic covers differs per language: the Rust backend
 //! reports one chain — the outermost `&&` / `||` expression — while the oxc
 //! backend groups the operators of a source line.
+//!
+//! Both stay silent on a chain whose operands are all bare identifiers,
+//! parentheses and `!` being transparent: the remediation asks for names and
+//! every operand already carries one. A ternary is never in that position —
+//! its branches are values, not the boolean parts to name.
 
 mod oxc_typescript;
 mod rust;
+#[cfg(test)]
+mod shared_tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
