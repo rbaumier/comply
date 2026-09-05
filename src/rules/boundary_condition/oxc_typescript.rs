@@ -116,6 +116,20 @@ impl OxcCheck for Check {
             return;
         }
 
+        // `const last = <T>(a: T[]): T | undefined => a[a.length - 1]` — the access
+        // is the value the enclosing function returns, and that function's DECLARED
+        // return type admits an absent value. The possibly-missing element is not
+        // swallowed here: it is the function's published contract, so the type
+        // system forces every caller to handle it. This is the type-level form of
+        // the `arr[0]!` / `?? fallback` acknowledgements above, and the strongest
+        // one — unlike `!`, it propagates the condition to the caller instead of
+        // dismissing it. A function that declares no return type acknowledged
+        // nothing, and one whose annotation excludes absence (`: T`) claims a
+        // presence an empty array cannot deliver; both stay flagged.
+        if access_is_returned_under_absent_admitting_type(node, semantic) {
+            return;
+        }
+
         // Skip if dominated by an `if` / ternary / `&&` / enclosing `while`/`for`
         // whose condition guards this array — either a `.length` check or, for a
         // first-element read, a truthy `arr[0]` / `arr?.[0]` check on the same array.
@@ -802,6 +816,89 @@ fn has_nullish_or_logical_fallback(
         }
     }
     false
+}
+
+/// How a boundary access reaches the result of the function that encloses it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReturnedVia {
+    /// `return <access>` — valid in any function body.
+    ReturnStatement,
+    /// The expression body of a concise arrow, `(…) => <access>`.
+    ConciseArrowBody,
+}
+
+/// Returns true when the access is the value its enclosing function returns AND
+/// that function's declared return type admits an absent value (see
+/// [`ts_type_admits_absent`]) — `const last = <T>(a: T[]): T | undefined =>
+/// a[a.length - 1]`. The result leaves the function under a contract that already
+/// states it may be missing, so the boundary condition is propagated to the
+/// caller rather than swallowed.
+///
+/// Both return shapes count: the argument of a `return` statement and the
+/// expression body of a concise arrow. Runtime-transparent wrappers between the
+/// access and the return (parentheses, `as T`, `satisfies T`, `!`, `<T>`) are
+/// walked through, so `return (a[i]) as T | undefined` behaves the same. Any
+/// other intervening node means the access is not the returned value itself
+/// (`return a[0].id` dereferences it first), and the walk stops at the innermost
+/// function, so a callback's access is judged against the callback's own
+/// annotation.
+fn access_is_returned_under_absent_admitting_type(
+    node: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let mut via: Option<ReturnedVia> = None;
+    for ancestor in nodes.ancestors(node.id()) {
+        match ancestor.kind() {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_)
+            | AstKind::TSTypeAssertion(_) => {}
+            AstKind::ReturnStatement(_) if via.is_none() => {
+                via = Some(ReturnedVia::ReturnStatement);
+            }
+            AstKind::ExpressionStatement(_) if via.is_none() => {
+                via = Some(ReturnedVia::ConciseArrowBody);
+            }
+            AstKind::FunctionBody(_) if via.is_some() => {}
+            AstKind::ArrowFunctionExpression(arrow) => {
+                let is_result = via == Some(ReturnedVia::ReturnStatement)
+                    || (via == Some(ReturnedVia::ConciseArrowBody) && arrow.expression);
+                return is_result && return_type_admits_absent(arrow.return_type.as_deref());
+            }
+            AstKind::Function(func) => {
+                return via == Some(ReturnedVia::ReturnStatement)
+                    && return_type_admits_absent(func.return_type.as_deref());
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Returns true when a function carries a return-type annotation that admits an
+/// absent value. An absent annotation is not an acknowledgement — nothing was
+/// declared — so it does not qualify.
+fn return_type_admits_absent(annotation: Option<&TSTypeAnnotation>) -> bool {
+    annotation.is_some_and(|ann| ts_type_admits_absent(&ann.type_annotation))
+}
+
+/// Returns true when `ty` tells callers the value may be absent: the
+/// `undefined`, `void`, `any` or `unknown` keyword, or a union with such a member
+/// (`T | undefined`). Under each of those a caller cannot assume the value is
+/// present. `null` is deliberately excluded: an out-of-bounds read yields
+/// `undefined`, which a declared `T | null` does not admit.
+fn ts_type_admits_absent(ty: &TSType) -> bool {
+    match ty {
+        TSType::TSUndefinedKeyword(_)
+        | TSType::TSVoidKeyword(_)
+        | TSType::TSAnyKeyword(_)
+        | TSType::TSUnknownKeyword(_) => true,
+        TSType::TSUnionType(union) => union.types.iter().any(ts_type_admits_absent),
+        TSType::TSParenthesizedType(paren) => ts_type_admits_absent(&paren.type_annotation),
+        _ => false,
+    }
 }
 
 /// Returns true when an ancestor `if` or ternary condition proves this access is
@@ -6836,6 +6933,68 @@ mod tests {
         // At each level only the statements strictly before the one holding the
         // read count, so a guard written after it does not vouch it safe.
         let src = "function f() { const m = re.exec(src); if (a) { use(m[0]); } if (!m) return; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_concise_arrow_returning_optional_issue_8135() {
+        // minisearch `src/SearchableMap/TreeIterator.ts`: the declared return type
+        // is the acknowledgement, and it forces every caller to handle the case.
+        let src = "export const last = <T>(array: T[]): T | undefined => array[array.length - 1];";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_block_bodied_function_returning_optional_issue_8135() {
+        let src = "function last<T>(a: T[]): T | undefined { return a[a.length - 1]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_first_element_returned_under_optional_type_issue_8135() {
+        // The exemption is index-agnostic — it is about where the value goes.
+        let src = "function first<T>(a: T[]): T | undefined { return a[0]; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_returned_through_a_type_assertion_issue_8135() {
+        let src = "function last<T>(a: T[]): T | undefined { return (a[a.length - 1]) as T | undefined; }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_returned_under_a_non_optional_return_type_issue_8135() {
+        // SearchableMap.ts:423's mirror shape — the annotation claims a presence
+        // the empty array cannot deliver.
+        let src = "export const lastStrict = <T>(array: T[]): T => array[array.length - 1];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_returned_with_no_return_type_annotation_issue_8135() {
+        let src = "export const last = <T>(array: T[]) => array[array.length - 1];";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_access_stored_in_a_local_under_an_optional_return_type_issue_8135() {
+        // The value is consumed inside the function before it leaves it, so the
+        // declared contract vouches for nothing here.
+        let src = "function last<T>(a: T[]): T | undefined { const x = a[a.length - 1]; use(x.id); return x; }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_dereferenced_return_value_under_an_optional_return_type_issue_8135() {
+        let src = "function f(a: string[]): string | undefined { return a[0].trim(); }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_inner_callback_access_under_an_outer_optional_return_type_issue_8135() {
+        // The walk stops at the callback, which declares nothing.
+        let src = "function f(xs: string[][]): string | undefined { return xs.map((a) => a[0]).join(''); }";
         assert_eq!(run_on(src).len(), 1);
     }
 
