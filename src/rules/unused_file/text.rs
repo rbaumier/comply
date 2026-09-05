@@ -2591,4 +2591,28 @@ mod tests {
             "only the module the barrel does not reach is dead: {diags:?}"
         );
     }
+
+    // #8451: `dead-export` treats a module the entry barrel wildcard-re-exports
+    // as published surface; `unused-file` must agree that the same module is
+    // reachable, so the two rules never disagree about one file.
+    #[test]
+    fn wildcard_reexport_from_the_entry_barrel_seeds_reachability_issue_8451() {
+        let files: Vec<(&str, &str)> = vec![
+            ("package.json", r#"{"name":"starlib","version":"1.0.0"}"#),
+            ("tsconfig.json", r#"{ "include": ["src"] }"#),
+            (
+                "src/index.ts",
+                "export * from './helper';\nexport { named } from './named';\n",
+            ),
+            ("src/helper.ts", "export const helper = 1;\n"),
+            ("src/named.ts", "export const named = 2;\n"),
+            ("src/orphan.ts", "export const orphan = 3;\n"),
+        ];
+        let (_dir, diags) = run_on_project(&files);
+        assert_eq!(diags.len(), 1, "expected one unused-file diagnostic: {diags:?}");
+        assert!(
+            diags[0].path.to_str().unwrap().contains("orphan"),
+            "a wildcard-re-exported module is reachable through the barrel: {diags:?}"
+        );
+    }
 }
