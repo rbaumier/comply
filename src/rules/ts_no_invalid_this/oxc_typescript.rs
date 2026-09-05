@@ -612,24 +612,26 @@ fn is_reflect_apply_this_arg(
     second_arg.span() == nodes.kind(this_node_id).span()
 }
 
-/// True when the reference at `ref_node_id` sits in `thisArg` position of a
+/// True when the node at `node_id` sits in `thisArg` position of a
 /// receiver-binding invocation: the first argument of `<callee>.call(X, …)` /
 /// `<callee>.apply(X, …)`, or the second argument of `Reflect.apply(fn, X, …)`.
-/// Each binds its `thisArg` as the receiver of the invoked function, so a local
-/// forwarded here carries a captured `this` to the call site. A `Reflect`
+/// Each binds its `thisArg` as the receiver of the invoked function, so the value
+/// written there is handed to the callee as its `this`. The check is a property of
+/// the argument node's position, so it holds for a literal `this` written there
+/// (`fn.apply(this, args)`, the receiver-forwarding wrapper idiom) as much as for
+/// an identifier carrying a captured `this` (`fn.apply(self, args)`). A `Reflect`
 /// receiver is excluded from the first-argument branch — `Reflect.apply`'s first
 /// argument is the function to invoke, not the receiver (matched at argument two).
-fn reference_is_call_apply_this_arg(
-    ref_node_id: oxc_semantic::NodeId,
+fn is_receiver_binding_this_arg(
+    node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    // `Reflect.apply(fn, X, args)`: X is the second (thisArg) argument — reuse the
-    // same direct-thisArg check the literal-`this` path uses.
-    if is_reflect_apply_this_arg(ref_node_id, semantic) {
+    // `Reflect.apply(fn, X, args)`: X is the second (thisArg) argument.
+    if is_reflect_apply_this_arg(node_id, semantic) {
         return true;
     }
     let nodes = semantic.nodes();
-    let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(ref_node_id)) else {
+    let AstKind::CallExpression(call) = nodes.kind(nodes.parent_id(node_id)) else {
         return false;
     };
     let Expression::StaticMemberExpression(member) = &call.callee else {
@@ -640,10 +642,10 @@ fn reference_is_call_apply_this_arg(
     {
         return false;
     }
-    let ref_span = nodes.kind(ref_node_id).span();
+    let node_span = nodes.kind(node_id).span();
     call.arguments
         .first()
-        .is_some_and(|arg| arg.span() == ref_span)
+        .is_some_and(|arg| arg.span() == node_span)
 }
 
 /// True when the `ThisExpression` at `this_node_id` is captured into a local
@@ -655,8 +657,8 @@ fn reference_is_call_apply_this_arg(
 /// to preserve that receiver (the reference may sit inside a nested closure, as in
 /// `const later = function () { fn.apply(context, args); }`), so the `this` is
 /// intentional. This is one indirection hop from writing `this` directly as the
-/// thisArg (`is_reflect_apply_this_arg`), and like it is a property of the `this`
-/// node itself. The `this` must be the whole initializer of the declarator, whose
+/// thisArg (`is_receiver_binding_this_arg`), and like it is a property of the
+/// `this` node itself. The `this` must be the whole initializer of the declarator, whose
 /// bound name is a plain identifier; a `this` buried inside the initializer
 /// (`const x = this.foo`) is not this idiom.
 fn is_this_captured_and_forwarded_as_this_arg(
@@ -682,7 +684,7 @@ fn is_this_captured_and_forwarded_as_this_arg(
     semantic
         .scoping()
         .get_resolved_references(symbol_id)
-        .any(|reference| reference_is_call_apply_this_arg(reference.node_id(), semantic))
+        .any(|reference| is_receiver_binding_this_arg(reference.node_id(), semantic))
 }
 
 fn is_valid_this_context(
@@ -690,12 +692,12 @@ fn is_valid_this_context(
     semantic: &oxc_semantic::Semantic,
     source: &str,
 ) -> bool {
-    // `Reflect.apply(fn, this, args)`: the `this` is written directly as the
-    // `thisArg` (second) argument, forwarding the enclosing function's receiver
-    // to `fn` — the standard idiom equivalent to `fn.apply(this, args)`. This is
-    // a property of the `this` node itself, independent of the enclosing
-    // function, so it is checked before the boundary walk.
-    if is_reflect_apply_this_arg(node.id(), semantic) {
+    // `fn.apply(this, args)` / `fn.call(this, …)` / `Reflect.apply(fn, this, args)`:
+    // the `this` is written directly in `thisArg` position, forwarding the
+    // enclosing function's receiver to `fn` — the receiver-forwarding wrapper
+    // idiom. This is a property of the `this` node itself, independent of the
+    // enclosing function, so it is checked before the boundary walk.
+    if is_receiver_binding_this_arg(node.id(), semantic) {
         return true;
     }
     // `const context = this; … fn.apply(context, args)`: the `this` is captured
@@ -1612,6 +1614,33 @@ mod tests {
         // …) => void`, so `this` is intentional, not a stray reference.
         let src = "export const debounce = <T extends (this: unknown, ...args: any[]) => void>(\n  originalFunction: T,\n  duration: number,\n): T => {\n  let timeout: NodeJS.Timeout | undefined;\n  return function () {\n    if (timeout) {\n      clearTimeout(timeout);\n    }\n    timeout = setTimeout(\n      () => Reflect.apply(originalFunction, this, arguments),\n      duration,\n    );\n  } as T;\n};";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_as_apply_this_arg_in_metadata_wrapper() {
+        // Regression for #8099: libphonenumber-js's metadata-argument wrapper
+        // forwards its caller's receiver with the plain `fn.apply(this, args)`
+        // spelling — the same receiver-forwarding idiom as `Reflect.apply(fn,
+        // this, args)`, written the way every pre-`Reflect` wrapper writes it.
+        let src = "export function withDefaults(func, args) {\n  return func.apply(this, args);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_as_call_this_arg_in_wrapper() {
+        // Regression for #8099: `fn.call(this, …)` puts the forwarded receiver in
+        // the same first-argument `thisArg` slot as `fn.apply(this, args)`.
+        let src = "export function withCall(func, a) {\n  return func.call(this, a);\n}";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_this_as_non_first_arg_of_apply() {
+        // Negative-space guard for #8099: only the *first* argument of
+        // `<callee>.call`/`.apply` is the `thisArg`. A `this` passed as ordinary
+        // data (`fn.apply(ctx, this)`) forwards no receiver and must still fire.
+        let diags = run_on("function f() {\n  return fn.apply(ctx, this);\n}");
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]
