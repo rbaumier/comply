@@ -1,6 +1,6 @@
 // comply type-aware sidecar.
 //
-// Driven by comply's Rust process when `--type-aware` is set. Reads a single
+// Driven by comply's Rust process, once per run. Reads a single
 // JSON request on stdin, builds the TypeScript program once via typescript-go
 // (@typescript/native-preview), runs the enabled type-aware rules against it,
 // and writes a single JSON response on stdout.

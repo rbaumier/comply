@@ -52,10 +52,10 @@ pub fn is_available() -> bool {
 
 /// Invoke oxlint on the given TS/JS files and return unified diagnostics.
 ///
-/// `type_aware` gates the tsgolint rule set (and the `--type-aware` flag that
-/// requires oxlint-tsgolint to build the TypeScript program). Off by default
-/// so the standard run stays syntactic and fast; the type-aware batches only
-/// run when the caller opted in via `--type-aware`.
+/// `type_aware` gates the tsgolint rule set (and the `--type-aware` oxlint flag
+/// that has oxlint-tsgolint build the TypeScript program). The caller sets it
+/// only when a rule needing that program is still enabled; otherwise the pass
+/// stays syntactic and fast.
 #[must_use = "diagnostics from oxlint must be reported"]
 pub fn lint_files(
     files: &[&SourceFile],

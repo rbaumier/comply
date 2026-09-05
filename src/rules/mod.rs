@@ -173,7 +173,7 @@ pub fn collect_clippy_bindings() -> Vec<(&'static str, &'static RuleMeta, Severi
 }
 
 /// Accessor for tsgolint-delegated backends (type-aware rules).
-/// Only used when `--type-aware` is passed.
+/// Only used while at least one type-aware rule is enabled for the project.
 pub fn collect_tsgolint_bindings() -> Vec<(&'static str, &'static RuleMeta, Severity)> {
     let mut bindings = Vec::new();
     for rule in delegated::register_tsgolint() {
@@ -231,7 +231,7 @@ pub fn collect_delegated_post_filters()
 /// Accessor for comply's custom type-aware rules (`Backend::TypeAware`).
 /// Returns each rule's leaked `RuleMeta` so the sidecar phase can map the
 /// rule id reported by the sidecar back to a severity and remediation.
-/// Only used when `--type-aware` is passed.
+/// Only used while at least one type-aware rule is enabled for the project.
 pub fn collect_type_aware_bindings() -> Vec<&'static RuleMeta> {
     let mut metas = Vec::new();
     for rule in delegated::register_type_aware() {

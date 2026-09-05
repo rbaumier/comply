@@ -1140,9 +1140,9 @@ fn lint_typescript(
     timings.engine_ts = engine_dur;
     diagnostics.extend(engine_res?);
 
-    // Type-aware sidecar phase: only when type-aware analysis is requested.
-    // Drives a TypeScript checker (typescript-go) through a Node sidecar to
-    // run the custom rules that need resolved types.
+    // Type-aware sidecar phase: only when a rule still needs it. Drives a
+    // TypeScript checker (typescript-go) through a Node sidecar to run the
+    // custom rules that need resolved types.
     if type_aware {
         let t = Instant::now();
         let res = typeaware::lint_files(ts_files, config);

@@ -313,15 +313,15 @@ pub enum Backend {
     /// (v1.2) Shell out to `tsc --noEmit` and filter by diagnostic code.
     Tsc { codes: &'static [u32] },
     /// Delegate to a tsgolint rule (type-aware linting via typescript-go).
-    /// Only runs when `--type-aware` is passed.
+    /// Runs only while the rule is enabled for the project.
     Tsgolint {
         rule: &'static str,
         post_filter: Option<Arc<dyn PostFilter>>,
     },
     /// A custom type-aware rule executed by comply's own typescript-go
     /// sidecar (not a typescript-eslint rule). The rule id in `RuleMeta`
-    /// selects the implementation in `crate::typeaware`. Only runs when
-    /// `--type-aware` is passed.
+    /// selects the implementation in `crate::typeaware`. Runs only while the
+    /// rule is enabled for the project.
     TypeAware,
     /// In-process oxc AST walk — native Rust, no FFI.
     Oxc(Box<dyn OxcCheck>),
