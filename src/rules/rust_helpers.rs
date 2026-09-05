@@ -2238,18 +2238,20 @@ fn token_tree_names_option(token_tree: Node, source: &[u8], option: &str) -> boo
 /// `#[expect(<scope>::<lint>)]` attribute naming `lint`, applied to an enclosing
 /// statement, expression, or item.
 ///
-/// Walks up from `node` via `parent()`; at each ancestor it scans the preceding
-/// `attribute_item` siblings (skipping interleaved comment siblings, traversing
-/// past unrelated attributes such as `#[cfg(...)]`) for an `allow`/`expect`
-/// attribute whose argument `token_tree` contains an `identifier` token equal to
-/// `lint`. It also reads the attributes an ancestor owns as children rather than
-/// as siblings — see `ATTRIBUTE_OWNER_KINDS`. At a `mod` block, the crate
-/// root, or any enclosing `block` (such as a function body) it reads the *inner*
-/// attributes (`#![allow(...)]`) that scope that module/file/block, the way the
-/// rustc/clippy lint itself resolves a file-, module-, or function-level allow.
-/// The walk stops at the enclosing `function_item` / `closure_expression` /
-/// `source_file` boundary so an `#[allow]` on a *sibling* item far above does
-/// not leak in.
+/// Walks up from `node` via `parent()` to the crate root. At each ancestor it
+/// reads two kinds of attribute:
+///
+/// - *outer* attributes (`#[allow(...)]`) decorating that ancestor — its
+///   preceding `attribute_item` siblings (skipping interleaved comment siblings,
+///   traversing past unrelated attributes such as `#[cfg(...)]`), plus the
+///   attributes an ancestor owns as children rather than as siblings, see
+///   `ATTRIBUTE_OWNER_KINDS`. These stop counting once the walk leaves the
+///   enclosing `function_item` / `closure_expression`, so an `#[allow]` on a
+///   *sibling* item far above cannot leak in;
+/// - *inner* attributes (`#![allow(...)]`) of a `mod` block, the crate root, or
+///   any enclosing `block` such as a function body. These scope every node
+///   inside them by construction, so the walk honors them at any depth — the way
+///   rustc/clippy itself resolves a file-, module-, or function-level allow.
 ///
 /// Matching on the AST path child (`allow`/`expect`) and the token-tree
 /// `identifier` — not raw text — means a scope prefix like `clippy::` (which
@@ -2260,26 +2262,21 @@ fn token_tree_names_option(token_tree: Node, source: &[u8], option: &str) -> boo
 /// explicit `#[allow]`/`#[expect]` of that exact lint.
 pub fn has_clippy_allow(node: Node, source: &[u8], lint: &str) -> bool {
     let mut cur = node;
+    let mut outer_attributes_in_scope = true;
     loop {
-        if attribute_allows_lint_in_siblings(cur, source, lint)
-            || any_owned_attribute(cur, |attr| attribute_allows_lint(attr, source, lint))
+        if outer_attributes_in_scope
+            && (attribute_allows_lint_in_siblings(cur, source, lint)
+                || any_owned_attribute(cur, |attr| attribute_allows_lint(attr, source, lint)))
         {
             return true;
         }
-        // Inner `#![allow(...)]` scope a `mod` block, the whole file, or an
-        // enclosing `block` such as a function body; the rule mirrors rustc,
-        // which honors such a module/crate/function-level allow for every node
-        // inside.
         if matches!(cur.kind(), "mod_item" | "source_file" | "block")
             && inner_attribute_allows_lint(cur, source, lint)
         {
             return true;
         }
-        if matches!(
-            cur.kind(),
-            "function_item" | "closure_expression" | "source_file"
-        ) {
-            return false;
+        if matches!(cur.kind(), "function_item" | "closure_expression") {
+            outer_attributes_in_scope = false;
         }
         match cur.parent() {
             Some(parent) => cur = parent,
@@ -11481,6 +11478,39 @@ mod tests {
             ),
         ];
         for (src, expected) in test_cases {
+            let tree = parse(src);
+            let node = first_of_kind(tree.root_node(), "binary_expression")
+                .expect("snippet should contain a binary_expression");
+            assert_eq!(
+                has_clippy_allow(node, src.as_bytes(), "float_cmp"),
+                expected,
+                "has_clippy_allow mismatch for `{src}`"
+            );
+        }
+    }
+
+    #[test]
+    fn has_clippy_allow_honors_inner_attributes_above_the_item_boundary() {
+        // Issue #7621. An inner `#![allow]` scopes every node under the module,
+        // file, or block that carries it, so it must be honored from inside a
+        // function too — while an outer `#[allow]` on a sibling item must not.
+        let cases = [
+            ("#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }", true),
+            (
+                "mod m {\n#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }\n}",
+                true,
+            ),
+            (
+                "fn outer(x: f64) -> bool {\n#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }\ntrue\n}",
+                true,
+            ),
+            (
+                "#[allow(clippy::float_cmp)]\nfn a(x: f64) -> bool { true }\nfn f(x: f64) -> bool { x == 1.5 }",
+                false,
+            ),
+            ("fn f(x: f64) -> bool { x == 1.5 }", false),
+        ];
+        for (src, expected) in cases {
             let tree = parse(src);
             let node = first_of_kind(tree.root_node(), "binary_expression")
                 .expect("snippet should contain a binary_expression");
