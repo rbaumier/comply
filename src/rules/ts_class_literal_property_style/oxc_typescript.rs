@@ -2,9 +2,9 @@
 //! flag getter methods that return a literal.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, is_protocol_slot_key};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{ClassElement, Expression, MethodDefinitionKind, PropertyKey, Statement};
+use oxc_ast::ast::{ClassElement, Expression, MethodDefinitionKind, Statement};
 use std::sync::Arc;
 
 pub struct Check;
@@ -20,17 +20,6 @@ fn is_literal(expr: &Expression) -> bool {
     )
 }
 
-/// Whether a computed property key is a member access on the global `Symbol`,
-/// e.g. `[Symbol.toStringTag]` or `[Symbol.iterator]`. Such getters define a
-/// well-known symbol on the prototype; rewriting them as instance `readonly`
-/// fields changes lookup semantics, so they must not be flagged.
-fn is_symbol_member_key(key: &PropertyKey) -> bool {
-    let PropertyKey::StaticMemberExpression(member) = key else {
-        return false;
-    };
-    matches!(&member.object, Expression::Identifier(id) if id.name == "Symbol")
-}
-
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
         &[AstType::Class]
@@ -40,7 +29,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let AstKind::Class(class) = node.kind() else {
@@ -71,7 +60,10 @@ impl OxcCheck for Check {
             if method.kind != MethodDefinitionKind::Get {
                 continue;
             }
-            if is_symbol_member_key(&method.key) {
+            // A getter keyed by a protocol slot defines that slot on the
+            // prototype; a `readonly` field defines an own property instead, so
+            // the rewrite changes where the owning contract finds the member.
+            if is_protocol_slot_key(&method.key, semantic) {
                 continue;
             }
             let Some(body) = &method.value.body else {
@@ -213,6 +205,38 @@ class Foo {
 "#,
         );
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn allows_getter_keyed_by_imported_protocol_slot() {
+        // Issue #8151: the protocol-slot predicate is shared with
+        // `ts-class-methods-use-this`, so a key published by another module is
+        // recognised here too. A `readonly` field would define an own property
+        // where `Hash.hash()` expects a prototype member.
+        let diags = run_on(
+            r#"
+import { Hash } from 'effect';
+class Hello {
+    get [Hash.symbol]() { return 0; }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn flags_getter_keyed_by_local_string_constant() {
+        // Negative space for #8151: a computed key that is not a protocol slot is
+        // an ordinary getter name and still earns the `readonly`-field suggestion.
+        let diags = run_on(
+            r#"
+const KEY = 'tag';
+class Foo {
+    get [KEY]() { return "x"; }
+}
+"#,
+        );
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]

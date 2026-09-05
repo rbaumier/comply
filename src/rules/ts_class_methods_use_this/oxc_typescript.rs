@@ -1,5 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{ClassShape, byte_offset_to_line_col, enclosing_class};
+use crate::oxc_helpers::{
+    ClassShape, byte_offset_to_line_col, enclosing_class, is_protocol_slot_key,
+};
 use crate::rules::backend::{AstKind, CheckCtx, OxcCheck};
 use oxc_span::GetSpan;
 use std::borrow::Cow;
@@ -36,15 +38,15 @@ impl OxcCheck for Check {
                 continue;
             }
 
-            // Skip members keyed by a well-known protocol symbol, in any member
-            // form: method (`[Symbol.iterator]()`), generator
-            // (`async *[Symbol.asyncIterator]()`), getter
-            // (`get [Symbol.toStringTag]()`) or setter. These must live on the
-            // prototype to satisfy the protocol contract
-            // (`Object.prototype.toString`, the iteration protocol, …); making
-            // them `static` puts the behavior on the constructor instead and
-            // breaks the semantics, so absence of `this` is not a smell.
-            if is_symbol_member_key(&method_def.key) {
+            // Skip members keyed by a protocol slot, in any member form: method
+            // (`[Symbol.iterator]()`), generator (`async *[Symbol.asyncIterator]()`),
+            // getter (`get [Symbol.toStringTag]()`) or setter. These must live on
+            // the prototype to satisfy the contract that owns the key
+            // (`Object.prototype.toString`, the iteration protocol, `Hash.hash()`
+            // …); making them `static` puts the behavior on the constructor
+            // instead and breaks the semantics, so absence of `this` is not a
+            // smell.
+            if is_protocol_slot_key(&method_def.key, semantic) {
                 continue;
             }
 
@@ -161,15 +163,6 @@ fn is_stub_body(body: &oxc_ast::ast::FunctionBody) -> bool {
         [stmt] => matches!(stmt, oxc_ast::ast::Statement::ThrowStatement(_)),
         _ => false,
     }
-}
-
-/// Whether a computed property key is a member access on the global `Symbol`,
-/// e.g. `[Symbol.toStringTag]` or `[Symbol.iterator]`.
-fn is_symbol_member_key(key: &oxc_ast::ast::PropertyKey) -> bool {
-    let oxc_ast::ast::PropertyKey::StaticMemberExpression(member) = key else {
-        return false;
-    };
-    matches!(&member.object, oxc_ast::ast::Expression::Identifier(id) if id.name == "Symbol")
 }
 
 /// Whether the method references any of the enclosing class's type parameters
@@ -386,6 +379,70 @@ mod tests {
         // `MethodDefinition` like any other and must be exempt too.
         let src = "class Foo { async *[Symbol.asyncIterator]() { yield 1; } }";
         assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_imported_protocol_symbol_method() {
+        // Issue #8151: `effect` publishes its protocol slots as its own symbols.
+        // `Hash.hash(instance)` reads the member off the prototype, so
+        // `static [Hash.symbol]()` makes it unreachable.
+        let src = "import { Hash } from 'effect';\n\
+                   class Hello {\n\
+                   [Hash.symbol]() { return 0; }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_bare_imported_symbol_key_method() {
+        // Issue #8151: the same contract written without the namespace hop — the
+        // key itself is the imported binding.
+        let src = "import { NodeInspectSymbol } from 'effect';\n\
+                   class Hello {\n\
+                   [NodeInspectSymbol]() { return 'Hello'; }\n\
+                   }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_unique_symbol_keyed_method() {
+        // Issue #8151: a `unique symbol` binding exists to be an unforgeable
+        // member key; the member it keys is a slot, not an ordinary method.
+        let src = "const localSym: unique symbol = Symbol('local');\n\
+                   class Foo { [localSym]() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_local_symbol_call_keyed_method() {
+        // Issue #8151: an un-annotated `const s = Symbol('s')` is symbol-valued
+        // from its initializer alone.
+        let src = "const localSym = Symbol('local');\n\
+                   class Foo { [localSym]() { return 1; } }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn flags_computed_key_from_local_string_constant() {
+        // Negative space for #8151: the exemption must not degrade into "never
+        // report a computed member". A key bound to a local string is an ordinary
+        // method name, and the method is still a `static` candidate.
+        let src = "const KEY = 'compute';\n\
+                   class Foo { [KEY]() { return 1; } }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("`[KEY]`"));
+    }
+
+    #[test]
+    fn flags_computed_key_from_imported_object_element_access() {
+        // Negative space for #8151: import provenance is read from the key's root
+        // identifier, and only through a static member access. A dynamic
+        // `[names[0]]` proves nothing about the key and stays flagged.
+        let src = "import { names } from './names';\n\
+                   class Foo { [names[0]]() { return 1; } }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]

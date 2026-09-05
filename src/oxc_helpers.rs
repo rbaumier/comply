@@ -4333,6 +4333,121 @@ pub fn resolves_to_import_from(
     import_source_of(id, semantic).is_some_and(|source| modules.contains(&source))
 }
 
+/// True when `expr` is a `Symbol(…)` or `Symbol.for(…)` call — the two
+/// expressions that mint a JS symbol.
+fn is_symbol_constructor_call(expr: &oxc_ast::ast::Expression) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let Expression::CallExpression(call) = expr else {
+        return false;
+    };
+    match &call.callee {
+        Expression::Identifier(id) => id.name == "Symbol",
+        Expression::StaticMemberExpression(member) => {
+            matches!(&member.object, Expression::Identifier(id) if id.name == "Symbol")
+                && member.property.name == "for"
+        }
+        _ => false,
+    }
+}
+
+/// True when a type annotation denotes a symbol: `symbol` or `unique symbol`.
+fn ts_type_is_symbol(ty: &oxc_ast::ast::TSType) -> bool {
+    use oxc_ast::ast::{TSType, TSTypeOperatorOperator};
+
+    match ty {
+        TSType::TSSymbolKeyword(_) => true,
+        TSType::TSTypeOperatorType(op) => {
+            op.operator == TSTypeOperatorOperator::Unique && ts_type_is_symbol(&op.type_annotation)
+        }
+        _ => false,
+    }
+}
+
+/// True when `expr` is provably a JS `Symbol` value: an inline `Symbol(…)` /
+/// `Symbol.for(…)` call, or an identifier whose binding is annotated `symbol` /
+/// `unique symbol` or initialised from such a call.
+///
+/// The binding is resolved via `reference_id` → symbol → declaration node, then
+/// read through its type annotation ([`binding_declared_ts_type`]) and its
+/// `VariableDeclarator` initializer. A binding that matches neither — a stored
+/// string, buffer, or token — does not match, so a secret stays distinguishable
+/// from a symbol.
+#[must_use]
+pub fn expression_is_symbol_value(
+    expr: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::AstKind;
+
+    if is_symbol_constructor_call(expr) {
+        return true;
+    }
+    let oxc_ast::ast::Expression::Identifier(ident) = expr else {
+        return false;
+    };
+    if binding_declared_ts_type(ident, semantic).is_some_and(ts_type_is_symbol) {
+        return true;
+    }
+    let Some(ref_id) = ident.reference_id.get() else {
+        return false;
+    };
+    let scoping = semantic.scoping();
+    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
+        return false;
+    };
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::VariableDeclarator(decl) => Some(decl),
+            _ => None,
+        })
+        .is_some_and(|decl| decl.init.as_ref().is_some_and(is_symbol_constructor_call))
+}
+
+/// True when a class-member key names a **protocol slot**: a lookup key owned by
+/// the language or by another module, so the member's residence on the prototype
+/// is imposed by a contract instead of chosen by the author. Rules that suggest
+/// moving such a member (to `static`, to a `readonly` field) must leave it alone,
+/// because the suggested shape is no longer where the contract looks.
+///
+/// Three structural shapes qualify:
+/// - a member access on the global `Symbol` — `[Symbol.iterator]`,
+///   `[Symbol.toStringTag]` — the language's own protocol slots;
+/// - a key whose root identifier is bound by an `import` — `[Hash.symbol]`,
+///   `[NodeInspectSymbol]`: the publishing module dispatches on that key and
+///   reads the member off the instance it is handed;
+/// - a key that is provably a symbol value ([`expression_is_symbol_value`]) — a
+///   symbol exists to be an unforgeable member key, so the member it keys is a
+///   slot rather than an ordinary named member.
+///
+/// A plain key (`foo`, `#foo`, `'do work'`) and an ordinary computed key — `[KEY]`
+/// bound to a local string, `[names[0]]` — do not qualify: being computed is not
+/// itself evidence of a contract.
+#[must_use]
+pub fn is_protocol_slot_key(
+    key: &oxc_ast::ast::PropertyKey,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    use oxc_ast::ast::Expression;
+
+    let Some(expr) = key.as_expression() else {
+        return false;
+    };
+    match expr {
+        Expression::StaticMemberExpression(member) => {
+            matches!(&member.object, Expression::Identifier(object)
+                if object.name == "Symbol" || import_source_of(object, semantic).is_some())
+        }
+        Expression::Identifier(id) => {
+            import_source_of(id, semantic).is_some() || expression_is_symbol_value(expr, semantic)
+        }
+        _ => false,
+    }
+}
+
 /// True when `expr` is a primitive literal — `string`, `number`, or `boolean` —
 /// or an identifier whose binding's initializer is directly such a literal
 /// (`const k = "abc"; … x === k`). A binding initialized from a call
