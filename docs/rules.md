@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2058 rules across 152 categories.
+2057 rules across 152 categories.
 
 ## Categories
 
@@ -144,7 +144,7 @@
 - [testing > testing-library](#testing-testing-library) (3 rules)
 - [testing > vitest](#testing-vitest) (7 rules)
 - [type-safety](#type-safety) (1 rules)
-- [typescript](#typescript) (188 rules)
+- [typescript](#typescript) (187 rules)
 - [typescript > async](#typescript-async) (5 rules)
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
@@ -2542,7 +2542,6 @@
 | `no-type-assertion` | Bans all `as T` type assertions. | Use `satisfies T` for validation, type guards for narrowing, or generics for polymorphism. |
 | `no-typeof-prefer-schema` | Validating the shape of freshly-deserialized data (`JSON.parse`, `response.json()`) with chained `typeof` checks is error-prone — use a schema validator (zod, valibot, …). | Replace the chained `typeof` checks with a schema parsed at the boundary, e.g. `const User = z.object({ name: z.string(), age: z.number() }); User.parse(data)`. A single `typeof x === 'string'` narrowing is fine — this targets multi-property shape checks. |
 | `no-unassigned-vars` | A variable that is read but never assigned is always undefined. | Assign the variable a value or remove it. A `let`/`var` that is only ever read holds `undefined`, usually a forgotten assignment. |
-| `no-unknown-parameters` | An `unknown` parameter defers the parse onto every caller. | Accept a named domain type, and run the parser at the I/O boundary instead. |
 | `no-unknown-returns` | A declared `unknown` return hands the caller an unparsed value. | Return a named domain type, and parse the value where it is produced. |
 | `no-unknown-type-aliases` | A type alias resolving to `unknown` names a decision that was never made. | Name the type the value actually has, and narrow at the parsing boundary. |
 | `no-unreachable` | Code after a terminating statement never runs. | Remove the unreachable statements after a `return`/`throw`/`break`/`continue`, or fix the control flow that strands them. |
