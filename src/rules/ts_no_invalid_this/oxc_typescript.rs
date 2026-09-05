@@ -732,6 +732,12 @@ fn reference_binds_this(
 /// name is referenced somewhere in the module in a position that supplies a
 /// receiver: `new`/`.call`/`.apply`/`.bind`, a method-value assignment, or an
 /// object-literal property value.
+///
+/// One such reference is enough. A function whose remaining references supply no
+/// receiver stays exempt, because a reference position that supplies none is not
+/// evidence of an unbound call: a helper handed to a callback registration, or
+/// re-exported beside a local call, reaches its receiver through a slot no
+/// position can show.
 fn is_receiver_bound_function(
     func: &oxc_ast::ast::Function,
     semantic: &oxc_semantic::Semantic,
@@ -760,7 +766,8 @@ fn is_receiver_bound_function(
 /// `is_receiver_bound_function` to anonymous function expressions held in a variable:
 /// `const localeData = function () { … this.$locale() … }` that is later invoked
 /// via `localeData.bind(this)()` (the dayjs plugin / bound-method idiom) has its
-/// `this` supplied at the binding site, so `this` in the body is intentional.
+/// `this` supplied at the binding site, so `this` in the body is intentional. One
+/// such reference is enough, for the reason given on `is_receiver_bound_function`.
 fn is_var_bound_function_referenced_for_this(
     func_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -1417,6 +1424,33 @@ mod tests {
         // not the property value, so it installs nothing and supplies no receiver.
         let src = "function inject () {\n  return this.ready();\n}\nconst byFn = { [inject]: 1 };";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_this_in_mixed_use_function_with_one_receiver_supplying_reference() {
+        // Pins the aggregation for #8191: one receiver-supplying reference
+        // exempts the body, even when another reference calls the function with
+        // no receiver. prettier's Flow fixture `object-method/test3.js` is the
+        // shape — `bar(foo)` reaches an unbound call, `qux({ f: foo })` a bound
+        // one — and the rule reads the slot, never the call behind it.
+        let src = "function foo() {\n  this.m();\n}\nfunction bar(f) {\n  f();\n}\nbar(foo);\nfunction qux(o) {\n  o.f();\n}\nqux({ f: foo });";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_mixed_use_function_assigned_as_method_and_called_bare() {
+        // Pins the aggregation for #8191 on the method-value branch: a bare call
+        // beside `o.m = foo` does not withdraw the exemption.
+        let src = "function foo() {\n  this.m();\n}\nfoo();\nconst o = {};\no.m = foo;";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_this_in_mixed_use_var_bound_function() {
+        // Pins the aggregation for #8191 on the var-held function-expression
+        // branch, which folds its reference set the same way.
+        let src = "const f = function () {\n  this.m();\n};\nf();\nconst o = {};\no.m = f;";
+        assert!(run_on(src).is_empty());
     }
 
     #[test]
