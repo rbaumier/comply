@@ -287,7 +287,7 @@ pub fn merge(mut comments: Vec<RawComment>, source: &str) -> Vec<CommentBlock> {
     let blank_rows: Vec<bool> = source.lines().map(|row| row.trim().is_empty()).collect();
 
     comments
-        .chunk_by(|previous, next| continues_block(previous, next, &blank_rows))
+        .chunk_by(|previous, next| continues_block(previous, next, &blank_rows, source))
         .map(build_block)
         .collect()
 }
@@ -297,12 +297,34 @@ pub fn merge(mut comments: Vec<RawComment>, source: &str) -> Vec<CommentBlock> {
 /// Blank rows keep the block open. A paragraph break is a pause inside one
 /// comment, not a second comment, and ending the block there would hand each
 /// half its own word budget.
-fn continues_block(previous: &RawComment, next: &RawComment, blank_rows: &[bool]) -> bool {
+///
+/// A trailing comment never joins a run, in either direction. It labels the
+/// code on its own line and ends with it, so a column of aligned labels is as
+/// many blocks as it has lines — not one paragraph with their texts glued
+/// together.
+fn continues_block(
+    previous: &RawComment,
+    next: &RawComment,
+    blank_rows: &[bool],
+    source: &str,
+) -> bool {
     previous.is_line
         && next.is_line
         && next.column == previous.column
         && marker(&next.raw) == marker(&previous.raw)
         && rows_between_are_blank(previous.line, next.line, blank_rows)
+        && !is_trailing(source, previous.start_byte)
+        && !is_trailing(source, next.start_byte)
+}
+
+/// True when something other than whitespace precedes `start_byte` on its row.
+/// That is the structural mark of a comment written to label one line of code.
+fn is_trailing(source: &str, start_byte: usize) -> bool {
+    let Some(before) = source.get(..start_byte) else {
+        return false;
+    };
+    let row_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+    !before[row_start..].trim().is_empty()
 }
 
 /// True when every row strictly between rows `previous` and `next` is blank.
@@ -475,6 +497,26 @@ mod tests {
         }
     }
 
+    /// Read the `//` comment of every row of `source`, positions included.
+    /// Lets a test state its case as the file a reader sees.
+    fn line_comments_of(source: &str) -> Vec<RawComment> {
+        let mut comments = Vec::new();
+        let mut byte = 0;
+        for (offset, row) in source.lines().enumerate() {
+            if let Some(column) = row.find("//") {
+                comments.push(RawComment {
+                    start_byte: byte + column,
+                    line: offset + 1,
+                    column: column + 1,
+                    raw: row[column..].to_string(),
+                    is_line: true,
+                });
+            }
+            byte += row.len() + 1;
+        }
+        comments
+    }
+
     #[test]
     fn consecutive_line_comments_merge() {
         let blocks = merge(
@@ -520,6 +562,20 @@ mod tests {
             vec![line_comment(0, 1, "// one"), line_comment(18, 3, "// two")],
             "// one\nlet x = 1;\n// two",
         );
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn column_aligned_trailing_labels_stay_separate_blocks() {
+        let source = "vec![\n    0x0001, // version\n    0x0002, // number of glyphs\n];";
+        let blocks = merge(line_comments_of(source), source);
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn a_trailing_comment_does_not_absorb_the_standalone_line_under_it() {
+        let source = "let x = 1; // sets the seed\n           // and the rest is prose";
+        let blocks = merge(line_comments_of(source), source);
         assert_eq!(blocks.len(), 2);
     }
 

@@ -71,6 +71,26 @@ fn_placeholder();";
         assert!(run("// short note\n// second short line\nconst x = 1;").is_empty());
     }
 
+    // The same column of trailing field labels the Rust backend keeps apart:
+    // both backends read blocks through the shared merge.
+    #[test]
+    fn column_aligned_trailing_field_labels_are_not_one_block() {
+        let src = "\
+export const maxp = [
+  0x00010000, // version
+  0x00000001, // number of glyphs
+  0x00000000, // maximum points in a non-composite glyph
+  0x00000000, // maximum contours in a non-composite glyph
+  0x00000000, // maximum points in a composite glyph
+  0x00000000, // maximum contours in a composite glyph
+  0x00000002, // maximum zones used for twilight and glyph space
+  0x00000000, // maximum twilight points used in zone zero
+  0x00000000, // number of storage area locations available
+  0x00000000, // maximum function definitions in the font program
+];";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
     #[test]
     fn jsdoc_block_counts_too() {
         let src = r#"/**
