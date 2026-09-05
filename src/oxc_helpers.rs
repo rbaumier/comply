@@ -6458,52 +6458,16 @@ pub fn name_is_generic_type_param_in_scope(
 /// TransactionSerializedCIP42`) cannot be replaced by a type guard: a predicate
 /// `x is Concrete` narrows the *local* type, but TypeScript will not reduce the
 /// generic type parameter itself, so the `as` is the only way to bridge the
-/// generic to the concrete branch type. Parentheses are peeled.
+/// generic to the concrete branch type.
 #[must_use]
 pub fn operand_is_typed_as_generic_param(
     operand: &oxc_ast::ast::Expression,
     cast_node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
 ) -> bool {
-    use oxc_ast::AstKind;
-    use oxc_ast::ast::{BindingPattern, Expression, TSType, TSTypeName};
+    use oxc_ast::ast::{TSType, TSTypeName};
 
-    let Expression::Identifier(ident) = operand.without_parentheses() else {
-        return false;
-    };
-    let Some(ref_id) = ident.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let decl_node_id = scoping.symbol_declaration(sym_id);
-    let nodes = semantic.nodes();
-
-    // Only trust the declaration's annotation when the binding is a bare
-    // identifier (`x: T`). For a destructured binding (`{a}: T`, `[a]: T`) the
-    // element's real type is `T["a"]`, not `T`, so casting it remains a genuine
-    // narrowing.
-    fn pattern_is_bare_identifier(pattern: &BindingPattern) -> bool {
-        matches!(pattern, BindingPattern::BindingIdentifier(_))
-    }
-
-    let annotation = std::iter::once(nodes.kind(decl_node_id))
-        .chain(nodes.ancestor_kinds(decl_node_id))
-        .find_map(|kind| match kind {
-            AstKind::FormalParameter(param) if pattern_is_bare_identifier(&param.pattern) => {
-                Some(param.type_annotation.as_ref())
-            }
-            AstKind::VariableDeclarator(decl) if pattern_is_bare_identifier(&decl.id) => {
-                Some(decl.type_annotation.as_ref())
-            }
-            _ => None,
-        });
-    let Some(Some(annotation)) = annotation else {
-        return false;
-    };
-    let TSType::TSTypeReference(r) = &annotation.type_annotation else {
+    let Some(TSType::TSTypeReference(r)) = declared_type_of_operand(operand, semantic) else {
         return false;
     };
     if r.type_arguments.is_some() {
@@ -6513,6 +6477,49 @@ pub fn operand_is_typed_as_generic_param(
         return false;
     };
     name_is_generic_type_param_in_scope(type_id.name.as_str(), cast_node_id, semantic)
+}
+
+/// The type annotation written on the declaration of the binding `operand`
+/// names, or `None` when `operand` is not an identifier, its reference does not
+/// resolve, or its declaration carries no annotation. Parentheses are peeled.
+///
+/// Only a bare-identifier binding (`x: T`) is answered for. For a destructured
+/// binding (`{ a }: T`, `[a]: T`) the element's real type is `T["a"]`, not `T`,
+/// so the declaration's annotation does not describe the value.
+#[must_use]
+pub fn declared_type_of_operand<'a>(
+    operand: &oxc_ast::ast::Expression,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::TSType<'a>> {
+    use oxc_ast::AstKind;
+    use oxc_ast::ast::{BindingPattern, Expression};
+
+    let Expression::Identifier(ident) = operand.without_parentheses() else {
+        return None;
+    };
+    let ref_id = ident.reference_id.get()?;
+    let scoping = semantic.scoping();
+    let sym_id = scoping.get_reference(ref_id).symbol_id()?;
+    let decl_node_id = scoping.symbol_declaration(sym_id);
+    let nodes = semantic.nodes();
+
+    fn pattern_is_bare_identifier(pattern: &BindingPattern) -> bool {
+        matches!(pattern, BindingPattern::BindingIdentifier(_))
+    }
+
+    std::iter::once(nodes.kind(decl_node_id))
+        .chain(nodes.ancestor_kinds(decl_node_id))
+        .find_map(|kind| match kind {
+            AstKind::FormalParameter(param) if pattern_is_bare_identifier(&param.pattern) => {
+                Some(param.type_annotation.as_ref())
+            }
+            AstKind::VariableDeclarator(decl) if pattern_is_bare_identifier(&decl.id) => {
+                Some(decl.type_annotation.as_ref())
+            }
+            _ => None,
+        })
+        .flatten()
+        .map(|annotation| &annotation.type_annotation)
 }
 
 /// True when the `.then()` `call` node is the direct expression body of a
@@ -7509,7 +7516,10 @@ fn ident_resolves_to_type_parameter(
 ///
 /// A type reference's *name* is not descended into — only its type arguments —
 /// so `is_match` receives the reference node itself and decides on the name.
-fn type_tree_any(t: &oxc_ast::ast::TSType, is_match: &impl Fn(&oxc_ast::ast::TSType) -> bool) -> bool {
+fn type_tree_any(
+    t: &oxc_ast::ast::TSType,
+    is_match: &impl Fn(&oxc_ast::ast::TSType) -> bool,
+) -> bool {
     use oxc_ast::ast::TSType;
     if is_match(t) {
         return true;
