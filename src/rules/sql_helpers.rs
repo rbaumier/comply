@@ -661,6 +661,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_dml_verb_used_mid_sentence_issue_8048() {
+        // iceberg-rust update_properties.rs: `update set` is a noun phrase at
+        // the tail of an English sentence, not an `UPDATE … SET` statement.
+        assert!(!is_sql_string(
+            "Key {overlapping_key} is present in both removal set and update set"
+        ));
+    }
+
+    #[test]
     fn accepts_quoted_literal_text_from_ast_backends() {
         // The Rust and tree-sitter backends hand over the *quoted* source text
         // of a string node, so the verb's statement boundary is the literal's

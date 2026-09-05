@@ -421,6 +421,20 @@ fn t() { let q = format!("SELECT id FROM t WHERE file_id = '{file_id}'"); }"#;
         assert!(run_on(src).is_empty());
     }
 
+    // Issue #8048 (iceberg-rust crates/iceberg/src/transaction/update_properties.rs:90)
+    // — `update set` is a noun phrase at the tail of an English sentence, not an
+    // `UPDATE … SET` statement.
+    #[test]
+    fn repro_8048_update_set_prose_in_error_message_not_flagged() {
+        let src = r#"fn f(overlapping_key: &str) -> Error {
+    Error::new(
+        ErrorKind::PreconditionFailed,
+        format!("Key {overlapping_key} is present in both removal set and update set"),
+    )
+}"#;
+        assert!(run_on(src).is_empty());
+    }
+
     // Negative space: a real statement-opening DELETE with a
     // value-position interpolation keeps firing.
     #[test]
