@@ -22,14 +22,19 @@
 //!
 //! ## Justification mechanism
 //!
-//! A block is considered "justified" and NOT flagged iff it contains
-//! at least one comment child (`line_comment` / `block_comment` for
-//! Rust, `comment` for TS). That is the only accepted way to mark the
-//! inaction intentional. A comment outside the block — on the line
-//! above, trailing on the closing brace, etc. — is intentionally not
-//! recognized: it keeps the rule simple and predictable, and placing
-//! the explanation *inside* the braces makes it colocated with the
-//! thing it explains.
+//! A block is "justified" and NOT flagged when it contains at least one
+//! comment child (`line_comment` / `block_comment` for Rust, `comment` for
+//! TS) — the explanation sits inside the braces, colocated with the thing it
+//! explains. A comment elsewhere (trailing on the closing brace, say) is not
+//! read as a justification, with one exception noted in the Rust backend: a
+//! comment on the line directly above a loop.
+//!
+//! A block also needs no comment when the code around it already says why it
+//! is empty, and only a structural property may establish that. One such
+//! property holds in every backend: a `while` / `do…while` whose condition
+//! contains a call is a drain / register-polling loop — the condition drives
+//! every iteration, so a body comment could only restate it. The rest are
+//! shape-keyed exemptions documented in each backend module.
 //!
 //! ## Scope exclusions
 //!

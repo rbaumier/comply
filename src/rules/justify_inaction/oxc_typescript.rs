@@ -1,7 +1,8 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::Statement;
+use oxc_ast::ast::{Expression, Statement};
+use oxc_span::GetSpan;
 use std::sync::Arc;
 
 pub struct Check;
@@ -24,7 +25,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
             match node.kind() {
@@ -76,13 +77,15 @@ impl OxcCheck for Check {
                 }
                 AstKind::WhileStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
-                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span)
+                        && !condition_contains_call(&stmt.test, semantic) {
                             flag(ctx, stmt.span.start, "while", diagnostics);
                         }
                 }
                 AstKind::DoWhileStatement(stmt) => {
                     if let Statement::BlockStatement(block) = &stmt.body
-                        && block_is_empty_no_comment(&block.body, ctx.source, block.span) {
+                        && block_is_empty_no_comment(&block.body, ctx.source, block.span)
+                        && !condition_contains_call(&stmt.test, semantic) {
                             flag(ctx, stmt.span.start, "do-while", diagnostics);
                         }
                 }
@@ -107,6 +110,28 @@ impl OxcCheck for Check {
                 _ => {}
             }
     }
+}
+
+/// True when the loop condition contains a call — `while (queue.shift()) {}`,
+/// `while ((m = re.exec(s)) !== null) {}`, `while (await next()) {}`.
+///
+/// A call there is what advances the loop, so the whole iteration is the
+/// condition and the empty body is the drain/poll idiom rather than forgotten
+/// work; a body comment could only restate the condition. A condition with no
+/// call — a bare flag (`while (running) {}`), a literal, a pure comparison — is
+/// not self-documenting and is still flagged. The Rust backend draws the same
+/// line on the same idiom.
+///
+/// Answered by span containment over the semantic nodes: any call nested
+/// anywhere in the condition counts, whatever wraps it.
+fn condition_contains_call(condition: &Expression, semantic: &oxc_semantic::Semantic) -> bool {
+    let condition_span = condition.span();
+    semantic.nodes().iter().any(|node| {
+        let AstKind::CallExpression(call) = node.kind() else {
+            return false;
+        };
+        condition_span.start <= call.span.start && call.span.end <= condition_span.end
+    })
 }
 
 /// Returns true if the block body has no statements AND the source text
@@ -248,12 +273,64 @@ mod tests {
 
     #[test]
     fn flags_empty_while() {
-        assert_eq!(run_on("while (poll()) {}").len(), 1);
+        assert_eq!(run_on("while (running) {}").len(), 1);
     }
 
     #[test]
     fn flags_empty_do_while() {
-        assert_eq!(run_on("do {} while (cond());").len(), 1);
+        assert_eq!(run_on("do {} while (i-- > 0);").len(), 1);
+    }
+
+    // ── call-in-condition exemption (issue #1436) ────────────────
+
+    #[test]
+    fn allows_empty_while_draining_a_queue_issue_1436() {
+        // The call in the condition is what advances the loop — the drain idiom,
+        // the JS twin of the Rust register-polling loop the Rust backend exempts.
+        assert!(run_on("while (queue.shift()) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_while_negated_call_issue_1436() {
+        assert!(run_on("while (!device.isReady()) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_while_assignment_of_call_issue_1436() {
+        // `while ((m = re.exec(s)) !== null) {}` — the call is nested two levels
+        // down in the condition and still drives every iteration.
+        assert!(run_on("while ((m = re.exec(s)) !== null) {}").is_empty());
+    }
+
+    #[test]
+    fn allows_empty_while_awaited_call_issue_1436() {
+        let src = "async function f() { while (await next()) {} }";
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
+    fn allows_empty_do_while_call_issue_1436() {
+        assert!(run_on("do {} while (queue.shift());").is_empty());
+    }
+
+    #[test]
+    fn flags_empty_while_comparison_no_call_issue_1436() {
+        // Narrowness guard: no call, so the condition explains nothing about why
+        // the body is empty.
+        assert_eq!(run_on("while (x < n) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_while_literal_no_call_issue_1436() {
+        assert_eq!(run_on("while (true) {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_empty_for_with_call_in_its_test_issue_1436() {
+        // Narrowness guard: the exemption is for condition-driven loops only — a
+        // `for` loop carries its own update slot, so an empty body there is not
+        // the drain idiom even when the test calls something.
+        assert_eq!(run_on("for (let i = 0; hasMore(i); i++) {}").len(), 1);
     }
 
     #[test]
@@ -268,7 +345,8 @@ mod tests {
 
     #[test]
     fn allows_busy_wait_with_comment() {
-        let src = "while (poll()) { /* busy wait for the device */ }";
+        // A call-free condition, so the in-body comment is what clears it.
+        let src = "while (running) { /* busy wait for the device */ }";
         assert!(run_on(src).is_empty());
     }
 
