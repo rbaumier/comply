@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, is_inside_type_predicate_fn, is_outer_as_unknown_double_cast,
-    name_is_generic_type_param_in_scope, operand_is_typed_as_generic_param,
-    resolves_to_branded_primitive, resolves_to_inferred_type_alias,
+    byte_offset_to_line_col, declared_type_of_operand, is_inside_type_predicate_fn,
+    is_outer_as_unknown_double_cast, name_is_generic_type_param_in_scope,
+    operand_is_typed_as_generic_param, resolves_to_branded_primitive,
+    resolves_to_inferred_type_alias,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, TSType, TSTypeName};
@@ -147,6 +148,47 @@ fn operand_is_global_object(expr: &Expression) -> bool {
     )
 }
 
+/// Whether the cast target is a type the operand's own declaration already
+/// writes down: the binding is declared `x: Target` (the cast restates the
+/// declared type) or `x: Target & …` (the cast drops the intersection's other
+/// members).
+///
+/// Neither refines the value. An intersection is already assignable to each of
+/// its members, so `both as Base` where `both: Base & Extra` moves toward the
+/// LESS specific type — a widening — and no type predicate, `in` or `typeof`
+/// check can express "treat this as less specific". The redundant assertion is
+/// `no-type-assertion`'s subject, not this rule's.
+///
+/// Both sides are matched by written name: the operand's annotation and the cast
+/// target sit in one file, where a name resolves to one type, and a platform
+/// type such as `RequestInit` has no in-file declaration to resolve to.
+fn target_is_written_into_operand_declaration(
+    as_expr: &oxc_ast::ast::TSAsExpression,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let TSType::TSTypeReference(target) = &as_expr.type_annotation else {
+        return false;
+    };
+    if target.type_arguments.is_some() {
+        return false;
+    }
+    let TSTypeName::IdentifierReference(target_id) = &target.type_name else {
+        return false;
+    };
+    let Some(declared) = declared_type_of_operand(&as_expr.expression, semantic) else {
+        return false;
+    };
+    let names_target = |ty: &TSType| {
+        let TSType::TSTypeReference(r) = ty else { return false };
+        let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
+        r.type_arguments.is_none() && id.name == target_id.name
+    };
+    match declared {
+        TSType::TSIntersectionType(intersection) => intersection.types.iter().any(names_target),
+        other => names_target(other),
+    }
+}
+
 /// Whether the cast is a covariant-return override: the operand is a
 /// `super.<member>(…)` call and the target names the class the cast sits in
 /// (`class Atomic extends Position { clone(): Atomic { return super.clone() as
@@ -181,7 +223,9 @@ fn is_super_call_cast_to_enclosing_class(
         .nodes()
         .ancestor_kinds(node_id)
         .find_map(|kind| match kind {
-            AstKind::Class(class) => Some(class.id.as_ref().is_some_and(|id| id.name == target.name)),
+            AstKind::Class(class) => {
+                Some(class.id.as_ref().is_some_and(|id| id.name == target.name))
+            }
             _ => None,
         })
         .unwrap_or(false)
@@ -290,6 +334,14 @@ impl OxcCheck for Check {
         // narrows only the local type, not the generic — so the `as` is the only
         // way to bridge the generic to the concrete type.
         if operand_is_typed_as_generic_param(&as_expr.expression, node.id(), semantic) {
+            return;
+        }
+
+        // Skip casts the operand's own declaration already writes down: an
+        // identity restatement (`x: Base` cast `as Base`) or a widening that
+        // drops the other members of a declared intersection (`x: Base & Extra`
+        // cast `as Base`). Neither refines the value.
+        if target_is_written_into_operand_declaration(as_expr, semantic) {
             return;
         }
 
@@ -827,6 +879,80 @@ mod tests {
         let src = "interface Config { a: number }\n\
                    function f(x: unknown) { return x as Config; }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_widening_cast_to_declared_intersection_member() {
+        // Regression for #8194: the operand is declared `Base & Extra` and the
+        // cast drops `Extra`. An intersection is already assignable to each of
+        // its members, so this moves toward the LESS specific type; no type
+        // predicate / `in` / `typeof` check can express a widening.
+        let src = "interface Base { id: string }\n\
+                   interface Extra { tag: 'x' }\n\
+                   export function widen(): Base {\n\
+                   const both: Base & Extra = { id: '1', tag: 'x' };\n\
+                   return both as Base;\n\
+                   }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_widening_cast_of_intersection_typed_binding_to_platform_type() {
+        // Regression for #8194: hono's body-limit middleware declares
+        // `RequestInit & { duplex: 'half' }` and passes it as a plain
+        // `RequestInit`. The target has no in-file declaration, so the match is
+        // on the name written in both places.
+        let src = "export function reqInit(body: ReadableStream): Request {\n\
+                   const requestInit: RequestInit & { duplex: 'half' } = { body, duplex: 'half' };\n\
+                   return new Request('https://example.com', requestInit as RequestInit);\n\
+                   }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn allows_identity_cast_to_the_declared_type() {
+        // #8194: `x: Foo` cast `as Foo` restates the declared type. There is
+        // nothing to refine; the redundant assertion is `no-type-assertion`'s
+        // subject.
+        let src = "interface Foo { a: number }\n\
+                   export function f(x: Foo) { return x as Foo; }";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected diags: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_narrowing_to_declared_union_member() {
+        // Control for #8194: refining a declared union to one of its members is
+        // the narrowing the rule exists to catch, and a discriminant check IS
+        // the alternative — the declared-type lookup must not silence it.
+        let src = "interface Circle { kind: 'circle' }\n\
+                   interface Square { kind: 'square' }\n\
+                   export function f(shape: Circle | Square) { return shape as Circle; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_cast_of_unannotated_binding_to_unrelated_type() {
+        // Control for #8194: an operand whose declaration carries no annotation
+        // keeps the existing verdict — the declared-type lookup only ever
+        // removes a diagnostic when the target is written in the declaration.
+        let src = "export function f(x: unknown) { const y = x; return y as AdminUser; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
+    }
+
+    #[test]
+    fn still_flags_cast_to_a_type_absent_from_the_declared_intersection() {
+        // Control for #8194: the target must be a member of the declared
+        // intersection. Casting to an unrelated type is still a narrowing.
+        let src = "interface Base { id: string }\n\
+                   interface Extra { tag: 'x' }\n\
+                   export function f(both: Base & Extra) { return both as AdminUser; }";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 1, "expected one diag: {:?}", diags);
     }
 
     #[test]
