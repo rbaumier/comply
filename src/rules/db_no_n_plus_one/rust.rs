@@ -21,10 +21,13 @@
 //! Provenance is decided per receiver, from the crate that declares the
 //! receiver's type ([`rust_helpers::receiver_type_origins`]): a `tonic::Channel`
 //! and a `tokio_postgres::Client` may both be called `client`, and only the
-//! second anchors. When the file declares no type for the receiver, or declares
-//! one the linted crate owns, provenance falls back to the file's own imports
-//! and qualified paths (`rust_helpers::file_references_db_crate`) — the gate the
-//! TypeScript backend applies to the same overloaded names.
+//! second anchors. A receiver whose type is declared by the linted crate itself
+//! is decided by the module that declares it — a crate-local `db` module
+//! re-exporting a pool carries the provenance its `crate::`-rooted path hides.
+//! When the file declares no type for the receiver, provenance falls back to the
+//! file's own imports and qualified paths, plus the linted package's identity: a
+//! database crate's own source reaches its handles through `crate::` paths that
+//! name no crate at all.
 //!
 //! Inline `#[cfg(test)]` modules are exempt: parametrized tests routinely
 //! create a fresh in-memory datastore per loop iteration and run one query
@@ -33,8 +36,10 @@
 //! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::backend::CheckCtx;
 use crate::rules::rust_helpers::{
-    TypeOrigin, file_references_db_crate, is_db_crate, is_test_code, receiver_type_origins,
+    TypeOrigin, file_references_db_crate, import_source_references_db_crate, is_db_crate,
+    is_test_code, receiver_type_origins,
 };
 use crate::rules::sql_helpers::contains_word;
 
@@ -85,7 +90,7 @@ const DB_RECEIVER_NAMES: &[&str] = &[
 /// to carry database provenance ([`receiver_is_db_handle`]). The binding name is
 /// chosen by the author and says nothing about what the value is; the crate the
 /// receiver's type comes from is what makes the call a database query.
-fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
+fn is_db_call(node: tree_sitter::Node, source: &[u8], ctx: &CheckCtx) -> bool {
     let mut current = node;
     // Peel `?` / `.await` wrappers around the call.
     while matches!(current.kind(), "try_expression" | "await_expression") {
@@ -129,7 +134,7 @@ fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 
     // …and database provenance for that receiver, so the anchor names a database
     // handle rather than an HTTP/gRPC/object-storage client sharing the name.
-    receiver_is_db_handle(receiver, source)
+    receiver_is_db_handle(receiver, source, ctx)
 }
 
 /// True if the anchored `receiver` is a database handle.
@@ -137,18 +142,26 @@ fn is_db_call(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// The evidence is the crate that declares the receiver's type, resolved in the
 /// file ([`receiver_type_origins`]):
 /// - a database crate declares it → a database handle;
+/// - the linted crate declares it → the module that declares the type answers,
+///   since a `crate::`-rooted path names no crate of its own;
 /// - external crates alone declare it → not a database handle, whatever else the
 ///   file talks to;
-/// - the linted crate declares it, or the file declares no type for it at all →
-///   the file's own imports and qualified paths answer, the strongest evidence
-///   left once the receiver itself resolves to nothing.
-fn receiver_is_db_handle(receiver: tree_sitter::Node, source: &[u8]) -> bool {
+/// - the file declares no type for the receiver → the file's own provenance
+///   answers, as it does for every receiver it cannot resolve.
+fn receiver_is_db_handle(receiver: tree_sitter::Node, source: &[u8], ctx: &CheckCtx) -> bool {
     let origins = receiver_type_origins(receiver, source);
     if origins
         .iter()
         .any(|origin| matches!(origin, TypeOrigin::ExternalCrate(name) if is_db_crate(name)))
     {
         return true;
+    }
+    if let Some(local) = origins.iter().find_map(|origin| match origin {
+        TypeOrigin::CrateLocal(name) => Some(name),
+        _ => None,
+    }) {
+        return import_source_references_db_crate(ctx.project, ctx.path, local)
+            || file_reaches_db_crate(receiver, source, ctx);
     }
     if !origins.is_empty()
         && origins
@@ -157,7 +170,23 @@ fn receiver_is_db_handle(receiver: tree_sitter::Node, source: &[u8]) -> bool {
     {
         return false;
     }
-    file_references_db_crate(receiver, source)
+    file_reaches_db_crate(receiver, source, ctx)
+}
+
+/// True if the file containing `node` talks to a database at file granularity:
+/// it imports or qualifies a database crate, or the package it belongs to is
+/// itself one — a database crate reaches its own handles through `crate::` paths,
+/// whose leftmost segment is never a crate name.
+fn file_reaches_db_crate(node: tree_sitter::Node, source: &[u8], ctx: &CheckCtx) -> bool {
+    file_references_db_crate(node, source)
+        || ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|manifest| {
+                manifest
+                    .crate_identifier()
+                    .is_some_and(|name| is_db_crate(&name))
+            })
 }
 
 /// True if the receiver the method is called directly on carries a DB-like
@@ -267,7 +296,7 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     }
 
     let Some(inner) = node.named_child(0) else { return };
-    if !is_db_call(inner, source) {
+    if !is_db_call(inner, source, ctx) {
         return;
     }
 
@@ -310,6 +339,14 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Manifest of an application crate — the package is not itself a database
+    /// crate, so only its files' own provenance can anchor a query.
+    const APP_CARGO_TOML: &str = "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+
+    /// Crate root declaring the two modules below it, so the module graph can
+    /// resolve a `use crate::db::…` to the file that backs `crate::db`.
+    const CRATE_ROOT: &str = "pub mod db;\npub mod handler;\n";
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
@@ -629,6 +666,95 @@ mod tests {
             }
         "#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    // Issue #8278 (SeaQL/sea-orm `src/rbac/schema.rs`): a database crate's own
+    // source reaches its connection handle through `crate::` paths, whose root
+    // segment is never a database crate name. The linted package is itself a
+    // database crate, which is the provenance those paths hide.
+    #[test]
+    fn flags_generic_connection_execute_in_loop_in_database_crate() {
+        let cargo = "[package]\nname = \"sea-orm\"\nversion = \"1.1.0\"\nedition = \"2021\"\n";
+        let src = r#"
+            use crate::{ConnectionTrait, DbErr, EntityTrait, Schema};
+
+            async fn create_indexes<C, E>(db: &C, entity: E, schema: &Schema) -> Result<(), DbErr>
+            where
+                C: ConnectionTrait,
+                E: EntityTrait,
+            {
+                for stmt in schema.create_index_from_entity(entity) {
+                    db.execute(&stmt).await?;
+                }
+                Ok(())
+            }
+        "#;
+        let diags = crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            cargo,
+            src,
+            "src/rbac/schema.rs",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Issue #8278, application shape: the handle is a crate-local type re-exported
+    // by a database module. `crate::db::DbPool` roots at `crate`, so the file
+    // itself names no database crate; the module declaring the type does.
+    #[test]
+    fn flags_pool_execute_in_loop_through_crate_local_db_module() {
+        let diags = crate::rules::test_helpers::run_rule_in_indexed_crate(
+            &Check,
+            &[
+                ("Cargo.toml", APP_CARGO_TOML),
+                ("src/lib.rs", CRATE_ROOT),
+                ("src/db.rs", "use sqlx::PgPool;\npub struct DbPool(PgPool);\n"),
+                (
+                    "src/handler.rs",
+                    r"
+                    use crate::db::DbPool;
+
+                    async fn touch(pool: &DbPool, ids: Vec<i32>) {
+                        for id in ids {
+                            pool.execute(build(id)).await;
+                        }
+                    }
+                    ",
+                ),
+            ],
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Issue #8278, negative space: the same crate-local shape whose declaring
+    // module reaches no database crate is an in-memory pool, not a database
+    // handle, and stays silent.
+    #[test]
+    fn allows_pool_execute_in_loop_through_crate_local_non_db_module() {
+        let diags = crate::rules::test_helpers::run_rule_in_indexed_crate(
+            &Check,
+            &[
+                ("Cargo.toml", APP_CARGO_TOML),
+                ("src/lib.rs", CRATE_ROOT),
+                (
+                    "src/db.rs",
+                    "use std::collections::HashMap;\npub struct DbPool(HashMap<u32, u32>);\n",
+                ),
+                (
+                    "src/handler.rs",
+                    r"
+                    use crate::db::DbPool;
+
+                    async fn touch(pool: &DbPool, ids: Vec<i32>) {
+                        for id in ids {
+                            pool.execute(build(id)).await;
+                        }
+                    }
+                    ",
+                ),
+            ],
+        );
+        assert!(diags.is_empty());
     }
 
     // Issue #6856: a qualified path is provenance on its own — `sqlx::query(..)`
