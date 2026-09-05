@@ -1,8 +1,16 @@
 //! no-let oxc backend — flag `let` declarations.
 //!
-//! Exempts cases where `const` is not a valid substitute: a for-loop index
-//! mutated by the loop's update expression, and an uninitialised binding whose
-//! value is written from a function nested below the declaration.
+//! Exempts the two shapes whose value the declaring activation cannot hold: a
+//! for-loop index the loop's own `update` expression writes, and an
+//! uninitialised binding written from a function nested below the declaration,
+//! whose value therefore arrives in a later activation.
+//!
+//! Every other `let` is flagged, including one whose writes all sit in a
+//! `try`/`catch`, a `switch` or a loop of the declaring scope. Those constructs
+//! have no expression form in JavaScript, but their writes do run in the
+//! declaring activation, so a helper function, `find` or `reduce` yields an
+//! initialiser without moving the declaration — which is the restructuring this
+//! rule's remediation asks for.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -459,6 +467,91 @@ mod tests {
                        return count;\n\
                    }";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_uninit_let_written_only_inside_a_try_and_its_catch() {
+        // excalidraw `excalidraw-app/data/index.ts:177`. JavaScript has no
+        // try-expression, but both writes run in the declaring activation, so
+        // `const decrypted = await primary().catch(fallback)` — or the same
+        // shape behind a helper — is a real initialiser.
+        let src = "export async function load(buffer, key) {\n\
+                       let decrypted: ArrayBuffer;\n\
+                       try { decrypted = await decrypt(iv(buffer), buffer, key); }\n\
+                       catch (error) { decrypted = await decrypt(fixedIv, buffer, key); }\n\
+                       return decode(decrypted);\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_uninit_let_written_only_across_switch_cases() {
+        // Same property, another construct without an expression form: a helper
+        // returning from each case is the initialiser. The line the rule draws
+        // is the activation the writes run in, not the statement wrapping them.
+        let src = "export function pick(k: string): number {\n\
+                       let x;\n\
+                       switch (k) { case 'a': x = 1; break; default: x = 2; }\n\
+                       return x;\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_uninit_let_written_by_a_loop_that_breaks() {
+        // `find` is the initialiser.
+        let src = "export function first(cs) {\n\
+                       let hit;\n\
+                       for (const c of cs) { if (p(c)) { hit = c; break; } }\n\
+                       return hit;\n\
+                   }";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_module_cache_read_before_the_function_writes_it() {
+        // excalidraw `packages/element/src/textWrapping.ts:23`. Every reference
+        // sits in `containsCJK`, yet the read that guards the write is what
+        // makes the binding a cache: moving the declaration into the function
+        // recomputes it on every call.
+        let src = "let cachedCjkRegex: RegExp | undefined;\n\
+                   export const containsCJK = (text: string) => {\n\
+                       if (!cachedCjkRegex) { cachedCjkRegex = build(); }\n\
+                       return cachedCjkRegex.test(text);\n\
+                   };";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_value_carried_across_callback_invocations() {
+        // The callback reads the previous iteration's value before overwriting
+        // it, so the binding has to outlive a single invocation.
+        let src = "export function chain(xs) {\n\
+                       let previous;\n\
+                       xs.forEach((x) => { if (previous) { link(previous, x); } previous = x; });\n\
+                   }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_uninit_let_whose_every_reference_sits_in_the_writing_callback() {
+        // marked `src/Lexer.ts:244`: `tempStart` could move into the callback,
+        // so the nested-function exemption over-fires here. It shares every
+        // structural property with the two cases above — which must stay exempt
+        // — bar domination of the reads by the write, so narrowing it needs a
+        // control-flow analysis the rule does not have. Recorded in #8425.
+        // `startIndex` has an initialiser, so it stays flagged.
+        let src = "export function widest(exts, src) {\n\
+                       let startIndex = Infinity;\n\
+                       let tempStart;\n\
+                       exts.forEach((getStartIndex) => {\n\
+                           tempStart = getStartIndex(src);\n\
+                           if (tempStart >= 0) { startIndex = Math.min(startIndex, tempStart); }\n\
+                       });\n\
+                       return startIndex;\n\
+                   }";
+        let lines: Vec<_> = run(src).iter().map(|d| d.line).collect();
+        assert_eq!(lines, vec![2]);
     }
 
     #[test]
