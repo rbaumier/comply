@@ -6522,11 +6522,11 @@ pub fn cast_operand_is_assert_bounded(cast: Node, source: &[u8]) -> bool {
     false
 }
 
-/// The enclosing `block` and the cast's own statement node within it (the direct
-/// child of the block that contains `cast`), or `None` if the cast is not inside
-/// a block statement (e.g. it is a tail expression nested in another expression).
-fn enclosing_block_statement(cast: Node) -> Option<(Node, Node)> {
-    let mut child = cast;
+/// The enclosing `block` and `node`'s own statement within it (the direct child
+/// of the block that contains `node`), or `None` when `node` is not inside a
+/// block statement (e.g. it is a tail expression nested in another expression).
+pub fn enclosing_block_statement(node: Node) -> Option<(Node, Node)> {
+    let mut child = node;
     while let Some(parent) = child.parent() {
         if parent.kind() == "block" {
             return Some((parent, child));
@@ -6673,8 +6673,12 @@ fn strip_paren_tokens<'a>(tokens: &'a [Node<'a>]) -> &'a [Node<'a>] {
 
 /// True if `name` is re-bound or reassigned anywhere in `block` whose write
 /// position lies in `[start, end)` — a shadowing `let name`, an
-/// `assignment_expression`, or a `compound_assignment_expr` to `name`. Used to
-/// invalidate an asserted bound when the value is overwritten before the cast.
+/// `assignment_expression`, or a `compound_assignment_expr` writing to it. Used
+/// to invalidate a fact established about a value when that value is overwritten
+/// before the site the fact is used at.
+///
+/// `name` may be a binding name or a place expression's source text
+/// (`self.store`), so an assignment's left-hand side is compared by text.
 fn name_rebound_in_range(
     block: Node,
     start: usize,
@@ -6699,7 +6703,8 @@ fn name_rebound_in_range(
                 .is_some_and(|p| pattern_contains_identifier(p, name, source)),
             "assignment_expression" | "compound_assignment_expr" => node
                 .child_by_field_name("left")
-                .is_some_and(|l| l.kind() == "identifier" && l.utf8_text(source) == Ok(name)),
+                .and_then(|left| left.utf8_text(source).ok())
+                .is_some_and(|text| text.trim() == name),
             _ => false,
         };
         if rebinds {
@@ -6709,6 +6714,174 @@ fn name_rebound_in_range(
         stack.extend(node.children(&mut c));
     }
     false
+}
+
+/// Whether an early-exit guard preceding `call` in its enclosing block proves the
+/// `.unwrap()`/`.expect()` receiver of `field_expr` holds a value, making the call
+/// unreachable on the path that gets there.
+///
+/// The guard is an `if` with no `else` whose consequence diverges
+/// ([`block_diverges`]) and whose condition, when false, leaves the receiver
+/// occupied:
+/// - `if let None = <receiver>` — fall-through means the receiver is `Some`;
+/// - `<receiver>.is_none()` / `<receiver>.is_err()` as the whole condition;
+/// - either of those as a top-level `||` disjunct (`a.is_empty() ||
+///   <receiver>.is_none()`): not taking the branch falsifies every disjunct.
+///
+/// A nullity test under `&&` says nothing on fall-through (`!(a && b)` leaves `b`
+/// free), and a negated `is_some()` proves the opposite, so neither matches.
+///
+/// The receiver is matched by source text once the adapters that carry the
+/// variant through unchanged are peeled off both sides
+/// ([`variant_preserving_base`]), so a guard on `self.store` covers
+/// `self.store.as_ref().unwrap()`. A write to that text between the guard and the
+/// call ([`name_rebound_in_range`]) discards the guard: what the guard tested is
+/// no longer what the call unwraps.
+///
+/// Only statements preceding the call's own statement in the same block are read,
+/// so a guard after the call, or in a sibling block, does not answer for it.
+pub fn preceded_by_nullity_guard(call: Node, field_expr: Node, source: &[u8]) -> bool {
+    let Some(receiver) = field_expr.child_by_field_name("value") else {
+        return false;
+    };
+    let Ok(receiver_text) = variant_preserving_base(receiver, source).utf8_text(source) else {
+        return false;
+    };
+    let receiver_text = receiver_text.trim();
+    let Some((block, call_stmt)) = enclosing_block_statement(call) else {
+        return false;
+    };
+    let call_start = call.start_byte();
+    let mut cursor = block.walk();
+    for stmt in block.named_children(&mut cursor) {
+        if stmt.id() == call_stmt.id() {
+            break;
+        }
+        let Some(if_expr) = exit_guard_if(stmt) else {
+            continue;
+        };
+        let proves_occupied = if_expr
+            .child_by_field_name("condition")
+            .is_some_and(|c| condition_proves_occupied(c, receiver_text, source));
+        if !proves_occupied {
+            continue;
+        }
+        let diverges = if_expr
+            .child_by_field_name("consequence")
+            .is_some_and(|c| block_diverges(c, source));
+        if !diverges {
+            continue;
+        }
+        if !name_rebound_in_range(block, if_expr.end_byte(), call_start, receiver_text, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// True when `condition` being false guarantees `receiver_text` holds a value.
+/// Recurses through `||` and parentheses only — see [`preceded_by_nullity_guard`]
+/// for why a conjunct carries nothing to the fall-through path.
+fn condition_proves_occupied(condition: Node, receiver_text: &str, source: &[u8]) -> bool {
+    match condition.kind() {
+        "let_condition" => let_condition_is_none_on(condition, receiver_text, source),
+        "parenthesized_expression" => condition
+            .named_child(0)
+            .is_some_and(|inner| condition_proves_occupied(inner, receiver_text, source)),
+        "binary_expression" => {
+            let is_or = condition
+                .child_by_field_name("operator")
+                .and_then(|op| op.utf8_text(source).ok())
+                == Some("||");
+            is_or
+                && (condition
+                    .child_by_field_name("left")
+                    .is_some_and(|n| condition_proves_occupied(n, receiver_text, source))
+                    || condition
+                        .child_by_field_name("right")
+                        .is_some_and(|n| condition_proves_occupied(n, receiver_text, source)))
+        }
+        "call_expression" => is_matching_nullity_call(condition, receiver_text, source),
+        _ => false,
+    }
+}
+
+/// True when `cond` is `let None = <receiver>` whose value matches `receiver_text`.
+fn let_condition_is_none_on(cond: Node, receiver_text: &str, source: &[u8]) -> bool {
+    let Some(pattern) = cond.child_by_field_name("pattern") else {
+        return false;
+    };
+    if pattern.utf8_text(source).map(str::trim) != Ok("None") {
+        return false;
+    }
+    cond.child_by_field_name("value")
+        .and_then(|value| variant_preserving_base(value, source).utf8_text(source).ok())
+        .map(str::trim)
+        == Some(receiver_text)
+}
+
+/// True when `call` is `<receiver_text>.is_none()` or `<receiver_text>.is_err()` —
+/// the two emptiness tests whose falsity leaves the receiver occupied.
+fn is_matching_nullity_call(call: Node, receiver_text: &str, source: &[u8]) -> bool {
+    let Some(function) = call.child_by_field_name("function") else {
+        return false;
+    };
+    if function.kind() != "field_expression" {
+        return false;
+    }
+    let method = function
+        .child_by_field_name("field")
+        .and_then(|f| f.utf8_text(source).ok());
+    if !matches!(method, Some("is_none" | "is_err")) {
+        return false;
+    }
+    function
+        .child_by_field_name("value")
+        .and_then(|value| variant_preserving_base(value, source).utf8_text(source).ok())
+        .map(str::trim)
+        == Some(receiver_text)
+}
+
+/// The expression an `Option`/`Result` receiver takes its variant from, reached by
+/// peeling the argument-less adapters that map `Some`/`Ok` to `Some`/`Ok` and
+/// `None`/`Err` to `None`/`Err`: `as_ref`, `as_mut`, `as_deref`, `as_deref_mut`,
+/// `cloned`, `copied`, `clone`. `self.store` and `self.store.as_ref()` are `None`
+/// together, so a fact about one is a fact about the other.
+fn variant_preserving_base<'tree>(receiver: Node<'tree>, source: &[u8]) -> Node<'tree> {
+    let mut node = receiver;
+    while let Some(inner) = variant_preserving_adapter_receiver(node, source) {
+        node = inner;
+    }
+    node
+}
+
+/// The receiver of `node` when `node` is one of [`variant_preserving_base`]'s
+/// argument-less adapter calls, else `None`.
+fn variant_preserving_adapter_receiver<'tree>(
+    node: Node<'tree>,
+    source: &[u8],
+) -> Option<Node<'tree>> {
+    if node.kind() != "call_expression" {
+        return None;
+    }
+    if node
+        .child_by_field_name("arguments")
+        .is_some_and(|args| args.named_child_count() > 0)
+    {
+        return None;
+    }
+    let function = node.child_by_field_name("function")?;
+    if function.kind() != "field_expression" {
+        return None;
+    }
+    let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    if !matches!(
+        method,
+        "as_ref" | "as_mut" | "as_deref" | "as_deref_mut" | "cloned" | "copied" | "clone"
+    ) {
+        return None;
+    }
+    function.child_by_field_name("value")
 }
 
 /// True if the operand of `cast` (a `type_cast_expression`) is, at its
