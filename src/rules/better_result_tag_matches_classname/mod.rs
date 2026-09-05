@@ -8,8 +8,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "better-result-tag-matches-classname",
-    description: "The string passed to TaggedError('X') must match the class name X.",
-    remediation: "Rename the tag or the class so they match exactly.",
+    description: "The string passed to TaggedError('X') must name the class it tags.",
+    remediation: "Rename the tag or the class so they spell the same name — a trailing 'Error' and letter case may differ.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["better-result"],

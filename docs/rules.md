@@ -349,7 +349,7 @@
 | `better-result-prefer-map-single` | Forbid Result.gen wrapping a single transformation — use .map()/.andThen() instead. | Replace Result.gen with a direct .map() or .andThen() when there is only one yield*. |
 | `better-result-prefer-matcherror-exhaustive` | Prefer matchError over matchErrorPartial when the union is fully enumerable. | Use matchError({ ... }) for exhaustive matching on the error union. |
 | `better-result-require-gen-for-chains` | Require Result.gen + yield* when chaining 2+ Results instead of nested .andThen. | Rewrite the chain using Result.gen(function* () { const a = yield* ...; const b = yield* ...; }). |
-| `better-result-tag-matches-classname` | The string passed to TaggedError('X') must match the class name X. | Rename the tag or the class so they match exactly. |
+| `better-result-tag-matches-classname` | The string passed to TaggedError('X') must name the class it tags. | Rename the tag or the class so they spell the same name — a trailing 'Error' and letter case may differ. |
 | `better-result-tagged-error-cause-unknown` | The cause field in TaggedError must be typed `unknown`, not Error/any. | Declare `cause: unknown` so callers can't rely on a specific error shape. |
 | `better-result-tagged-error-message` | Classes extending TaggedError must declare a message: string field. | Add `message: string` (or `readonly message: string`) to the class body. |
 | `better-result-try-requires-catch` | Result.try / Result.tryPromise must include both `try` and `catch`. | Provide an object with both `try` and `catch` keys. |

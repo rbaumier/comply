@@ -8,11 +8,10 @@ use std::sync::Arc;
 
 pub struct Check;
 
-/// The `TaggedError("tag")` call a class extends, or `None` when the class
-/// extends anything else. better-result 3.x spells the heritage clause
-/// `extends TaggedError("tag")`, 2.x wraps it in a factory call —
-/// `extends TaggedError("tag")<Props>()` — so the tagging call can sit one or
-/// more callee layers below the heritage expression.
+/// The `TaggedError("tag")` call a class extends, if any.
+/// v3 writes `extends TaggedError("tag")`.
+/// v2 writes `extends TaggedError("tag")<Props>()`.
+/// So the call sits under zero or more callee layers.
 fn tagged_error_call<'a>(heritage: &'a Expression<'a>) -> Option<&'a CallExpression<'a>> {
     let mut expr = heritage.get_inner_expression();
     loop {
@@ -22,6 +21,26 @@ fn tagged_error_call<'a>(heritage: &'a Expression<'a>) -> Option<&'a CallExpress
             return Some(call);
         }
         expr = callee;
+    }
+}
+
+/// Whether a tag and a class name spell one error.
+/// A wire-code tag drops the `Error` suffix.
+/// It also starts lowercase: `notFound` names `NotFoundError`.
+fn spells_same_error(tag: &str, class_name: &str) -> bool {
+    without_error_suffix(tag).eq_ignore_ascii_case(without_error_suffix(class_name))
+}
+
+/// `name` stripped of a trailing `Error`, in any case.
+/// Returns `name` itself when that suffix is all there is.
+fn without_error_suffix(name: &str) -> &str {
+    const SUFFIX: &str = "Error";
+    let Some(cut) = name.len().checked_sub(SUFFIX.len()).filter(|&cut| cut > 0) else {
+        return name;
+    };
+    match name.get(cut..) {
+        Some(suffix) if suffix.eq_ignore_ascii_case(SUFFIX) => &name[..cut],
+        _ => name,
     }
 }
 
@@ -49,11 +68,11 @@ impl OxcCheck for Check {
         let Some(super_class) = &class.super_class else { return };
         let Some(call) = tagged_error_call(super_class) else { return };
 
-        // A tag built at runtime carries no name to compare against.
+        // A runtime-built tag has no name to compare.
         let Some(Argument::StringLiteral(literal)) = call.arguments.first() else { return };
         let tag = literal.value.as_str();
 
-        if tag != class_name {
+        if !spells_same_error(tag, class_name) {
             let (line, column) =
                 byte_offset_to_line_col(ctx.source, class.span.start as usize);
             diagnostics.push(Diagnostic {
@@ -62,7 +81,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "TaggedError tag '{tag}' does not match class name '{class_name}'."
+                    "TaggedError tag '{tag}' does not name class '{class_name}'."
                 ),
                 severity: Severity::Error,
                 span: None,
@@ -107,10 +126,8 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
-    /// Issue #8481 — better-result 2.x declares the subclass through a factory
-    /// call, so the heritage expression is `TaggedError("tag")<Props>()`. The
-    /// rule must read the tag through that extra call layer instead of going
-    /// silent on the whole project.
+    /// Issue #8481 — v2 declares the subclass through a factory call.
+    /// Reading it keeps a v2 project from scanning silently clean.
     #[test]
     fn flags_mismatched_tag_in_v2_factory_syntax() {
         let src = r#"export class NotFoundError extends TaggedError("userGone")<{}>() {}"#;
@@ -121,5 +138,32 @@ mod tests {
     fn allows_matching_tag_in_v2_factory_syntax() {
         let src = r#"export class NotFoundError extends TaggedError("NotFoundError")<{ id: string }>() {}"#;
         assert!(run(src).is_empty());
+    }
+
+    /// Issue #8482 — an RFC 7807 API tags with the wire `code`.
+    /// That code is the class name minus its `Error` suffix.
+    #[test]
+    fn allows_tag_that_is_the_class_name_without_its_error_suffix() {
+        for src in [
+            r#"export class NotFoundError extends TaggedError("notFound")<{}>() {}"#,
+            r#"export class ConflictError extends TaggedError("conflict") {}"#,
+            r#"export class RateLimitedError extends TaggedError("rateLimited") {}"#,
+            r#"export class EmailNotVerifiedError extends TaggedError("emailNotVerified") {}"#,
+            r#"export class OrganizationHasAttachedTeamsError extends TaggedError("organizationHasAttachedTeams") {}"#,
+        ] {
+            assert!(run(src).is_empty(), "{src}");
+        }
+    }
+
+    #[test]
+    fn flags_typo_in_a_camel_case_tag() {
+        let src = r#"export class NotFoundError extends TaggedError("notFoundd") {}"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_tag_copied_from_another_error() {
+        let src = r#"export class ConflictError extends TaggedError("notFound") {}"#;
+        assert_eq!(run(src).len(), 1);
     }
 }
