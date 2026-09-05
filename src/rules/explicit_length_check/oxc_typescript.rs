@@ -164,6 +164,10 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.ts")
     }
 
+    fn run_on_tsx(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, source, "t.tsx")
+    }
+
     #[test]
     fn flags_bare_length_in_if() {
         assert_eq!(run_on("if (arr.length) {}").len(), 1);
@@ -496,5 +500,28 @@ mod tests {
     #[test]
     fn allows_as_cast_length_in_variable_initializer_issue_7267() {
         assert!(run_on("const n = arr.length as number;").is_empty());
+    }
+
+    // #7544 / #7168 — a JSX expression container is a value slot: the attribute
+    // value reaches a `number`-typed prop and the child is rendered as text, so
+    // neither coerces to boolean. Locked so the classification cannot regress.
+    #[test]
+    fn allows_length_as_jsx_attribute_value_issue_7544() {
+        let src = "export const x = (\n  <DataTableSkeleton\n    columnCount={columns.length}\n    rowCount={5}\n  />\n);";
+        assert!(run_on_tsx(src).is_empty());
+    }
+
+    #[test]
+    fn allows_length_as_jsx_expression_child_issue_7168() {
+        let src = "export function Count({ items }: { items: string[] }) {\n  \
+                   return <p>{items.length} elements</p>;\n}";
+        assert!(run_on_tsx(src).is_empty());
+    }
+
+    // Control for #7544 / #7168: the rule does run on `.tsx`, so the two
+    // assertions above record a value position, not an unreached rule.
+    #[test]
+    fn still_flags_bare_length_in_if_in_tsx_issue_7168() {
+        assert_eq!(run_on_tsx("if (arr.length) {}").len(), 1);
     }
 }
