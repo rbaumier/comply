@@ -1,6 +1,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
+use crate::rules::comment_blocks::{closes_its_row, is_trailing};
 use std::sync::Arc;
 
 /// When `node` is the direct initializer of a `const`/`let`/`var` declarator,
@@ -25,6 +26,42 @@ fn enclosing_declaration_line<'a>(
         }
     }
     None
+}
+
+/// True when a comment of the file documents what sits on one of `anchors`,
+/// the 1-based rows the regex can be read from.
+///
+/// Two positions qualify, both settled by the comment's own span:
+///
+/// - leading — it closes above the anchor with only blank rows in between, and
+///   it opens its own row. One sharing its row with earlier code labels that
+///   code: `const x = f(); // why` documents the call, not the row below.
+/// - trailing — it opens on the anchor row and closes it. One with code after
+///   it on that row annotates that code: the `/* flag */` of
+///   `check(re, /* flag */ true)` describes `true`.
+///
+/// The caller anchors on the enclosing declaration's row and on the regex's own
+/// row. They differ when the literal sits on a continuation line below
+/// `const X =`, where a comment documents it from either side of the `=`.
+fn has_documenting_comment(
+    semantic: &oxc_semantic::Semantic<'_>,
+    source: &str,
+    anchors: [usize; 2],
+) -> bool {
+    let rows: Vec<&str> = source.lines().collect();
+    let is_blank = |row: usize| rows.get(row - 1).is_some_and(|text| text.trim().is_empty());
+    semantic.comments().iter().any(|comment| {
+        let (start, end) = (comment.span.start as usize, comment.span.end as usize);
+        let (opens_on, _) = byte_offset_to_line_col(source, start);
+        let (closes_on, _) = byte_offset_to_line_col(source, end);
+        anchors.iter().any(|&anchor| {
+            let leads = closes_on < anchor
+                && !is_trailing(source, start)
+                && (closes_on + 1..anchor).all(&is_blank);
+            let trails = opens_on == anchor && closes_its_row(source, end);
+            leads || trails
+        })
+    })
 }
 
 pub struct Check;
@@ -86,32 +123,7 @@ impl OxcCheck for Check {
         // (array element, call argument, object property…) keeps its own line,
         // so an unrelated comment above the enclosing statement never counts.
         let probe_line = enclosing_declaration_line(node, semantic, ctx.source).unwrap_or(line);
-        let row = probe_line.saturating_sub(1);
-        let lines: Vec<&str> = ctx.source.lines().collect();
-
-        // Blank lines between comment and declaration still count as documentation.
-        let mut probe = row;
-        while probe > 0 {
-            probe -= 1;
-            let Some(text) = lines.get(probe) else { break };
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed.starts_with("//")
-                || trimmed.starts_with("/*")
-                || trimmed.starts_with("*")
-            {
-                return;
-            }
-            break;
-        }
-
-        let has_comment_before = semantic.comments().iter().any(|c| {
-            let (cline, _) = byte_offset_to_line_col(ctx.source, c.span.start as usize);
-            cline == line || cline + 1 == line
-        });
-        if has_comment_before {
+        if has_documenting_comment(semantic, ctx.source, [probe_line, line]) {
             return;
         }
 
@@ -195,6 +207,43 @@ mod tests {
         // declaration by a blank line, should still count as documentation
         // for the regex inside the declaration.
         let src = "// Two regexes, intentionally separate so each one is plain and self-explanatory.\n//\n// `BODY_RESPONSE_CALL_RE` — Elysia's legacy fluent shape: a `.body(...)` or\n// `.response(...)` method call whose first token is `z.object(` / `z.strictObject(`.\n\nconst BODY_RESPONSE_CALL_RE = /\\.(?:body|response)\\(\\s*z\\.(?:object|strictObject)\\(/;\n";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_multi_line_block_comment_above() {
+        // Regression for rbaumier/comply#8326 — the closing line of a `/* … */`
+        // block starts with neither `//`, `/*` nor `*`, so a raw-text scan
+        // stopped there and flagged a documented regex.
+        let src = "/* ISO 8601 duration:\n   years, months, days */\nexport const A = /^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$/;\n";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn still_flags_when_previous_statement_carries_a_trailing_comment() {
+        // Regression for rbaumier/comply#8326 — the comment documents the
+        // statement it trails, so it says nothing about the regex below it.
+        let src = "const trimmed = \"x\".trim(); // strip surrounding blanks\nexport const B = /^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$/;\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_when_a_mid_line_block_comment_annotates_another_argument() {
+        // Regression for rbaumier/comply#8326 — `/* caseInsensitive */` labels
+        // the `true` that follows it, not the regex that precedes it.
+        let src = "export const E = check(/^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$/, /* caseInsensitive */ true);\n";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_trailing_block_comment_on_the_regex_line() {
+        let src = "export const C = /^P(?:\\d+Y)?(?:\\d+M)?(?:\\d+D)?$/; /* dark magic */\n";
+        assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
+    }
+
+    #[test]
+    fn allows_comment_between_the_declaration_and_a_continuation_line_regex() {
+        let src = "export const X =\n  // matches static import statements\n  /import\\s+[\"']([^\"']+)[\"']/gmu;\n";
         assert!(run(src).is_empty(), "expected no diagnostics, got: {:?}", run(src));
     }
 

@@ -336,13 +336,28 @@ fn continues_block(
 }
 
 /// True when something other than whitespace precedes `start_byte` on its row.
-/// That is the structural mark of a comment written to label one line of code.
-fn is_trailing(source: &str, start_byte: usize) -> bool {
+/// That is the structural mark of a comment written to label one line of code:
+/// it belongs to what precedes it, so it documents neither the row below it nor
+/// anything that follows it.
+pub fn is_trailing(source: &str, start_byte: usize) -> bool {
     let Some(before) = source.get(..start_byte) else {
         return false;
     };
     let row_start = before.rfind('\n').map_or(0, |newline| newline + 1);
     !before[row_start..].trim().is_empty()
+}
+
+/// True when nothing but whitespace follows `end_byte` on its row — the mirror
+/// of [`is_trailing`], read off the comment's closing delimiter.
+///
+/// A comment with code after it on the same row annotates that code: the
+/// `/* flag */` of `check(re, /* flag */ true)` describes `true`, not `re`.
+pub fn closes_its_row(source: &str, end_byte: usize) -> bool {
+    let Some(after) = source.get(end_byte..) else {
+        return false;
+    };
+    let row_end = after.find('\n').unwrap_or(after.len());
+    after[..row_end].trim().is_empty()
 }
 
 /// True when every row strictly between rows `previous` and `next` is blank.
