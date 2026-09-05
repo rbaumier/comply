@@ -50,13 +50,17 @@ impl OxcCheck for Check {
                 if type_annotation_is_type_predicate(method.value.return_type.as_deref()) {
                     return;
                 }
-                let (name, span_start) = match &method.key {
+                match &method.key {
                     oxc_ast::ast::PropertyKey::StaticIdentifier(id) => {
                         (id.name.as_str(), id.span.start)
                     }
+                    // A `#private` method carries an author-chosen name just like
+                    // a public one — `id.name` holds it without the `#` sigil.
+                    oxc_ast::ast::PropertyKey::PrivateIdentifier(id) => {
+                        (id.name.as_str(), id.span.start)
+                    }
                     _ => return,
-                };
-                (name, span_start)
+                }
             }
             AstKind::VariableDeclarator(decl) => {
                 // Only flag when the value is an arrow or function expression.
@@ -176,6 +180,18 @@ mod tests {
     fn still_flags_second_non_override_method_with_and_boundary() {
         // Second control for #7423: another non-`override` `And`-boundary method.
         let src = "class C { getTargetEntityAndOperationType() {} }";
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_private_method_with_and_boundary() {
+        // Regression for rbaumier/comply#8153 — a `#private` method's name is
+        // authored exactly like a public one, so renaming `fetchAndParse` to
+        // `#fetchAndParse` must not silence the rule.
+        let src = "class Private {\n\
+                   #fetchAndParse(url: string): string { return url; }\n\
+                   use(): string { return this.#fetchAndParse('u'); }\n\
+                   }";
         assert_eq!(run_on(src).len(), 1);
     }
 
