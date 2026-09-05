@@ -45,11 +45,12 @@
 //! function as a pointer, so its signature is locked by the pointer type and
 //! relaxing `String` to `&str`/`Cow` would no longer match it (a compile error).
 //!
-//! A function carrying `#[allow(clippy::needless_pass_by_value)]` (or the
-//! `#[expect(...)]` form) is skipped entirely: that clippy lint is the canonical
-//! upstream check for the same "takes owned, only borrows" premise, so an author
-//! allowing it has already made the explicit statement that the by-value
-//! parameter is intentional.
+//! A function covered by `#[allow(clippy::needless_pass_by_value)]` (or the
+//! `#[expect(...)]` form) — on the function itself, or as an inner
+//! `#![allow(...)]` scoping its module or crate — is skipped entirely: that
+//! clippy lint is the canonical upstream check for the same "takes owned, only
+//! borrows" premise, so an author allowing it has already made the explicit
+//! statement that the by-value parameter is intentional.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{has_clippy_allow, is_in_test_context, is_pub};
@@ -64,7 +65,8 @@ crate::ast_check! { on ["function_item"] => |node, source, ctx, diagnostics|
     // That is the strongest acknowledgement that the by-value parameter is
     // deliberate, so defer to it rather than double-flag a lint they already
     // suppressed. `node` is the `function_item`, so a fn-level `#[allow(...)]` is
-    // seen directly.
+    // seen directly and an inner `#![allow(...)]` is picked up from the enclosing
+    // module or crate root.
     if has_clippy_allow(node, source, "needless_pass_by_value") {
         return;
     }
@@ -949,6 +951,38 @@ mod tests {
         assert!(
             run("#[expect(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fn_under_crate_level_needless_pass_by_value_allow() {
+        // Repro of #7621: a crate-root `#![allow(...)]` scopes every item in the
+        // file, exactly as clippy resolves it, so the by-value `String` is
+        // deliberate even though the fn carries no attribute of its own.
+        assert!(
+            run("#![allow(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn allows_fn_under_module_level_needless_pass_by_value_allow() {
+        // Repro of #7621, module form: the inner attribute scopes the whole
+        // `mod` body.
+        assert!(
+            run("mod m {\n#![allow(clippy::needless_pass_by_value)]\npub fn f(s: String) -> usize { s.len() }\n}")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn flags_fn_when_a_sibling_fn_carries_the_allow() {
+        // Negative control for #7621: an outer `#[allow]` on a *sibling*
+        // function does not scope this one.
+        assert_eq!(
+            run("#[allow(clippy::needless_pass_by_value)]\npub fn a(s: String) -> usize { s.len() }\npub fn b(s: String) -> usize { s.len() }")
+                .len(),
+            1
         );
     }
 
