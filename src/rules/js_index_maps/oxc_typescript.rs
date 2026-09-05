@@ -1,17 +1,26 @@
 //! OxcCheck backend for js-index-maps — flag a bare-identifier
 //! `.find()`/`.findIndex()`/`.filter()`/`.includes()`/`.indexOf()` inside a loop
-//! as a possible O(n*m) array scan. EXCEPTIONS: `.includes()`/`.indexOf()` whose
-//! sole argument is a string literal, or whose receiver is statically a string
-//! (a string literal/template, a string-returning call like `s.toLowerCase()`,
-//! an identifier bound to a `const` initialized to one of those
-//! (`const lc = s.toLowerCase(); lc.includes(x)`), an identifier whose binding
-//! carries an explicit `: string` type annotation (a `string`-typed parameter or
-//! annotated variable), or an identifier narrowed to
-//! `string` by a `typeof x === "string"` guard in an enclosing `&&` chain), is a
-//! `String.prototype` substring search, not array membership — there is no
-//! collection to index, so it is not flagged;
+//! as a possible O(n*m) array scan.
+//!
+//! `.includes()`/`.indexOf()` also exist on `String.prototype`, where they are a
+//! substring search with no collection to index — a `Map`/`Set` cannot answer a
+//! substring query. The two method names alone therefore prove nothing, so they
+//! are flagged only when the receiver is provably an array
+//! ([`crate::oxc_helpers::expression_is_array`]: an array literal, an
+//! array-producing call, or a binding whose declaration carries an array type
+//! annotation or an array initializer). A receiver whose type cannot be resolved
+//! — an imported binding, an untyped parameter, a call into another module — is
+//! left alone: the rule is a performance suggestion, so a miss costs nothing
+//! while a wrong hit asks for a rewrite that cannot be written.
+//!
+//! The other exceptions:
+//! a `.includes()`/`.indexOf()` whose sole argument is a string literal is a
+//! substring search over a receiver whose array-ness rests on a `String`/`Array`
+//! shared method name (`.slice()`, `.concat()`), so it is not flagged;
 //! a two-argument `.indexOf(value, fromIndex)` is a forward-scan cursor (a
 //! positional string/array walk), never a membership lookup, so it is not flagged;
+//! a property-access receiver (`product.correspondences.find(...)`) is typically a
+//! bounded relation field, so it is not flagged;
 //! a method-call chain rooted in an inline literal array (`["./", "/"].includes(x)`,
 //! `[a, b].flat().filter(Boolean)`) has a fixed, hardcoded size independent of
 //! input, so the scan is O(1), not flagged;
@@ -30,11 +39,11 @@
 //! is still detected).
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, expression_is_array};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    Argument, BinaryExpression, BinaryOperator, CallExpression, ChainElement, Expression,
-    LogicalOperator, TSLiteral, TSType, UnaryOperator, VariableDeclarationKind,
+    Argument, BinaryOperator, CallExpression, ChainElement, Expression, LogicalOperator,
+    VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 use std::sync::Arc;
@@ -86,6 +95,8 @@ impl OxcCheck for Check {
         // O(1)-lookup advice is a category error. Array-membership checks pass a
         // variable/element, not a literal substring. (`find`/`findIndex`/`filter`
         // take a callback, so this only affects `includes`/`indexOf`.)
+        // This guard also covers the receivers whose array-ness rests on a method
+        // name `String` and `Array` share (`s.slice(0, 3).includes("ab")`).
         if matches!(method, "includes" | "indexOf")
             && call.arguments.len() == 1
             && matches!(call.arguments.first(), Some(Argument::StringLiteral(_)))
@@ -103,11 +114,13 @@ impl OxcCheck for Check {
             return;
         }
 
-        // `String.prototype.includes`/`indexOf` is a substring search, not array
-        // membership, so the O(1)-lookup advice is a category error — skip when the
-        // receiver is statically a string (see `receiver_is_string_typed`).
+        // `includes`/`indexOf` name a `String.prototype` substring search as much
+        // as an `Array.prototype` membership test, and only the latter has a
+        // `Map`/`Set` rewrite. Require positive evidence that the receiver is an
+        // array; a receiver whose declaration is out of reach (an import, an
+        // untyped parameter, a call into another module) stays unflagged.
         if matches!(method, "includes" | "indexOf")
-            && receiver_is_string_typed(&member.object, node, semantic)
+            && !expression_is_array(&member.object, semantic)
         {
             return;
         }
@@ -356,231 +369,6 @@ fn operand_is_free_variable<'a>(
         .kind(scoping.symbol_declaration(sym_id))
         .span();
     !callback_span.contains_inclusive(decl_span)
-}
-
-/// Methods that exist ONLY on `String.prototype` and return a `string`. A call
-/// to one of these is statically a string-typed expression, so a chained
-/// `.includes()`/`.indexOf()` is a substring search rather than array membership.
-/// Array-shared names (`slice`, `concat`, `toString`) are deliberately excluded:
-/// matching on the method name alone can't tell `str.slice()` from `arr.slice()`,
-/// and exempting `arr.slice().includes(x)` would silently miss a real O(n*m) scan.
-const STRING_RETURNING_METHODS: &[&str] = &[
-    "toLowerCase",
-    "toUpperCase",
-    "trim",
-    "trimStart",
-    "trimEnd",
-    "substring",
-    "substr",
-    "replace",
-    "replaceAll",
-    "normalize",
-    "padStart",
-    "padEnd",
-    "repeat",
-    "charAt",
-];
-
-/// True when `expr` is statically a `string`: a string literal/template, or a
-/// call to a string-returning method (`.toLowerCase()`, `.trim()`, …). Used to
-/// skip `String.prototype.includes`/`indexOf` substring searches, which have no
-/// collection to replace with a Map/Set.
-fn receiver_is_string(expr: &Expression<'_>) -> bool {
-    match expr {
-        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
-        Expression::CallExpression(call) => matches!(
-            &call.callee,
-            Expression::StaticMemberExpression(member)
-                if STRING_RETURNING_METHODS.contains(&member.property.name.as_str())
-        ),
-        _ => false,
-    }
-}
-
-/// True when `expr` is an identifier bound to a `const` declaration whose
-/// initializer is statically a string (`receiver_is_string`: a string
-/// literal/template or a string-returning call like `component.toLowerCase()`).
-/// Such a binding names a string one binding removed
-/// (`const lc = s.toLowerCase(); lc.includes(x)`), so `.includes()`/`.indexOf()`
-/// on it is a `String.prototype` substring search — the same category as the
-/// inline `s.toLowerCase().includes(x)` form — with no collection to hash into a
-/// Map/Set. Only `const` bindings are followed: a `let`/`var` could be reassigned
-/// to a non-string, so its static type is not guaranteed.
-fn receiver_is_const_bound_string<'a>(
-    expr: &Expression<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let Expression::Identifier(id) = expr else {
-        return false;
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let AstKind::VariableDeclarator(decl) =
-        semantic.nodes().kind(scoping.symbol_declaration(sym_id))
-    else {
-        return false;
-    };
-    if decl.kind != VariableDeclarationKind::Const {
-        return false;
-    }
-    matches!(&decl.init, Some(init) if receiver_is_string(init))
-}
-
-/// True when `expr` is an identifier whose binding carries an explicit `string`
-/// type annotation — a `string`-typed function parameter (`providerName: string`)
-/// or an annotated variable (`const s: string = getIt()`). Such a receiver is a
-/// `string` regardless of its initializer, so `.includes()`/`.indexOf()` on it is
-/// a `String.prototype` substring search, not array membership — there is no
-/// collection to hash into a Map/Set. Resolves the identifier to its symbol
-/// declaration and inspects the binding's `TSTypeAnnotation`; a reassignment
-/// cannot violate the annotation (TS enforces the declared type on every write),
-/// so no reassignment check is needed.
-fn receiver_is_declared_string<'a>(
-    expr: &Expression<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let Expression::Identifier(id) = expr else {
-        return false;
-    };
-    let Some(ref_id) = id.reference_id.get() else {
-        return false;
-    };
-    let scoping = semantic.scoping();
-    let Some(sym_id) = scoping.get_reference(ref_id).symbol_id() else {
-        return false;
-    };
-    let declaration = semantic.nodes().kind(scoping.symbol_declaration(sym_id));
-    let annotation = if let AstKind::FormalParameter(param) = declaration {
-        &param.type_annotation
-    } else if let AstKind::VariableDeclarator(decl) = declaration {
-        &decl.type_annotation
-    } else {
-        return false;
-    };
-    annotation
-        .as_ref()
-        .is_some_and(|ann| type_is_string(&ann.type_annotation))
-}
-
-/// True when a TS type is a `string`: the `string` keyword, a string-literal type
-/// (`"foo"`), a union all of whose members are strings (`"a" | "b"`), or any of
-/// those parenthesized. These are the types on which `.includes()`/`.indexOf()`
-/// is `String.prototype`, not `Array.prototype`. A union with any non-string
-/// member is not matched (`.all` requires every constituent to be a string).
-fn type_is_string(ty: &TSType) -> bool {
-    match ty {
-        TSType::TSStringKeyword(_) => true,
-        TSType::TSLiteralType(lit) => matches!(&lit.literal, TSLiteral::StringLiteral(_)),
-        TSType::TSUnionType(union) => union.types.iter().all(type_is_string),
-        TSType::TSParenthesizedType(paren) => type_is_string(&paren.type_annotation),
-        _ => false,
-    }
-}
-
-/// True when the `.includes()`/`.indexOf()` receiver is statically a `string`, so
-/// the call is a `String.prototype` substring search rather than array membership
-/// — there is no collection to hash into a Map/Set, making the O(1)-lookup advice
-/// a category error. A receiver counts as a string when it is a string
-/// literal/template or a string-returning call ([`receiver_is_string`]), an
-/// identifier bound to a `const` initialized to one of those
-/// ([`receiver_is_const_bound_string`]), an identifier whose binding carries an
-/// explicit `: string` type annotation ([`receiver_is_declared_string`]), or an
-/// identifier narrowed to `string` by a `typeof x === "string"` guard in an
-/// enclosing `&&` chain ([`receiver_is_typeof_narrowed_string`]).
-fn receiver_is_string_typed<'a>(
-    object: &Expression<'a>,
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    receiver_is_string(object)
-        || receiver_is_const_bound_string(object, semantic)
-        || receiver_is_declared_string(object, semantic)
-        || receiver_is_typeof_narrowed_string(object, node, semantic)
-}
-
-/// True when the `.includes()`/`.indexOf()` receiver is an identifier proven to
-/// be a `string` by a `typeof <ident> === "string"` guard in an enclosing `&&`
-/// chain that lexically precedes the use
-/// (`typeof preset === "string" && preset.includes(word)`). The `&&` short-circuit
-/// guarantees the guard held when the call ran, so the call is a substring search,
-/// not array membership. The walk stops at a function boundary: beyond it the
-/// short-circuit no longer dominates the use (a nested closure runs later).
-fn receiver_is_typeof_narrowed_string<'a>(
-    receiver: &Expression<'_>,
-    node: &oxc_semantic::AstNode<'a>,
-    semantic: &'a oxc_semantic::Semantic<'a>,
-) -> bool {
-    let Expression::Identifier(recv) = receiver else {
-        return false;
-    };
-    let name = recv.name.as_str();
-
-    let nodes = semantic.nodes();
-    let mut child_span = node.kind().span();
-    for ancestor in nodes.ancestors(node.id()) {
-        match ancestor.kind() {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => return false,
-            AstKind::LogicalExpression(logical)
-                if logical.operator == LogicalOperator::And
-                    && logical.right.span().contains_inclusive(child_span)
-                    && conjunction_narrows_to_string(&logical.left, name) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-        child_span = ancestor.kind().span();
-    }
-    false
-}
-
-/// True when `expr`, read as a conjunction (a nested `&&` chain, a parenthesised
-/// sub-expression, or a single comparison), contains a `typeof <name> ===
-/// "string"` guard. Recurses only through `&&` and parentheses — positions where
-/// every conjunct must hold, preserving the narrowing.
-fn conjunction_narrows_to_string(expr: &Expression<'_>, name: &str) -> bool {
-    match expr {
-        Expression::LogicalExpression(logical) if logical.operator == LogicalOperator::And => {
-            conjunction_narrows_to_string(&logical.left, name)
-                || conjunction_narrows_to_string(&logical.right, name)
-        }
-        Expression::ParenthesizedExpression(paren) => {
-            conjunction_narrows_to_string(&paren.expression, name)
-        }
-        Expression::BinaryExpression(bin) => is_typeof_string_eq(bin, name),
-        _ => false,
-    }
-}
-
-/// True when `bin` is `typeof <name> === "string"`, accepting either operand
-/// order (`typeof x === "string"` and `"string" === typeof x`).
-fn is_typeof_string_eq(bin: &BinaryExpression<'_>, name: &str) -> bool {
-    if bin.operator != BinaryOperator::StrictEquality {
-        return false;
-    }
-    (is_typeof_of_name(&bin.left, name) && is_string_type_tag(&bin.right))
-        || (is_typeof_of_name(&bin.right, name) && is_string_type_tag(&bin.left))
-}
-
-/// True when `expr` is `typeof <name>` for the given identifier name.
-fn is_typeof_of_name(expr: &Expression<'_>, name: &str) -> bool {
-    matches!(
-        expr,
-        Expression::UnaryExpression(unary)
-            if unary.operator == UnaryOperator::Typeof
-                && matches!(&unary.argument, Expression::Identifier(id) if id.name.as_str() == name)
-    )
-}
-
-/// True when `expr` is the string literal `"string"` (the `typeof` tag a string
-/// value produces).
-fn is_string_type_tag(expr: &Expression<'_>) -> bool {
-    matches!(expr, Expression::StringLiteral(lit) if lit.value.as_str() == "string")
 }
 
 /// True when `call`'s callback is invoked once per element of the receiver
@@ -976,8 +764,10 @@ for (const r of rows) {
 
     #[test]
     fn still_flags_includes_with_variable_arg_in_loop() {
-        // Array-membership with a variable argument is the genuine O(n*m) scan.
+        // Array-membership with a variable argument is the genuine O(n*m) scan;
+        // the `.map()` initializer is the evidence that the receiver is an array.
         let diags = run(r#"
+const updatedGtins = updatedRows.map((r) => r.gtin);
 for (const r of rows) {
     if (updatedGtins.includes(r.gtin)) {}
 }
@@ -986,13 +776,19 @@ for (const r of rows) {
     }
 
     #[test]
-    fn still_flags_includes_with_identifier_arg_in_loop() {
-        let diags = run(r#"
+    fn no_fp_on_unresolvable_receiver_includes_in_loop() {
+        // `allowed` resolves to no declaration in this file, so nothing says
+        // whether `.includes()` is `Array.prototype` membership or a
+        // `String.prototype` substring search — the O(1)-lookup advice would be
+        // unwritable if it is the latter.
+        assert!(
+            run(r#"
 for (const k of keys) {
     if (allowed.includes(k)) {}
 }
-"#);
-        assert_eq!(diags.len(), 1);
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
@@ -1106,6 +902,7 @@ for (const x of xs) {
         // A 1-arg `indexOf(value)` membership test is the genuine O(n*m) scan —
         // only the 2-arg `(value, fromIndex)` cursor form is exempt.
         let diags = run(r#"
+const bigList: string[] = getList();
 for (const item of list) {
     if (bigList.indexOf(item) !== -1) { found.push(item); }
 }
@@ -1206,8 +1003,10 @@ for (const x of items) {
 
     #[test]
     fn still_flags_variable_receiver_includes_in_loop() {
-        // A variable receiver is a collection that can grow with input — flagged.
+        // An array-typed variable receiver is a collection that can grow with
+        // input — flagged.
         let diags = run(r#"
+const bigList: string[] = getList();
 for (const o of outputs) { if (bigList.includes(o.slug)) {} }
 "#);
         assert_eq!(diags.len(), 1);
@@ -1323,10 +1122,10 @@ for (const item of items) {
 
     #[test]
     fn still_flags_param_receiver_includes_in_loop() {
-        // A function-parameter receiver is unbounded — not bound to a literal
+        // An array-typed function parameter is unbounded — not bound to a literal
         // array declaration — so it is still flagged.
         let diags = run(r#"
-function check(validValues) {
+function check(validValues: string[]) {
     for (const item of items) {
         if (validValues.includes(item.flag)) { keep(item); }
     }
@@ -1337,9 +1136,9 @@ function check(validValues) {
 
     #[test]
     fn no_fp_on_typeof_string_narrowed_receiver_includes() {
-        // Regression for #6357: `preset` is narrowed to `string` by the
-        // `typeof preset === 'string'` guard in the same `&&`, so
-        // `preset.includes(word)` is a substring search, not array membership.
+        // Regression for #6357: `preset` holds a `string` here, and nothing in
+        // this file makes it an array — `preset.includes(word)` is a substring
+        // search with no collection to hash into a Map/Set.
         assert!(
             run(r#"
 const matched = KEYWORDS_EDGE_TARGETS.some(
@@ -1350,44 +1149,6 @@ const matched = KEYWORDS_EDGE_TARGETS.some(
 "#)
             .is_empty()
         );
-    }
-
-    #[test]
-    fn no_fp_on_typeof_string_narrowed_receiver_reversed_operand_order() {
-        // The `===` operands may appear in either order.
-        assert!(
-            run(r#"
-const matched = words.some(
-    word => "string" === typeof preset && preset.includes(word),
-);
-"#)
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn still_flags_genuine_array_includes_without_typeof_guard() {
-        // No `typeof x === "string"` guard — a genuine array-membership scan in a
-        // loop is still the O(n*m) pattern the rule targets.
-        let diags = run(r#"
-const seen = getSeen();
-for (const x of xs) {
-    if (seen.includes(x)) {}
-}
-"#);
-        assert_eq!(diags.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_includes_when_typeof_guard_is_for_different_identifier() {
-        // The `typeof other === 'string'` guard narrows `other`, not the receiver
-        // `x`, so `x.includes(y)` is unaffected and still flagged.
-        let diags = run(r#"
-for (const y of ys) {
-    if (typeof other === "string" && x.includes(y)) {}
-}
-"#);
-        assert_eq!(diags.len(), 1);
     }
 
     #[test]
@@ -1509,39 +1270,28 @@ for (const x of xs) {
     }
 
     #[test]
-    fn still_flags_const_bound_non_string_call_receiver_includes_in_loop() {
-        // A `const` bound to a plain function call (`getKeywords()`) is NOT provably
-        // a string — its result may be an array — so the membership scan is still the
-        // genuine O(n*m) pattern the rule targets.
-        let diags = run(r#"
-const arr = getKeywords();
+    fn no_fp_on_call_bound_receiver_of_unknown_type_includes_in_loop() {
+        // Regression for #8229 shape 3: `getOutputLine` is declared in another
+        // module, so `outputLine` may just as well be the `string` it is here —
+        // `.includes()` on it has no Map/Set rewrite.
+        assert!(
+            run(r#"
+const outputLine = getOutputLine(chunk);
 for (const x of xs) {
-    if (arr.includes(x)) {}
+    if (outputLine.includes(x)) {}
 }
-"#);
-        assert_eq!(diags.len(), 1);
-    }
-
-    #[test]
-    fn still_flags_let_bound_string_receiver_includes_in_loop() {
-        // A `let` binding could be reassigned to a non-string after the string init,
-        // so its static type is not guaranteed — only `const` bindings are followed.
-        let diags = run(r#"
-let s = 'prefix';
-for (const x of xs) {
-    if (s.includes(x)) {}
-}
-"#);
-        assert_eq!(diags.len(), 1);
+"#)
+            .is_empty()
+        );
     }
 
     #[test]
     fn still_flags_array_param_membership_in_loop() {
-        // #7420 control: `customKeywords` is a function parameter (an unbounded
-        // array) — a genuine array-membership scan the rule targets, unaffected by
-        // the const-bound string exemption.
+        // #7420 control: `customKeywords` is an array-typed function parameter (an
+        // unbounded collection) — the genuine array-membership scan the rule
+        // targets, unaffected by the string-receiver exemptions.
         let diags = run(r#"
-function scan(customKeywords) {
+function scan(customKeywords: string[]) {
     for (const k of ks) {
         if (customKeywords.includes(k)) {}
     }
@@ -1850,13 +1600,30 @@ for (const c of configs) {
     }
 
     #[test]
-    fn still_flags_plain_variable_receiver_array_default_includes_in_loop() {
-        // #7910 negative space: `(bigList ?? []).includes(x)` where `bigList` is a
+    fn no_fp_on_string_element_callback_param_includes() {
+        // Regression for #8047: `v` is an element of a `string[]`, so
+        // `v.includes(pattern)` is `String.prototype.includes` — a substring
+        // search a `Set` cannot answer.
+        assert!(
+            run(r#"
+export function getStableInterpolationReplacers(values: string[]): Record<string, string> {
+    const has = (pattern: string) => values.some((v) => v.includes(pattern));
+    return has('x') ? {} : {};
+}
+"#)
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn still_flags_plain_variable_receiver_array_default_find_in_loop() {
+        // #7910 negative space: `(bigList ?? []).find(...)` where `bigList` is a
         // plain (unbounded) variable is NOT a relation field — the `?? []` default
-        // must not exempt it, so the genuine O(n*m) membership scan stays flagged.
+        // must not extend the property-access exemption to it, so the genuine
+        // O(n*m) scan stays flagged.
         let diags = run(r#"
 for (const x of xs) {
-    if ((bigList ?? []).includes(x)) {}
+    const m = (bigList ?? []).find((v) => v.id === x.id);
 }
 "#);
         assert_eq!(diags.len(), 1);
