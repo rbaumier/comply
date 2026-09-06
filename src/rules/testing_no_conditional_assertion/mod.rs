@@ -1,5 +1,5 @@
-//! testing-no-conditional-assertion — flag `expect(...)` calls inside an
-//! `if`-statement body within a `test()` / `it()` callback.
+//! testing-no-conditional-assertion — flag the `if` chain inside a `test()` /
+//! `it()` callback whose branches hold the test's only assertions.
 
 mod oxc_typescript;
 
