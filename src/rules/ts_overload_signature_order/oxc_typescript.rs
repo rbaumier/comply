@@ -1,11 +1,12 @@
 //! ts-overload-signature-order OXC backend — overloads ordered specific-to-general.
 //!
-//! Non-decreasing-arity progressive groups (each overload takes at least as many
-//! required params as the previous — the `flow`/`pipe`/`compose` pipeline idiom,
-//! plus runs of same-arity type-discriminated sibling overloads) are exempt from
-//! the arity-based check: TypeScript dispatches by arity, and by declaration order
-//! within one arity, so this order is required and never misorders. Same-arity
-//! type-specificity checks still apply.
+//! Two overloads are compared on arity only when the arity sequence between them
+//! decreases somewhere. Inside a non-decreasing run (the `flow`/`pipe`/`compose`
+//! pipeline idiom, runs of same-arity type-discriminated siblings, and each
+//! family of a data-first/data-last pair) TypeScript dispatches by arity — and by
+//! declaration order within one arity — so the ascending order is required and
+//! never misorders. Same-arity type-specificity checks still apply across the
+//! whole group.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
@@ -222,6 +223,21 @@ fn count_union_leaves(union: &TSUnionType) -> u32 {
     total
 }
 
+/// Line of the first arity reset between overloads `a` and `b` — the step where
+/// a lower-arity overload follows a higher-arity one, which is what separates
+/// them into two runs instead of two steps of one ascending run. `None` when the
+/// span never decreases, i.e. when the two overloads are in the same run and the
+/// later one is simply the next, more specific step. Indices past the sequence —
+/// the excluded variadic tail — clamp to its last overload, whose own low count
+/// is not part of the scan.
+fn arity_reset_line(sigs: &[&SigInfo], source: &str, a: usize, b: usize) -> Option<usize> {
+    let last = sigs.len().checked_sub(1)?;
+    let (a, b) = (a.min(last), b.min(last));
+    ((a + 1)..=b)
+        .find(|&j| sigs[j - 1].required_params > sigs[j].required_params)
+        .map(|j| byte_offset_to_line_col(source, sigs[j].span.start as usize).0)
+}
+
 fn check_statements(
     stmts: &[Statement],
     ctx: &CheckCtx,
@@ -253,29 +269,28 @@ fn check_statements(
 
         if group.len() >= 2 {
             // A pipeline/composition idiom (`flow`, `pipe`, `compose`, zod
-            // `partial`/`required`), or a run of same-arity type-discriminated
+            // `partial`/`required`), a run of same-arity type-discriminated
             // sibling overloads (valibot `multipleOf`/`guard`/`required`: a
-            // number/bigint pair at arity 1, then the same pair at arity 2): each
-            // successive overload takes at least as many required params as the one
-            // before (non-decreasing arity). TypeScript dispatches by arity — and by
-            // declaration order within one arity — so this order is required and
-            // correct; it never intercepts a call meant for a higher-arity overload.
-            // Do not apply the arity-based misorder flag to such groups. Same-arity
-            // siblings remain subject to the type-specificity check below.
+            // number/bigint pair at arity 1, then the same pair at arity 2), or one
+            // family of a data-first/data-last pair (remeda's `purry` idiom):
+            // within such a run each successive overload takes at least as many
+            // required params as the one before. TypeScript dispatches by arity —
+            // and by declaration order within one arity — so this order is required
+            // and correct; it never intercepts a call meant for a higher-arity
+            // overload. Only a pair whose span decreases somewhere is a candidate
+            // misorder. Same-arity siblings remain subject to the type-specificity
+            // check below.
             //
             // A final variadic catch-all (`pipe(schema, ...items)`) is the
             // most-general tail of such a pipeline. Its `...items` lands in OXC's
             // `params.rest`, so `count_required_params` counts only the fixed
             // leading params — a total below the specific overloads it generalizes.
-            // Exclude that rest tail from the non-decreasing check so it does not
-            // break the sequence; the specific overloads alone must not decrease.
+            // Exclude that rest tail from the decrease scan so it does not break
+            // the sequence; the specific overloads alone must not decrease.
             let specific = match group.last() {
                 Some(last) if last.has_rest => &group[..group.len() - 1],
                 _ => &group[..],
             };
-            let progressive_arity = specific
-                .windows(2)
-                .all(|w| w[0].required_params <= w[1].required_params);
             'outer: for a in 0..group.len() {
                 for b in (a + 1)..group.len() {
                     // Disjoint first-parameter types mean the overloads accept
@@ -286,7 +301,10 @@ fn check_statements(
                         continue;
                     }
                     // Flag if earlier has strictly fewer required params.
-                    if !progressive_arity && group[a].required_params < group[b].required_params {
+                    if group[a].required_params >= group[b].required_params {
+                        continue;
+                    }
+                    if let Some(reset_line) = arity_reset_line(specific, ctx.source, a, b) {
                         let (line, column) = byte_offset_to_line_col(
                             ctx.source,
                             group[a].span.start as usize,
@@ -297,7 +315,7 @@ fn check_statements(
                             column,
                             rule_id: super::META.id.into(),
                             message: format!(
-                                "Overload of `{name}` is less specific ({ca} params) than a later one ({cb} params); reorder specific-to-general.",
+                                "Overload of `{name}` is less specific ({ca} params) than a later one ({cb} params), which the arity reset at line {reset_line} puts in a separate run; reorder specific-to-general.",
                                 ca = group[a].required_params,
                                 cb = group[b].required_params,
                             ),
@@ -624,6 +642,66 @@ function f(a: A, b: B, c: C): void;
 function f(a: A, b: B): void;
 function f(a: unknown, b?: unknown, c?: unknown): void {}";
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn data_first_data_last_families_do_not_flag() {
+        // Issue #8345: remeda's `purry` idiom declares two ascending families
+        // under one name — data-last (1 → 2 → 3 required params) then
+        // data-first (2 → 3 → 4). The single arity reset at the family boundary
+        // must not strip the ascending exemption from the steps inside either
+        // family, whose overloads are each followed only by higher-arity
+        // siblings of the same family.
+        let src = "\
+export function conditional<T, R0>(case0: Case<T, R0>): (data: T) => R0;
+export function conditional<T, R0, R1>(case0: Case<T, R0>, case1: Case<T, R1>): (data: T) => R0 | R1;
+export function conditional<T, R0, R1, R2>(case0: Case<T, R0>, case1: Case<T, R1>, case2: Case<T, R2>): (data: T) => R0 | R1 | R2;
+export function conditional<T, R0>(data: T, case0: Case<T, R0>): R0;
+export function conditional<T, R0, R1>(data: T, case0: Case<T, R0>, case1: Case<T, R1>): R0 | R1;
+export function conditional<T, R0, R1, R2>(data: T, case0: Case<T, R0>, case1: Case<T, R1>, case2: Case<T, R2>): R0 | R1 | R2;
+export function conditional(...args: readonly unknown[]): unknown {
+    return args;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn three_concatenated_families_do_not_flag() {
+        // Issue #8345: three ascending families (arity 1, 2 each) under one
+        // name. Every ascending step stays inside its own family, so none of
+        // the two arity resets makes any pair a misorder.
+        let src = "\
+function f(a: Alpha): void;
+function f(a: Alpha, b: Opts): void;
+function f(a: Beta): void;
+function f(a: Beta, b: Opts): void;
+function f(a: Gamma): void;
+function f(a: Gamma, b: Opts): void;
+function f(a: unknown, b?: Opts): void {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn arity_pair_spanning_a_decrease_still_flags() {
+        // Negative space for #8345: the exemption is a property of the span
+        // between the two compared overloads, not of the group. In `f(a, b)`,
+        // `f(a)`, `f(a, b, c)` the (2nd, 3rd) pair ascends with nothing
+        // decreasing between them and is exempt, while the (1st, 3rd) pair
+        // spans the 2 → 1 reset and is a genuine misorder: exactly one
+        // diagnostic, naming the reset the reader has to look at.
+        let src = "\
+function f(a: A, b: B): void;
+function f(a: A): void;
+function f(a: A, b: B, c: C): void;
+function f(a: A, b?: B, c?: C): void {}";
+        let diagnostics = run(src);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].line, 1);
+        assert!(
+            diagnostics[0].message.contains("arity reset at line 2"),
+            "{}",
+            diagnostics[0].message
+        );
     }
 
     #[test]
