@@ -61,6 +61,12 @@ impl OxcCheck for Check {
     }
 }
 
+/// How many resolution steps [`is_safe_pattern`] may take. A binding may legally
+/// be initialised from itself (`const a = a`) or from a mutually referential
+/// sibling (``const a = `${b}` ``; ``const b = `${a}` ``), so resolution through
+/// identifiers, `.source` reads and template slots needs a bound to terminate.
+const SAFE_PATTERN_RESOLUTION_STEPS: u8 = 8;
+
 /// True when the `new RegExp(...)` source argument cannot carry attacker-controlled
 /// string content, so the ReDoS / injection vector the rule targets is absent.
 ///
@@ -88,12 +94,28 @@ impl OxcCheck for Check {
 ///   author-fixed elements, so joining them (optionally after mapping each through a
 ///   callback whose only free value is the element) yields a string fixed at author
 ///   time.
+///
+/// Resolution is bounded by [`SAFE_PATTERN_RESOLUTION_STEPS`]; an exhausted budget
+/// answers "not provably safe", so a cyclic or deeply chained binding is flagged
+/// rather than exempted.
 fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic, ctx: &CheckCtx) -> bool {
+    safe_pattern_expr(expr, semantic, ctx, SAFE_PATTERN_RESOLUTION_STEPS)
+}
+
+fn safe_pattern_expr(
+    expr: &Expression,
+    semantic: &oxc_semantic::Semantic,
+    ctx: &CheckCtx,
+    steps: u8,
+) -> bool {
+    let Some(steps) = steps.checked_sub(1) else {
+        return false;
+    };
     match expr {
         Expression::StringLiteral(_) | Expression::RegExpLiteral(_) => true,
-        Expression::TemplateLiteral(tpl) => template_slots_all_safe(tpl, semantic, ctx),
+        Expression::TemplateLiteral(tpl) => template_slots_all_safe(tpl, semantic, ctx, steps),
         Expression::Identifier(ident) => {
-            is_const_literal_binding(ident, semantic, ctx)
+            is_const_literal_binding(ident, semantic, ctx, steps)
                 || is_imported_string_literal_const(ident, semantic, ctx)
         }
         // `RE.source` is safe only when the object is itself a safe pattern (a const
@@ -101,11 +123,11 @@ fn is_safe_pattern(expr: &Expression, semantic: &oxc_semantic::Semantic, ctx: &C
         // string. `.source` on a non-const or call-expression object (e.g.
         // `buildPattern().source`) is not provably static and stays flagged.
         Expression::StaticMemberExpression(member) if member.property.name.as_str() == "source" => {
-            is_safe_pattern(&member.object, semantic, ctx)
+            safe_pattern_expr(&member.object, semantic, ctx, steps)
         }
         Expression::CallExpression(call) => {
             is_object_keys_join_of_const(call, semantic)
-                || is_const_string_array_join(call, semantic, ctx)
+                || is_const_string_array_join(call, semantic, ctx, steps)
         }
         _ => false,
     }
@@ -118,10 +140,11 @@ fn template_slots_all_safe(
     tpl: &TemplateLiteral,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
+    steps: u8,
 ) -> bool {
-    tpl.expressions
-        .iter()
-        .all(|slot| is_static_numeric_expr(slot, semantic) || is_safe_pattern(slot, semantic, ctx))
+    tpl.expressions.iter().all(|slot| {
+        is_static_numeric_expr(slot, semantic) || safe_pattern_expr(slot, semantic, ctx, steps)
+    })
 }
 
 /// True when `call` is the chain `Object.keys(<const-object>).join(<string literal>)`.
@@ -213,6 +236,7 @@ fn is_const_string_array_join(
     call: &oxc_ast::ast::CallExpression,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
+    steps: u8,
 ) -> bool {
     // Outer call must be `<receiver>.join(<StringLiteral>)`.
     let Expression::StaticMemberExpression(join_member) = &call.callee else {
@@ -231,7 +255,9 @@ fn is_const_string_array_join(
     };
     // `<receiver>` is either `<arr>.map(<callback>)` or `<arr>` directly.
     match &join_member.object {
-        Expression::CallExpression(map_call) => is_const_string_array_map(map_call, semantic, ctx),
+        Expression::CallExpression(map_call) => {
+            is_const_string_array_map(map_call, semantic, ctx, steps)
+        }
         receiver => is_const_string_literal_array(receiver, semantic),
     }
 }
@@ -245,6 +271,7 @@ fn is_const_string_array_map(
     call: &oxc_ast::ast::CallExpression,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
+    steps: u8,
 ) -> bool {
     let Expression::StaticMemberExpression(map_member) = &call.callee else {
         return false;
@@ -274,7 +301,7 @@ fn is_const_string_array_map(
     let Some(Statement::ExpressionStatement(body)) = arrow.body.statements.first() else {
         return false;
     };
-    is_safe_pattern_with_param(&body.expression, param.name.as_str(), semantic, ctx)
+    is_safe_pattern_with_param(&body.expression, param.name.as_str(), semantic, ctx, steps)
 }
 
 /// True when `expr` is an inline array literal, or an identifier resolving to a local
@@ -318,14 +345,18 @@ fn is_safe_pattern_with_param(
     element_param: &str,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
+    steps: u8,
 ) -> bool {
+    let Some(steps) = steps.checked_sub(1) else {
+        return false;
+    };
     match expr {
         Expression::Identifier(ident) if ident.name.as_str() == element_param => true,
         Expression::TemplateLiteral(tpl) => tpl.expressions.iter().all(|slot| {
             is_static_numeric_expr(slot, semantic)
-                || is_safe_pattern_with_param(slot, element_param, semantic, ctx)
+                || is_safe_pattern_with_param(slot, element_param, semantic, ctx, steps)
         }),
-        _ => is_safe_pattern(expr, semantic, ctx),
+        _ => safe_pattern_expr(expr, semantic, ctx, steps),
     }
 }
 
@@ -347,6 +378,7 @@ fn is_const_literal_binding(
     ident: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic,
     ctx: &CheckCtx,
+    steps: u8,
 ) -> bool {
     use oxc_ast::AstKind as AK;
 
@@ -362,7 +394,7 @@ fn is_const_literal_binding(
     let Some(init) = &decl.init else {
         return false;
     };
-    is_safe_pattern(init, semantic, ctx)
+    safe_pattern_expr(init, semantic, ctx, steps)
 }
 
 /// True when `ident` resolves to a binding (parameter or variable declarator) whose
@@ -844,6 +876,41 @@ mod tests {
             const arr = ["a", "b"];
             const suffix = getInput();
             const r = new RegExp(arr.map((x) => `${x}${suffix}`).join("|"));
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn terminates_on_self_referential_const() {
+        // Issue #6958: `const a = a` is TDZ-invalid but parses, and its declarator
+        // resolves back to itself — resolution must terminate instead of recursing
+        // until the stack overflows. Unresolvable value → conservatively flagged.
+        let src = r#"
+            const a = a;
+            const r = new RegExp(a);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn terminates_on_mutually_referential_const_templates() {
+        // Issue #6958: two consts referring to each other through template slots
+        // form a resolution cycle across `is_safe_pattern`/`template_slots_all_safe`.
+        let src = r#"
+            const a = `${b}`;
+            const b = `${a}`;
+            const r = new RegExp(a);
+        "#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn terminates_on_self_referential_source_member() {
+        // Issue #6958: the `.source` edge closes a cycle too — `const a = a.source`
+        // resolves the member's object back to the same declarator.
+        let src = r#"
+            const a = a.source;
+            const r = new RegExp(a);
         "#;
         assert_eq!(run(src).len(), 1);
     }
