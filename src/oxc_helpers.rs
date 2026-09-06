@@ -8632,22 +8632,29 @@ fn declared_in_erased_signature(
 ///
 /// Two bindings in disjoint spaces never resolve to each other: the inner one
 /// hides nothing the outer one provides.
+///
+/// A plain `import` names whatever its source module exports, so `project` and
+/// `path` — the file `one` and `other` live in — let that module's export table
+/// decide it.
 #[must_use]
 pub fn declaration_spaces_overlap(
     semantic: &oxc_semantic::Semantic<'_>,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
     one: oxc_semantic::SymbolId,
     other: oxc_semantic::SymbolId,
 ) -> bool {
     (binds_in_value_space(semantic, one) && binds_in_value_space(semantic, other))
-        || (binds_in_type_space(semantic, one) && binds_in_type_space(semantic, other))
+        || (binds_in_type_space(semantic, project, path, one)
+            && binds_in_type_space(semantic, project, path, other))
 }
 
 /// True when `symbol` binds a name TypeScript resolves in value position. See
 /// [`declaration_spaces_overlap`].
 ///
 /// A plain `import` counts unconditionally. Only its type-space claim is earned
-/// from references ([`binds_in_type_space`]): an import the file never uses in
-/// type position would otherwise sit in no space at all and shadow nothing.
+/// from evidence ([`binds_in_type_space`]): an import that fails to earn it
+/// would otherwise sit in no space at all and shadow nothing.
 ///
 /// A parameter of an erased signature type carries value-space flags without
 /// ever becoming a runtime binding, so it is excluded
@@ -8668,12 +8675,17 @@ fn binds_in_value_space(
 /// [`declaration_spaces_overlap`].
 ///
 /// A plain `import` names whatever the source module exports under that name,
-/// which this file cannot see. Its type-space membership is read off the
-/// references instead: it holds a type name only where the file references it
-/// from a type context. An `import type` needs no such evidence — it is
-/// type-only by syntax.
+/// which this file's own syntax does not say. It holds a type name when it is
+/// referenced from a type context here, or when the source module the
+/// [`ImportIndex`](crate::project::ImportIndex) resolves publishes the name as a
+/// pure type export (see [`import_source_exports_type_name`]). Neither fact is
+/// exhaustive — a class or an enum export publishes a type name the index does
+/// not record as one — so a name the evidence misses stays out of the type
+/// space. An `import type` needs no evidence at all: it is type-only by syntax.
 fn binds_in_type_space(
     semantic: &oxc_semantic::Semantic<'_>,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
     symbol: oxc_semantic::SymbolId,
 ) -> bool {
     use oxc_semantic::SymbolFlags;
@@ -8685,9 +8697,44 @@ fn binds_in_type_space(
     let flags = semantic.scoping().symbol_flags(symbol);
     flags.intersects(TYPE_SPACE)
         || (flags.contains(SymbolFlags::Import)
-            && semantic
-                .symbol_references(symbol)
-                .any(oxc_semantic::Reference::is_type))
+            && (semantic.symbol_references(symbol).any(oxc_semantic::Reference::is_type)
+                || import_source_exports_type_name(semantic, project, path, symbol)))
+}
+
+/// True when the module `symbol` is imported from publishes `symbol`'s original
+/// export name as a pure type export (`export type` / `export interface`),
+/// directly or through one `export { name } from './origin'` hop.
+///
+/// False whenever the [`ImportIndex`](crate::project::ImportIndex) cannot
+/// answer — a bare specifier resolves to no source path, a wildcard re-export
+/// leaves the source's export list unenumerable, the file is not indexed — which
+/// leaves the caller on its reference evidence.
+fn import_source_exports_type_name(
+    semantic: &oxc_semantic::Semantic<'_>,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+    symbol: oxc_semantic::SymbolId,
+) -> bool {
+    let index = project.import_index();
+    if index.is_empty() {
+        return false;
+    }
+    let local_name = semantic.scoping().symbol_name(symbol);
+    index.get_imports(path).iter().any(|imp| {
+        imp.local_name == local_name
+            && imp
+                .source_path
+                .as_deref()
+                .is_some_and(|src| export_binds_type_name(index, src, &imp.imported_name))
+    })
+}
+
+/// True when `file` exports `name` as a pure type (`export type` /
+/// `export interface`), following one `export { name } from './origin'` hop.
+fn export_binds_type_name(index: &crate::project::ImportIndex, file: &Path, name: &str) -> bool {
+    let exports_type =
+        |f: &Path| index.get_exports(f).iter().any(|e| e.name == name && e.is_type_only);
+    exports_type(file) || index.reexport_target(file, name).is_some_and(exports_type)
 }
 
 /// Known database / ORM / query-builder packages. A file that imports none of
