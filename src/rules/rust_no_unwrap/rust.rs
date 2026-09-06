@@ -32,11 +32,12 @@
 //! build.rs is exempted — panics in Cargo build scripts are an acceptable
 //! error mode during compilation (e.g. env::var("FOO").unwrap()).
 //!
-//! proc-macro crates are exempted — in a crate with `[lib] proc-macro = true`,
-//! `.unwrap()`/`.expect()` runs while the downstream crate is compiled, so a
-//! panic surfaces as a compile-time error, not a runtime abort. The rule's
-//! "turns a runtime condition into a panic" rationale does not apply: there is
-//! no runtime in a procedural macro.
+//! Code the compiler executes is exempted — a `const fn` body, a `const`/`static`
+//! initializer, a crate with `[lib] proc-macro = true`. There is no runtime
+//! condition there: a `None`/`Err` is `error[E0080]` or a macro-expansion error
+//! in the downstream build, and no remedy is writable — `?` is `error[E0658]` in
+//! a constant function (`Try` is not a const trait) and `unwrap_or_else`
+//! closures are not const-callable.
 //!
 //! Example code is exempted — files under a Cargo `examples/` directory (or a
 //! disabled variant like `examples_disabled/`) are illustrative, so `.unwrap()`
@@ -127,8 +128,8 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::path_utils::is_cargo_example_path;
 use crate::rules::rust_helpers::{
-    is_in_const_initializer, is_in_index_trait_impl, is_infallible_buffer_write, is_test_code,
-    preceded_by_nullity_guard,
+    is_in_index_trait_impl, is_infallible_buffer_write, is_test_code, preceded_by_nullity_guard,
+    runs_at_compile_time,
 };
 
 const KINDS: &[&str] = &["call_expression"];
@@ -211,24 +212,17 @@ impl AstCheck for Check {
         {
             return;
         }
-        // Skip proc-macro crates — in a `[lib] proc-macro = true` crate,
-        // `.unwrap()`/`.expect()` runs while the downstream crate compiles, so a
-        // panic is a compile-time error, not a runtime abort. The rule's runtime
-        // rationale does not hold there.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_proc_macro())
-        {
-            return;
-        }
         // Skip example code — `.unwrap()` keeps examples concise.
         if is_cargo_example_path(ctx.path) {
             return;
         }
-        // Skip const/static item initializers — `unwrap`/`expect` is const-evaluated
-        // at compile time and is the only valid way to extract the value there.
-        if is_in_const_initializer(node) {
+        // Skip code the compiler executes — a `const fn` body, a `const`/`static`
+        // initializer, a `proc-macro = true` crate. A `None`/`Err` there is a
+        // compile-time error, not a runtime abort, and none of the remedies is
+        // writable: `?` is `error[E0658]` in a constant function, `unwrap_or_else`
+        // closures are not const-callable, and a proc-macro reports failure to the
+        // compiler by panicking.
+        if runs_at_compile_time(node, ctx) {
             return;
         }
         // Skip `Index`/`IndexMut` impl bodies — `fn index`/`fn index_mut` return a
@@ -1041,14 +1035,6 @@ proc-macro = true
     }
 
     #[test]
-    fn flags_unwrap_in_const_fn_body() {
-        // A `const fn` body is a runtime body that can return `Result` / use `?`,
-        // so unwrap there is still flagged.
-        let source = "const fn f(x: Option<u32>) -> u32 { x.unwrap() }";
-        assert_eq!(run_on(source).len(), 1);
-    }
-
-    #[test]
     fn allows_expect_in_path_qualified_index_impl() {
         // #4919: toml_edit's `impl ops::Index<&str> for Table` — `fn index`
         // returns `&Item`, so panicking on a missing key is the trait contract.
@@ -1339,6 +1325,32 @@ proc-macro = true
             .is_empty(),
             ".expect() in a proc-macro crate must not flag"
         );
+    }
+
+    /// Closes #8240: a `const fn` body is const-evaluated at every `const` call
+    /// site, where an `unwrap`/`expect` on `None`/`Err` is `error[E0080]` — a
+    /// build failure, not a runtime abort. The `?` the message prescribes is
+    /// `error[E0658]` in a constant function, so the remedy is unwritable there.
+    #[test]
+    fn allows_unwrap_in_const_fn() {
+        for source in [
+            "pub const fn h() -> u8 { y.unwrap() }",
+            r#"pub const fn h() -> Result<u8, E> { Ok(y.expect("checked by the caller")) }"#,
+        ] {
+            assert!(run_on(source).is_empty(), "must not flag: {source}");
+        }
+    }
+
+    /// Negative space for #8240: the same bodies without `const` keep flagging —
+    /// `?` and `unwrap_or_else` are writable in a runtime function.
+    #[test]
+    fn flags_unwrap_in_non_const_twin() {
+        for source in [
+            "pub fn h() -> u8 { y.unwrap() }",
+            r#"pub fn h() -> Result<u8, E> { Ok(y.expect("checked by the caller")) }"#,
+        ] {
+            assert_eq!(run_on(source).len(), 1, "must flag: {source}");
+        }
     }
 
     /// The manifest predicate the proc-macro exemption keys on: `[lib]

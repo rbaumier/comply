@@ -22,10 +22,11 @@
 //! targets (files under a `fuzz_targets/` directory) are also exempt:
 //! in a libfuzzer-sys target, `panic!` is the deliberate
 //! crash-signaling mechanism the fuzzer catches to report a found bug.
-//! `proc-macro = true` crates are exempt too: their code runs at compile
-//! time during macro expansion, so a panic surfaces as a compile error in
-//! the downstream build, never a runtime abort of a shipped program — the
-//! rule's "aborts at runtime" premise does not hold there.
+//! Code the compiler executes rather than the shipped program is exempt too — a
+//! `const fn` body, a `const`/`static` initializer, a `proc-macro = true` crate:
+//! the panic is a build failure (`error[E0080]`, or a macro-expansion error in
+//! the downstream build), never a runtime abort, and the prescribed `?` does not
+//! compile there (`error[E0658]`; `Try` is not a const trait).
 //! Crates declaring `categories = ["development-tools::testing"]` are exempt
 //! as well: they are dedicated test infrastructure where `panic!`-based
 //! assertion-failure reporting is idiomatic.
@@ -34,7 +35,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
     cfg_gates_compilation, enclosing_fn, is_in_trait_impl, is_test_code, macro_body,
-    split_top_level_args, string_literal_content,
+    runs_at_compile_time, split_top_level_args, string_literal_content,
 };
 
 const KINDS: &[&str] = &["macro_invocation"];
@@ -92,15 +93,12 @@ impl AstCheck for Check {
         if cfg_gates_compilation(node, source_bytes, "debug_assertions") {
             return;
         }
-        // A `proc-macro = true` crate runs at compile time during macro
-        // expansion: a panic there is a compile error in the downstream
-        // build, not a runtime abort. The "aborts at runtime" premise is
-        // structurally inapplicable, so all panic-family macros are exempt.
-        if ctx
-            .project
-            .nearest_cargo_manifest(ctx.path)
-            .is_some_and(|m| m.is_proc_macro())
-        {
+        // Code the compiler executes — a `const fn` body, a `const`/`static`
+        // initializer, a `proc-macro = true` crate — fails the build rather than
+        // aborting a shipped program, and cannot take the `?` this rule
+        // prescribes. The "aborts at runtime" premise is structurally
+        // inapplicable, so all panic-family macros are exempt there.
+        if runs_at_compile_time(node, ctx) {
             return;
         }
         // A crate declaring `categories = ["development-tools::testing"]` is
@@ -673,6 +671,65 @@ libfuzzer-sys = "0.4"
         // profile, so the panic ships in release and must still flag.
         let source = "#[cfg_attr(debug_assertions, allow(dead_code))]\n\
                       fn ships_in_release() { panic!(\"aborts production\"); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8240_allows_panic_in_const_fn() {
+        // rbaumier/comply#8240 — BurntSushi/jiff `SignedDuration::from_hours`:
+        // a `const fn` rejects out-of-range input with `panic!` because the `?`
+        // the message prescribes is `error[E0658]` in a constant function. At a
+        // `const` call site the panic is `error[E0080]`, a build failure.
+        let source = r#"
+            pub const fn from_hours(hours: i64) -> SignedDuration {
+                if hours > 2_562_047_788_015_215 {
+                    panic!("hours overflowed the maximum signed duration")
+                }
+                SignedDuration { secs: hours * 3600 }
+            }
+        "#;
+        assert!(run_on(source).is_empty());
+    }
+
+    #[test]
+    fn repro_8240_flags_panic_in_non_const_twin() {
+        // Negative space for #8240: byte-for-byte the const fn above without
+        // `const`. `?` and `Result` are writable here, so the panic still flags.
+        let source = r#"
+            pub fn from_hours(hours: i64) -> SignedDuration {
+                if hours > 2_562_047_788_015_215 {
+                    panic!("hours overflowed the maximum signed duration")
+                }
+                SignedDuration { secs: hours * 3600 }
+            }
+        "#;
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_8240_allows_diverging_macros_in_const_fn() {
+        // rbaumier/comply#8240 — jiff `SmallStr::array` rejects an over-long
+        // string with a bare `panic!` in a `let`-`else`; `unreachable!` and
+        // `todo!` are compile-time diagnostics in a `const fn` for the same
+        // reason.
+        for source in [
+            r#"pub const fn array(s: &str) -> SmallStr {
+                   let Some(astr) = ArrayStr::new(s) else { panic!("string too big") };
+                   SmallStr::Array(astr)
+               }"#,
+            "pub const fn f() -> u8 { unreachable!() }",
+            "pub const fn g() -> u8 { todo!() }",
+        ] {
+            assert!(run_on(source).is_empty(), "must not flag: {source}");
+        }
+    }
+
+    #[test]
+    fn repro_8240_flags_panic_in_nested_non_const_fn() {
+        // Negative space for #8240: only the *nearest* enclosing function's
+        // constness counts. A plain `fn` nested in a `const fn` is ordinary
+        // runtime code — it cannot be called from a `const` context at all.
+        let source = "pub const fn outer() { fn inner() { panic!(\"runtime\"); } }";
         assert_eq!(run_on(source).len(), 1);
     }
 

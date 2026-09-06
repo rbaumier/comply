@@ -212,24 +212,43 @@ pub fn is_in_enum_discriminant(node: Node) -> bool {
     false
 }
 
+/// True when the compiler, not the shipped program, is what executes `node` —
+/// so a diverging construct there (`panic!`, `unwrap`, `todo!`, …) is a build
+/// failure and can never abort production.
+///
+/// Three shapes qualify, cheapest first:
+///
+/// - the initializer of a `const`/`static` item, const-evaluated where it is
+///   written ([`is_in_const_initializer`]);
+/// - a `const fn` body ([`is_in_const_fn`]): evaluated in a `const` context the
+///   panic is `error[E0080]`;
+/// - any file of a `proc-macro = true` crate, whose code runs during macro
+///   expansion of the downstream build.
+///
+/// In all three the remediation the panic-family rules prescribe is unwritable:
+/// `?` is `error[E0658]` in a constant function and `Try` is not a const trait,
+/// a `const` item is not a function body at all, and a proc-macro's contract is
+/// to report failure to the compiler. Rules whose rationale is "this aborts at
+/// runtime" have no subject here and call this instead of re-deriving one of the
+/// three tests.
+pub fn runs_at_compile_time(node: Node, ctx: &crate::rules::backend::CheckCtx) -> bool {
+    is_in_const_initializer(node)
+        || is_in_const_fn(node)
+        || ctx
+            .project
+            .nearest_cargo_manifest(ctx.path)
+            .is_some_and(|manifest| manifest.is_proc_macro())
+}
+
 /// True if `node` is in the initializer (the `value` field) of a `const` or
 /// `static` item — the expression after `=` in `const NAME: T = <expr>;`.
-///
-/// A const/static item initializer is const-evaluated at compile time: a
-/// `None`/`Err` there is a compile-time error, not a runtime panic. None of the
-/// usual fallibility remediations apply — `?` does not compile (a const item is
-/// not a function body), `unwrap_or_else` closures are not const-callable, and a
-/// const item cannot evaluate to a `Result`. `unwrap`/`expect` are the only
-/// const-stable, safe way to extract the value, so the panic-family lints have
-/// nothing valid to offer there.
 ///
 /// Walks up parents and, at the first enclosing `const_item` / `static_item`,
 /// returns true only when the subtree it ascended through is that item's `value`
 /// field (so the type annotation isn't exempted). The walk stops at a
-/// `function_item` / `closure_expression` boundary, so a call inside a `const fn`
-/// body — which is a runtime body that can return `Result` and use `?` — keeps
-/// being flagged.
-pub fn is_in_const_initializer(node: Node) -> bool {
+/// `function_item` / `closure_expression` boundary; a call inside a `const fn`
+/// body is [`is_in_const_fn`]'s subject, not this one's.
+fn is_in_const_initializer(node: Node) -> bool {
     let mut cur = node;
     while let Some(parent) = cur.parent() {
         match parent.kind() {
@@ -242,6 +261,28 @@ pub fn is_in_const_initializer(node: Node) -> bool {
         cur = parent;
     }
     false
+}
+
+/// True if the nearest enclosing function of `node` is declared `const`.
+///
+/// Only the nearest one counts: a plain `fn` nested inside a `const fn` is
+/// ordinary runtime code, unreachable from any `const` context. The `const`
+/// token lives in the `function_item`'s `function_modifiers` child, alongside
+/// `async`/`unsafe`/`extern`, so this reads the AST rather than the signature
+/// text.
+fn is_in_const_fn(node: Node) -> bool {
+    let Some(func) = enclosing_fn(node) else {
+        return false;
+    };
+    let mut cursor = func.walk();
+    func.children(&mut cursor)
+        .filter(|child| child.kind() == "function_modifiers")
+        .any(|modifiers| {
+            let mut modifier_cursor = modifiers.walk();
+            modifiers
+                .children(&mut modifier_cursor)
+                .any(|modifier| modifier.kind() == "const")
+        })
 }
 
 /// True if `node` is inside a closure that is passed directly as an argument
@@ -11439,7 +11480,8 @@ mod tests {
             ),
             // Static item initializer.
             ("static S: u32 = foo().unwrap();", true),
-            // A `const fn` body is a runtime body that can return `Result`.
+            // A `const fn` body is not an initializer — it is `is_in_const_fn`'s
+            // subject, and the walk stops at the function boundary.
             ("const fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
             // A plain function-body unwrap is never a const initializer.
             ("fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
@@ -11449,6 +11491,40 @@ mod tests {
             let call = first_unwrap_call(tree.root_node(), src.as_bytes())
                 .expect("source should contain an unwrap/expect call");
             assert_eq!(is_in_const_initializer(call), expected, "src: {src}");
+        }
+    }
+
+    #[test]
+    fn is_in_const_fn_reads_the_nearest_enclosing_function_modifier() {
+        let cases = [
+            ("const fn f(x: Option<u32>) -> u32 { x.unwrap() }", true),
+            ("pub const fn f(x: Option<u32>) -> u32 { x.unwrap() }", true),
+            // Other modifiers may sit alongside `const`.
+            (
+                "pub const unsafe extern \"C\" fn f(x: Option<u32>) -> u32 { x.unwrap() }",
+                true,
+            ),
+            (
+                "impl W { pub const fn get(x: Option<u32>) -> u32 { x.unwrap() } }",
+                true,
+            ),
+            // A non-const modifier is not `const`.
+            ("async fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
+            ("fn f(x: Option<u32>) -> u32 { x.unwrap() }", false),
+            // Only the nearest function counts: a plain `fn` nested in a
+            // `const fn` is ordinary runtime code.
+            (
+                "const fn outer() { fn inner(x: Option<u32>) -> u32 { x.unwrap() } }",
+                false,
+            ),
+            // Outside any function there is no modifier to read.
+            ("static S: u32 = foo().unwrap();", false),
+        ];
+        for (src, expected) in cases {
+            let tree = parse(src);
+            let call = first_unwrap_call(tree.root_node(), src.as_bytes())
+                .expect("source should contain an unwrap/expect call");
+            assert_eq!(is_in_const_fn(call), expected, "src: {src}");
         }
     }
 
