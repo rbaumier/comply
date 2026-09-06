@@ -32,7 +32,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    cfg_test_gates_compilation, has_const_incompatible_attribute, is_in_test_macro_fn,
+    cfg_gates_compilation, has_const_incompatible_attribute, is_in_test_macro_fn,
     is_test_only_rust_file,
 };
 
@@ -128,7 +128,7 @@ impl AstCheck for Check {
 /// True when `node` is compiled only into a test binary, so a shipped artifact
 /// reserves no address for it.
 ///
-/// Three gates, in cost order: `cfg_test_gates_compilation` (the static itself,
+/// Three gates, in cost order: `cfg_gates_compilation` (the static itself,
 /// an enclosing scope, or the file), an enclosing `#[test]` function, then
 /// `is_test_only_rust_file` — the whole file being a Cargo integration-test
 /// target or reached through a `#[cfg(test)] mod …;` declaration. The first two
@@ -141,11 +141,11 @@ impl AstCheck for Check {
 ///
 /// Not `is_in_test_context`: it misses `#[cfg(test)]` on the static itself, and
 /// it counts `#[cfg_attr(test, …)]`, which leaves the item in the release build.
-/// Conservative in the same direction as `cfg_test_gates_compilation`: a
+/// Conservative in the same direction as `cfg_gates_compilation`: a
 /// `cfg(any(test, feature = "x"))` static counts.
 fn is_test_only(node: tree_sitter::Node, ctx: &CheckCtx) -> bool {
     let source = ctx.source.as_bytes();
-    cfg_test_gates_compilation(node, source)
+    cfg_gates_compilation(node, source, "test")
         || is_in_test_macro_fn(node, source)
         || is_test_only_rust_file(ctx.path, ctx.project)
 }
