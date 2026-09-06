@@ -45,11 +45,29 @@ impl OxcCheck for Check {
 /// when present, is the set of named types in the parameter's type annotation
 /// (a single `TSTypeReference` or a union of them). It is `None` whenever the
 /// annotation is absent or not a clean union of named types (keyword, literal,
-/// generic, function type, …), in which case the comparison falls back to the
-/// scalar `score`.
+/// generic, function type, …), in which case the comparison falls back to
+/// `shape` and the scalar `score`.
 struct ParamType {
     score: u32,
+    shape: TypeShape,
     names: Option<BTreeSet<String>>,
+}
+
+/// Where an annotation sits in the syntactic generality lattice, for the
+/// comparisons the scalar score cannot decide.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeShape {
+    /// A named reference (`Role`, `Uppercase<Role>`), a conditional, indexed or
+    /// mapped type, a function or object shape — or a union containing one.
+    /// Where it sits relative to a primitive needs the type checker: `type
+    /// RoleChar = 'p' | 'n'` is narrower than `string`, `type Loose = string`
+    /// is not, and a function type is neither.
+    Opaque,
+    /// `any` / `unknown` — the top of the lattice, more general than anything.
+    Top,
+    /// A shape the score ranks: literal, primitive keyword, or a union of
+    /// those.
+    Ranked,
 }
 
 /// Signature info for comparison.
@@ -73,7 +91,7 @@ struct SigInfo {
     has_rest: bool,
 }
 
-fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
+fn extract_sig_info(stmt: &Statement) -> Option<SigInfo> {
     let f = match stmt {
         Statement::FunctionDeclaration(f) => f,
         Statement::ExportNamedDeclaration(exp) => match &exp.declaration {
@@ -86,7 +104,7 @@ fn extract_sig_info(stmt: &Statement, source: &str) -> Option<SigInfo> {
     Some(SigInfo {
         name,
         required_params: count_required_params(&f.params),
-        params: param_types(&f.params, source),
+        params: param_types(&f.params),
         first_param_heads: first_param_type_heads(&f.params),
         span: f.span,
         has_body: f.body.is_some(),
@@ -139,16 +157,16 @@ fn count_required_params(params: &FormalParameters) -> usize {
         .count()
 }
 
-fn param_types(params: &FormalParameters, source: &str) -> Vec<ParamType> {
+fn param_types(params: &FormalParameters) -> Vec<ParamType> {
     params
         .items
         .iter()
         .map(|p| match p.type_annotation {
-            Some(ref ann) => ParamType {
-                score: type_specificity_score(&ann.type_annotation, source),
-                names: union_type_names(&ann.type_annotation),
-            },
-            None => ParamType { score: 50, names: None },
+            Some(ref ann) => {
+                let (score, shape) = classify_type(&ann.type_annotation);
+                ParamType { score, shape, names: union_type_names(&ann.type_annotation) }
+            }
+            None => ParamType { score: 50, shape: TypeShape::Ranked, names: None },
         })
         .collect()
 }
@@ -192,9 +210,12 @@ fn collect_named_types(ty: &TSType, names: &mut BTreeSet<String>) -> bool {
     }
 }
 
-fn type_specificity_score(ty: &TSType, _source: &str) -> u32 {
+/// Where an annotation sits in the generality lattice: `score` orders the shapes
+/// that can be ordered syntactically (lower = more specific), `shape` says
+/// whether that order means anything against the other parameter.
+fn classify_type(ty: &TSType) -> (u32, TypeShape) {
     match ty {
-        TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => 0,
+        TSType::TSLiteralType(_) | TSType::TSTemplateLiteralType(_) => (0, TypeShape::Ranked),
         TSType::TSStringKeyword(_)
         | TSType::TSNumberKeyword(_)
         | TSType::TSBooleanKeyword(_)
@@ -204,11 +225,27 @@ fn type_specificity_score(ty: &TSType, _source: &str) -> u32 {
         | TSType::TSNullKeyword(_)
         | TSType::TSUndefinedKeyword(_)
         | TSType::TSVoidKeyword(_)
-        | TSType::TSNeverKeyword(_) => 10,
-        TSType::TSAnyKeyword(_) | TSType::TSUnknownKeyword(_) => 1000,
-        TSType::TSUnionType(union) => 100 + count_union_leaves(union),
-        _ => 50,
+        | TSType::TSNeverKeyword(_) => (10, TypeShape::Ranked),
+        TSType::TSAnyKeyword(_) | TSType::TSUnknownKeyword(_) => (1000, TypeShape::Top),
+        TSType::TSUnionType(union) => classify_union(union),
+        _ => (50, TypeShape::Opaque),
     }
+}
+
+/// A union is exactly as general as its most general member — `'a' | 'b'` still
+/// only accepts two literals — with the leaf count as a tie-break so `A | B`
+/// ranks just above `A`. One opaque member makes the whole union opaque.
+fn classify_union(union: &TSUnionType) -> (u32, TypeShape) {
+    let mut widest = 0;
+    let mut shape = TypeShape::Ranked;
+    for member in &union.types {
+        let (score, member_shape) = classify_type(member);
+        widest = widest.max(score);
+        if member_shape == TypeShape::Opaque {
+            shape = TypeShape::Opaque;
+        }
+    }
+    (widest + count_union_leaves(union), shape)
 }
 
 fn count_union_leaves(union: &TSUnionType) -> u32 {
@@ -243,10 +280,7 @@ fn check_statements(
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let sigs: Vec<Option<SigInfo>> = stmts
-        .iter()
-        .map(|s| extract_sig_info(s, ctx.source))
-        .collect();
+    let sigs: Vec<Option<SigInfo>> = stmts.iter().map(extract_sig_info).collect();
 
     let mut i = 0;
     while i < sigs.len() {
@@ -365,6 +399,9 @@ enum ParamRel {
     AMoreSpecific,
     /// No specific-to-general relationship: equal, or disjoint named unions.
     Incomparable,
+    /// The direction cannot be decided syntactically because one side is
+    /// opaque. `a` may well be the more specific of the two.
+    Unknown,
 }
 
 fn earlier_param_types_more_general(a: &SigInfo, b: &SigInfo) -> bool {
@@ -376,7 +413,11 @@ fn earlier_param_types_more_general(a: &SigInfo, b: &SigInfo) -> bool {
     let mut a_more_general = false;
     for (pa, pb) in ta.iter().zip(tb.iter()) {
         match compare_param(pa, pb) {
-            ParamRel::AMoreSpecific => return false,
+            // An undecidable position is the one that may hold the narrowing —
+            // remeda's `IsNumericLiteral<N> extends true ? N : never` before
+            // `number` — so it blocks the conclusion just like a known-narrower
+            // parameter does.
+            ParamRel::AMoreSpecific | ParamRel::Unknown => return false,
             ParamRel::AMoreGeneral => a_more_general = true,
             ParamRel::Incomparable => {}
         }
@@ -391,6 +432,16 @@ fn compare_param(a: &ParamType, b: &ParamType) -> ParamRel {
     // they are Incomparable and must not be flagged.
     if let (Some(na), Some(nb)) = (&a.names, &b.names) {
         return compare_named_sets(na, nb);
+    }
+    // An opaque annotation hides what it resolves to, so only `any`/`unknown` —
+    // the top of the lattice — are known to be more general than it. Every other
+    // pairing is a guess in both directions, and guessing it reports the
+    // `RoleChar` / `string` narrow-then-fallback pair as a misorder.
+    if a.shape != TypeShape::Top
+        && b.shape != TypeShape::Top
+        && (a.shape == TypeShape::Opaque || b.shape == TypeShape::Opaque)
+    {
+        return ParamRel::Unknown;
     }
     // Fall back to the coarse specificity score when annotations are absent or
     // too complex to reduce to a clean named-type set.
@@ -641,6 +692,156 @@ function f(a: A): void;
 function f(a: A, b: B, c: C): void;
 function f(a: A, b: B): void;
 function f(a: unknown, b?: unknown, c?: unknown): void {}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn literal_union_before_keyword_fallback_does_not_flag() {
+        // Issue #8119: chessops `parseCommentShapeColor` — a union of string
+        // literals in front of a `string` fallback. A union is exactly as
+        // general as its most general member, so four literals are far narrower
+        // than "any string" and the pair is already ordered specific-to-general.
+        let src = "\
+function f(str: 'G' | 'R' | 'Y' | 'B'): Color;
+function f(str: string): Color | undefined;
+function f(str: string): Color | undefined {
+    return undefined;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn named_reference_union_before_keyword_fallback_does_not_flag() {
+        // Issue #8119: chessops `charToRole` — `RoleChar | Uppercase<RoleChar>`
+        // in front of a `string` fallback. The named members carry type
+        // arguments, so the annotation is not a clean named-type set; what they
+        // resolve to is unknowable syntactically, and guessing them more general
+        // than `string` reports the correct order as the incorrect one.
+        let src = "\
+export function charToRole(ch: RoleChar | Uppercase<RoleChar>): Role;
+export function charToRole(ch: string): Role | undefined;
+export function charToRole(ch: string): Role | undefined {
+    return undefined;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn conditional_type_before_keyword_fallback_does_not_flag() {
+        // Issue #8119: remeda `endsWith` — a conditional type narrowing the
+        // suffix to a literal (`string extends Suffix ? never : Suffix`) in
+        // front of the widening `string` fallback. What the conditional
+        // resolves to needs the type checker, exactly like a named reference,
+        // so it is not "more general than `string`".
+        let src = "\
+export function endsWith<T extends string, Suffix extends string>(
+  data: T,
+  suffix: string extends Suffix ? never : Suffix,
+): data is T & `${string}${Suffix}`;
+export function endsWith(data: string, suffix: string): boolean;
+export function endsWith(data: string, suffix: string): boolean {
+  return data.endsWith(suffix);
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn opaque_parameter_blocks_a_wider_sibling_parameter() {
+        // Issue #8119: remeda `hasAtLeast` — the refining overload writes its
+        // first parameter as `IterableContainer | T`, a superset of the
+        // fallback's `IterableContainer`, and does the narrowing in the second
+        // parameter, whose conditional type is opaque. The undecidable position
+        // is the one carrying the refinement, so "wider in the first parameter"
+        // does not make the overload more general.
+        let src = "\
+export function hasAtLeast<T extends IterableContainer, N extends number>(
+  data: IterableContainer | T,
+  minimum: IsNumericLiteral<N> extends true ? N : never,
+): data is ArrayRequiredPrefix<T, N>;
+export function hasAtLeast(data: IterableContainer, minimum: number): boolean;
+export function hasAtLeast(data: IterableContainer, minimum: number): boolean {
+  return data.length >= minimum;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn named_reference_before_keyword_does_not_flag() {
+        // Issue #8119: a bare named reference in front of a keyword. An alias is
+        // normally a narrowing of the primitive it is built from, and nothing in
+        // the annotation says otherwise, so the two are incomparable.
+        let src = "\
+function f(x: Alias): A;
+function f(x: string): B;
+function f(x: string): unknown {
+    return x;
+}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn keyword_before_named_reference_does_not_flag() {
+        // Negative space for #8119: incomparability is symmetric. `write(data:
+        // string)` before `write(data: Buffer)` is a disjoint pair, not a
+        // misorder — ranking keywords above named references would only move the
+        // false positive to the mirror case.
+        let src = "\
+function write(data: string): void;
+function write(data: Buffer): void;
+function write(data: unknown): void {}";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn keyword_before_literal_union_still_flags() {
+        // Negative space for #8119: scoring a union from its members must keep
+        // the genuine misorder — `string` accepts every argument the literal
+        // union does, so it shadows it.
+        let src = "\
+function f(x: string): A;
+function f(x: 'a' | 'b'): B;
+function f(x: string): unknown {
+    return x;
+}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn keyword_union_before_member_keyword_still_flags() {
+        // Negative space for #8119: a union of keywords is more general than one
+        // of its members, so `string | number` before `string` still flags.
+        let src = "\
+function f(x: string | number): A;
+function f(x: string): B;
+function f(x: unknown): unknown {
+    return x;
+}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn any_before_keyword_still_flags() {
+        // Negative space for #8119: `any`/`unknown` are the top of the lattice,
+        // more general than every other annotation including named references.
+        let src = "\
+function f(x: any): A;
+function f(x: string): B;
+function f(x: any): unknown {
+    return x;
+}";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn unknown_before_named_reference_still_flags() {
+        // Negative space for #8119: a named reference is incomparable to the
+        // shapes the score ranks, but never to the top of the lattice.
+        let src = "\
+function f(x: unknown): A;
+function f(x: Alias): B;
+function f(x: unknown): unknown {
+    return x;
+}";
         assert_eq!(run(src).len(), 1);
     }
 
