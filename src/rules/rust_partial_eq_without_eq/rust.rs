@@ -140,9 +140,10 @@ impl AstCheck for Check {
         if !traits.has_partial_eq || traits.has_eq {
             return;
         }
-        // A binary-only or proc-macro crate has no consumer that could hold the
-        // type, so the orphan-rule argument has no subject. This is a memoized
-        // manifest lookup, so it runs before the module walk below.
+        // A crate no Rust code can depend on — binary-only, `proc-macro`, or an
+        // FFI bridge exporting only a C ABI — has no consumer that could hold
+        // the type, so the orphan-rule argument has no subject. This is a
+        // memoized manifest lookup, so it runs before the module walk below.
         if !crate_has_external_consumers(ctx.project, ctx.path) {
             return;
         }

@@ -15,7 +15,11 @@
 //! items in a `proc-macro = true` crate (whose `pub` types are unreachable by
 //! consumers), items in a binary-only crate (no `[lib]` target and no
 //! `src/lib.rs`, so `pub` is merely crate-internal module visibility and no
-//! external consumer can import the type), items with `#[doc(hidden)]`, items
+//! external consumer can import the type), items in an FFI bridge crate (a
+//! `[lib] crate-type` of `cdylib`/`staticlib` with no `rlib`/`lib`, whose only
+//! interface is the C ABI a foreign runtime links against — `Debug` is not part
+//! of it and Cargo cannot resolve the crate as a Rust dependency at all),
+//! items with `#[doc(hidden)]`, items
 //! covered by `#[allow(missing_debug_implementations)]` /
 //! `#[expect(missing_debug_implementations)]` — the rustc lint this rule
 //! mirrors — whether spelled as an item-level outer attribute, an outer
@@ -150,10 +154,9 @@ impl AstCheck for Check {
         {
             return;
         }
-        // A binary-only crate (no `[lib]` target, no `src/lib.rs`) and a
-        // `proc-macro` crate (whose only exports are macros) have no consumer
-        // that could hold the type, so "consumers can't debug it" is
-        // structurally inapplicable.
+        // A crate no Rust code can depend on — binary-only, `proc-macro`, or an
+        // FFI bridge exporting only a C ABI — has no consumer that could hold
+        // the type, so "consumers can't debug it" is structurally inapplicable.
         if !crate_has_external_consumers(ctx.project, ctx.path) {
             return;
         }
@@ -1007,7 +1010,8 @@ impl crate::rules::test_helpers::RunRule for Check {
 mod tests {
     use super::*;
     use crate::rules::test_helpers::{
-        BINARY_ONLY_CARGO_TOML, LIB_CARGO_TOML, PROC_MACRO_CARGO_TOML,
+        BINARY_ONLY_CARGO_TOML, CDYLIB_PLUS_RLIB_CARGO_TOML, FFI_BRIDGE_CARGO_TOML, LIB_CARGO_TOML,
+        PROC_MACRO_CARGO_TOML,
     };
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
@@ -1373,6 +1377,35 @@ mod tests {
             run_on_with_cargo(BINARY_ONLY_CARGO_TOML, "pub enum Buffer { Stdout, Stderr }")
                 .is_empty(),
             "must not flag pub enums in a binary-only crate"
+        );
+    }
+
+    /// Closes #8158 (issue repro): harfbuzz/ttf-parser's `c-api` crate declares
+    /// `crate-type = ["cdylib"]`, so its only interface is the C ABI — the
+    /// opaque handle `ttfp_face` and the ABI mirror `ttfp_name_record` reach no
+    /// Rust consumer that could ever call `Debug::fmt` on them.
+    #[test]
+    fn suppresses_pub_type_in_ffi_bridge_crate() {
+        let handle = "pub struct ttfp_face {\n    _unused: [u8; 0],\n}";
+        assert!(
+            run_on_with_cargo(FFI_BRIDGE_CARGO_TOML, handle).is_empty(),
+            "must not flag an opaque FFI handle in a cdylib crate"
+        );
+        let record = "#[repr(C)]\npub struct ttfp_name_record {\n    pub platform_id: u16,\n}";
+        assert!(
+            run_on_with_cargo(FFI_BRIDGE_CARGO_TOML, record).is_empty(),
+            "must not flag a C ABI mirror struct in a cdylib crate"
+        );
+    }
+
+    /// A crate that ships an `rlib` alongside its `cdylib` is still a Rust
+    /// dependency, so the FFI exemption must not reach it.
+    #[test]
+    fn still_flags_pub_type_in_cdylib_plus_rlib_crate() {
+        assert_eq!(
+            run_on_with_cargo(CDYLIB_PLUS_RLIB_CARGO_TOML, "pub struct Api { name: String }").len(),
+            1,
+            "a crate consumable as a Rust library must still flag"
         );
     }
 

@@ -2841,9 +2841,14 @@ impl CargoManifest {
     /// True when the crate is an FFI bridge: its `[lib] crate-type` declares
     /// `cdylib` and/or `staticlib` and no Rust-library target (`rlib`/`lib`).
     /// Such crates (e.g. Python/Java/Swift bindings) are linked by a foreign
-    /// runtime, not depended on as a Rust library, so there is no Rust consumer
-    /// to configure tracing/logging — `eprintln!` is the only practical way to
-    /// surface errors at the FFI boundary.
+    /// runtime and expose exactly one interface, the C ABI; Cargo cannot even
+    /// resolve them as a dependency, so no Rust crate ever sits above one.
+    ///
+    /// Both consequences follow from that single fact. Nothing above the crate
+    /// configures tracing or captures stderr, so it owns process-wide setup as
+    /// a binary does; and nothing above it can name its `pub` items, so an API
+    /// obligation owed to a downstream Rust consumer (a `Debug` impl,
+    /// `#[non_exhaustive]`, …) has no one to serve.
     #[must_use]
     pub fn is_ffi_bridge_crate(&self) -> bool {
         let has_foreign = self
