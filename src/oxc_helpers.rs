@@ -7941,6 +7941,26 @@ impl ClassShape {
     }
 }
 
+/// The identifier a decorator applies: `Get` for both `@Get` and `@Get('/x')`.
+/// A decorator whose expression is not an identifier — or an identifier call —
+/// applies no nameable decorator here.
+///
+/// oxc's own [`Decorator::name`](oxc_ast::ast::Decorator::name) answers `None`
+/// for the called form with a bare identifier callee (`@Get('/x')`), which is
+/// the form every decorator-driven framework writes.
+#[must_use]
+pub fn decorator_name<'a>(decorator: &'a oxc_ast::ast::Decorator<'a>) -> Option<&'a str> {
+    use oxc_ast::ast::Expression;
+    let callee = match &decorator.expression {
+        Expression::CallExpression(call) => &call.callee,
+        other => other,
+    };
+    match callee {
+        Expression::Identifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
+}
+
 /// True when `decorator_name` is a class decorator that registers its class in
 /// the browser's custom-element registry as a side effect (Lit's
 /// `@customElement('tag')`, which calls `customElements.define(...)`). Such a

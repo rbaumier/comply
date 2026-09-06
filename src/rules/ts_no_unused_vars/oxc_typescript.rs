@@ -3,7 +3,9 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::is_javascript_source;
-use crate::oxc_helpers::{byte_offset_to_line_col, is_custom_element_decorator_name};
+use crate::oxc_helpers::{
+    byte_offset_to_line_col, decorator_name, is_custom_element_decorator_name,
+};
 use crate::rules::backend::{AstType, CheckCtx, OxcCheck};
 use crate::rules::jsdoc_helpers;
 use oxc_ast::AstKind;
@@ -215,16 +217,11 @@ fn is_custom_element_class(
     let AstKind::Class(class) = semantic.nodes().kind(decl_node) else {
         return false;
     };
-    class.decorators.iter().any(|decorator| {
-        let callee = match &decorator.expression {
-            // `@customElement('tag')` — registering form: the decorator invokes
-            // a factory that calls `customElements.define(...)`.
-            Expression::CallExpression(call) => &call.callee,
-            // `@customElement` (no call) — defensive, same registering identifier.
-            other => other,
-        };
-        matches!(callee, Expression::Identifier(id) if is_custom_element_decorator_name(&id.name))
-    })
+    class
+        .decorators
+        .iter()
+        .filter_map(decorator_name)
+        .any(is_custom_element_decorator_name)
 }
 
 /// Collects the factory identifiers named by per-file JSX pragma comments:

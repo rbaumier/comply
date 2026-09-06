@@ -1,12 +1,21 @@
 //! structured-api-error oxc backend — flag `new Error()` inside a route-handler callback.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, decorator_name, enclosing_class};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{CallExpression, Expression};
 use std::sync::Arc;
 
 const ROUTE_METHODS: &[&str] = &["get", "post", "put", "delete", "patch"];
+
+/// Method decorators that bind their method to an HTTP verb in a
+/// decorator-driven framework (`@Get()`, `@Post('/x')`).
+const ROUTE_METHOD_DECORATORS: &[&str] = &["Get", "Post", "Put", "Delete", "Patch", "All"];
+
+/// The class decorator that turns a class into a set of routes. Required
+/// alongside a route-method decorator, so an unrelated `@Get()` accessor
+/// decorator on an ordinary class is not read as a route.
+const CONTROLLER_DECORATOR: &str = "Controller";
 
 /// Conventional identifier names for a web framework router. A route-method call
 /// only signals a route file when chained on one of these receivers, so that
@@ -55,32 +64,119 @@ fn first_arg_is_route_path(arg: &oxc_ast::ast::Argument, source: &str) -> bool {
     }
 }
 
-/// Whether `node` sits lexically inside a route-handler callback — a function or
-/// arrow passed as an argument to a `<router>.<method>('/path', …)` registration.
-/// Walks every enclosing function, so a `new Error` nested in blocks / `if` / `try`
-/// inside the handler still resolves to it, and a handler in any argument position
-/// (after middleware) is recognized. A handler passed as a named function
-/// reference (`app.get('/x', handleX)`) is not reached by this lexical walk.
+/// Whether `node` sits inside a route handler. Walks every enclosing function,
+/// so a `new Error` nested in blocks / `if` / `try` inside the handler still
+/// resolves to it.
 fn is_inside_route_handler(
     node: &oxc_semantic::AstNode,
     semantic: &oxc_semantic::Semantic,
     source: &str,
 ) -> bool {
     let nodes = semantic.nodes();
-    for ancestor in nodes.ancestors(node.id()) {
-        if !matches!(
-            ancestor.kind(),
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
-        ) {
-            continue;
-        }
-        if let AstKind::CallExpression(call) = nodes.parent_node(ancestor.id()).kind()
-            && call_is_route_registration(call, source)
-        {
-            return true;
-        }
+    nodes
+        .ancestors(node.id())
+        .filter(|ancestor| {
+            matches!(
+                ancestor.kind(),
+                AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+            )
+        })
+        .any(|function| is_route_handler(function, semantic, source))
+}
+
+/// Whether the function or arrow `function` is a route handler — registered
+/// through a `<router>.<method>('/path', …)` call, either inline as an argument
+/// or by name, or through a route-method decorator on a controller method.
+fn is_route_handler(
+    function: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    is_route_registration_argument(function.id(), semantic, source)
+        || is_registered_by_name(function, semantic, source)
+        || is_decorated_controller_method(function, semantic)
+}
+
+/// Whether the node `node_id` is written as an argument of a route
+/// registration — the inline-callback form, `app.get('/x', (req, res) => …)`,
+/// where the registration call is the argument's parent.
+fn is_route_registration_argument(
+    node_id: oxc_semantic::NodeId,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    matches!(
+        semantic.nodes().parent_node(node_id).kind(),
+        AstKind::CallExpression(call) if call_is_route_registration(call, source)
+    )
+}
+
+/// Whether `function`'s binding is referenced as an argument of a route
+/// registration — the named-reference form, `app.get('/x', handleX)`, where the
+/// handler is declared apart from the call that registers it. Resolution goes
+/// through the binding's symbol, so a nested declaration that merely reuses the
+/// name is a distinct symbol and stays unregistered.
+fn is_registered_by_name(
+    function: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+    source: &str,
+) -> bool {
+    let Some(symbol_id) = function_binding_symbol(function, semantic) else {
+        return false;
+    };
+    semantic
+        .scoping()
+        .get_resolved_references(symbol_id)
+        .any(|reference| is_route_registration_argument(reference.node_id(), semantic, source))
+}
+
+/// The symbol `function` is bound to: a function declaration's own name
+/// (`function handleX() {}`), or the variable a function or arrow expression
+/// initializes (`const handleX = () => {}`). An anonymous expression binds
+/// nothing and can only be registered inline.
+fn function_binding_symbol(
+    function: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> Option<oxc_semantic::SymbolId> {
+    if let AstKind::Function(declaration) = function.kind()
+        && let Some(id) = declaration.id.as_ref()
+    {
+        return id.symbol_id.get();
     }
-    false
+    match semantic.nodes().parent_node(function.id()).kind() {
+        AstKind::VariableDeclarator(declarator) => declarator
+            .id
+            .get_binding_identifier()
+            .and_then(|binding| binding.symbol_id.get()),
+        _ => None,
+    }
+}
+
+/// Whether `function` is the body of a class method that a route-method
+/// decorator binds to an HTTP verb, inside a class a `@Controller` decorator
+/// turns into a set of routes. Both decorators are required: the class one
+/// establishes that the file's decorators are routing ones.
+fn is_decorated_controller_method(
+    function: &oxc_semantic::AstNode,
+    semantic: &oxc_semantic::Semantic,
+) -> bool {
+    let nodes = semantic.nodes();
+    let AstKind::MethodDefinition(method) = nodes.parent_node(function.id()).kind() else {
+        return false;
+    };
+    let has_route_decorator = method
+        .decorators
+        .iter()
+        .filter_map(decorator_name)
+        .any(|name| ROUTE_METHOD_DECORATORS.contains(&name));
+    has_route_decorator
+        && enclosing_class(function.id(), nodes).is_some_and(|class| {
+            class
+                .decorators
+                .iter()
+                .filter_map(decorator_name)
+                .any(|name| name == CONTROLLER_DECORATOR)
+        })
 }
 
 pub struct Check;
@@ -195,16 +291,46 @@ fastify.get('/users', async (req, reply) => {
     }
 
     #[test]
-    fn allows_error_in_nestjs_decorator_controller() {
-        // NestJS registers routes via decorators, not a `<router>.<method>('/path', …)`
-        // call, so its handler methods are not reached by the callback-argument
-        // ancestor walk. Known false-negative, tracked in #7902.
+    fn flags_bare_error_in_nestjs_decorator_controller() {
+        // Regression for #7902: a route-verb decorator on a method of a
+        // `@Controller` class registers that method as a handler.
         let src = r#"
 import { Controller, Get } from '@nestjs/common'
 @Controller('users')
 export class UsersController {
     @Get()
     find() {
+        throw new Error('boom')
+    }
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_error_in_route_decorated_method_of_undecorated_class() {
+        // Negative space for #7902: a route-verb decorator alone does not make a
+        // method a handler — the class must be a `@Controller`.
+        let src = r#"
+class Cache {
+    @Get()
+    read() {
+        throw new Error('boom')
+    }
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_in_undecorated_method_of_controller_class() {
+        // Negative space for #7902: a private helper method of a controller is not
+        // itself a route — only the route-decorated methods are.
+        let src = r#"
+import { Controller, Get } from '@nestjs/common'
+@Controller('users')
+export class UsersController {
+    private assertLoaded() {
         throw new Error('boom')
     }
 }
@@ -495,14 +621,60 @@ app.post("/y", async (req, reply) => {
     }
 
     #[test]
-    fn allows_error_in_named_reference_handler() {
-        // A handler passed as a named function reference is not lexically enclosed
-        // by the route registration, so the ancestor walk does not reach it. Known
-        // false-negative, tracked in #7902.
+    fn flags_bare_error_in_named_reference_handler() {
+        // Regression for #7902: the handler is passed by name, so its declaration
+        // is reached through the binding's references, not the lexical ancestors.
         let src = r#"
 app.get("/x", handleX);
 function handleX(req, res) {
     throw new Error("boom");
+}
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_bare_error_in_arrow_binding_handler_passed_by_name() {
+        // Regression for #7902: an arrow assigned to a `const` and registered by
+        // name resolves through the same binding.
+        let src = r#"
+const handleX = (req, res) => {
+    throw new Error("boom");
+};
+router.post("/x", handleX);
+"#;
+        assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn allows_error_in_function_passed_to_non_route_call() {
+        // Negative space for #7902: being referenced elsewhere is not enough — the
+        // reference must be an argument of a route registration.
+        let src = r#"
+app.use(reportError);
+setTimeout(reportError, 1000);
+function reportError(req, res) {
+    throw new Error("boom");
+}
+"#;
+        assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
+    }
+
+    #[test]
+    fn allows_error_in_shadowing_function_of_a_handler_name() {
+        // Negative space for #7902: resolution goes through the binding, so a
+        // nested function that merely reuses the handler's name is a distinct
+        // symbol and is not registered.
+        let src = r#"
+app.get("/x", handleX);
+function handleX(req, res) {
+    res.send("ok");
+}
+function outer() {
+    function handleX() {
+        throw new Error("boom");
+    }
+    return handleX;
 }
 "#;
         assert!(run_on(src).is_empty(), "got: {:?}", run_on(src));
