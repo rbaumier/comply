@@ -1971,7 +1971,12 @@ pub fn has_const_incompatible_attribute(item: Node, source: &[u8]) -> bool {
 /// `segments` as the last `::` segment of its path — so a path-qualified
 /// `#[core::no_mangle]` matches `no_mangle`, while an unrelated attribute naming
 /// one as an *argument* (`#[allow(no_mangle)]`) does not.
-fn has_declared_attribute_segment(item: Node, source: &[u8], segments: &[&str]) -> bool {
+///
+/// Use this over [`has_outer_attribute_path`] when the attribute belongs to a
+/// crate that may be reached under either spelling — `#[get("/x")]` and
+/// `#[actix_web::get("/x")]` name the same route macro.
+#[must_use]
+pub fn has_declared_attribute_segment(item: Node, source: &[u8], segments: &[&str]) -> bool {
     any_preceding_attribute_item(item, |attribute_item| {
         any_declared_attribute(attribute_item, source, &|path, _arguments| {
             segments.contains(&path.rsplit("::").next().unwrap_or(path))
