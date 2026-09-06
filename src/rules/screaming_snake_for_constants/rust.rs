@@ -1,4 +1,5 @@
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::rules::rust_helpers::{enclosing_fn, has_clippy_allow};
 use tree_sitter::Node;
 
 crate::ast_check! { on ["const_item", "static_item"] prefilter = ["const", "static"] => |node, source, ctx, diagnostics|
@@ -86,77 +87,26 @@ fn is_google_k_prefix_constant(name: &str) -> bool {
         && bytes.all(|b| b.is_ascii_alphanumeric())
 }
 
-/// True if the const/static `item` is covered by an explicit
-/// `#[allow(non_upper_case_globals)]` (or the broader
-/// `#[allow(nonstandard_style)]`), which is the compiler-level opt-out
-/// for the upper-case-globals convention. The allow is honored whether it
-/// sits on the item itself or on an enclosing `impl` (preceding
-/// `attribute_item` outer-attribute sibling), on an enclosing module
-/// (inner `#![allow(...)]`), or at the crate root.
+/// True if the const/static `item` is covered by an explicit `#[allow]` or
+/// `#[expect]` of `non_upper_case_globals` — the rustc lint this rule mirrors —
+/// or of the `nonstandard_style` group that contains it. Either attribute is the
+/// author telling the compiler the name is deliberate, so the rule defers to it.
+///
+/// [`has_clippy_allow`] resolves the attribute the way rustc does: on the item
+/// itself, as an outer attribute on any enclosing scope (`impl`, `mod`), and as
+/// an inner `#![allow(…)]` of an enclosing block, module, or the crate root. It
+/// stops reading outer attributes once its walk leaves the enclosing function,
+/// so a const declared inside a function body resumes the search above that
+/// function: an `#[allow]` on the surrounding `impl`/`mod` covers such a const
+/// exactly as it covers the function's siblings.
 fn allows_non_upper_case_globals(item: Node, source: &[u8]) -> bool {
-    // Item-level: `#[allow(...)]` as a preceding outer-attribute sibling.
-    if has_outer_allow_sibling(item, source) {
-        return true;
-    }
-
-    let mut cur = item;
-    while let Some(parent) = cur.parent() {
-        // Enclosing `impl`: `#[allow(...)]` as an outer attribute on the
-        // `impl` block whose body holds the associated const.
-        if parent.kind() == "impl_item" && has_outer_allow_sibling(parent, source) {
-            return true;
-        }
-        // Module- and crate-level: `#![allow(...)]` inner attributes on any
-        // enclosing module or the file root.
-        if (parent.kind() == "mod_item" || parent.kind() == "source_file")
-            && has_inner_allow_non_upper_case_globals(parent, source)
-        {
-            return true;
-        }
-        cur = parent;
-    }
-    false
-}
-
-/// True if `node` is preceded by an outer `#[allow(...)]` attribute that
-/// suppresses the upper-case-globals convention. Consecutive
-/// `attribute_item` siblings are walked so the allow is found regardless of
-/// its position among other outer attributes.
-fn has_outer_allow_sibling(node: Node, source: &[u8]) -> bool {
-    let mut sibling = node.prev_named_sibling();
-    while let Some(s) = sibling {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        if attr_allows_non_upper_case_globals(s, source) {
-            return true;
-        }
-        sibling = s.prev_named_sibling();
-    }
-    false
-}
-
-/// True if `parent` (a `mod_item` or `source_file`) carries an inner
-/// `#![allow(non_upper_case_globals)]` / `#![allow(nonstandard_style)]`.
-fn has_inner_allow_non_upper_case_globals(parent: Node, source: &[u8]) -> bool {
-    let body = match parent.kind() {
-        "mod_item" => parent.child_by_field_name("body"),
-        _ => Some(parent),
-    };
-    let Some(body) = body else { return false };
-    let mut cursor = body.walk();
-    body.children(&mut cursor).any(|child| {
-        child.kind() == "inner_attribute_item"
-            && attr_allows_non_upper_case_globals(child, source)
+    std::iter::successors(Some(item), |node| {
+        enclosing_fn(*node).and_then(|function| function.parent())
     })
-}
-
-/// True if the attribute node's text is an `allow` lint suppression that
-/// includes `non_upper_case_globals` or the broader `nonstandard_style`.
-fn attr_allows_non_upper_case_globals(attr: Node, source: &[u8]) -> bool {
-    let Ok(text) = attr.utf8_text(source) else { return false };
-    text.contains("allow")
-        && (text.contains("non_upper_case_globals") || text.contains("nonstandard_style"))
+    .any(|scope| {
+        has_clippy_allow(scope, source, "non_upper_case_globals")
+            || has_clippy_allow(scope, source, "nonstandard_style")
+    })
 }
 
 /// True if the const/static `item` carries a `#[deprecated]` attribute as a
@@ -292,6 +242,75 @@ mod tests {
             pub const abbr: &str = \"abbr\";\n\
             }";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_outer_expect_on_enclosing_mod() {
+        // The risingwave case from the issue: PascalCase consts mimicking enum
+        // variants inside a module that opts out with an *outer*
+        // `#[expect(non_upper_case_globals)]`.
+        let src = "#[expect(non_snake_case, non_upper_case_globals)]\n\
+            pub(crate) mod JoinOp {\n\
+            use super::JoinOpPrimitive;\n\
+            pub const Insert: JoinOpPrimitive = true;\n\
+            pub const Delete: JoinOpPrimitive = false;\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_item_level_expect_non_upper_case_globals() {
+        // `#[expect]` is the same opt-out as `#[allow]`, with a warning when it
+        // turns out unnecessary.
+        let src = "#[expect(non_upper_case_globals)]\nconst en_US: &str = \"en-US\";";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_outer_allow_on_enclosing_mod() {
+        let src = "#[allow(non_upper_case_globals)]\n\
+            mod attr {\n\
+            pub const abbr: &str = \"abbr\";\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_enclosing_impl_allow_for_const_in_method_body() {
+        // The opt-out on an enclosing `impl` covers a `const` declared inside one
+        // of its method bodies, exactly as rustc resolves the lint.
+        let src = "#[allow(non_upper_case_globals)]\n\
+            impl Style {\n\
+            fn method() {\n\
+            const fooBar: u32 = 1;\n\
+            }\n\
+            }";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_const_in_mod_with_unrelated_outer_allow() {
+        // Negative control: an outer allow of a different lint on the enclosing
+        // module must not exempt its mis-cased consts.
+        let src = "#[allow(dead_code)]\n\
+            mod attr {\n\
+            pub const abbr: &str = \"abbr\";\n\
+            }";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("abbr"));
+    }
+
+    #[test]
+    fn outer_mod_allow_does_not_leak_to_following_const() {
+        // Negative control: the opt-out covers the module it decorates, not the
+        // const declared after it.
+        let src = "#[allow(non_upper_case_globals)]\n\
+            mod attr {}\n\
+            const en_US: &str = \"en-US\";";
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("en_US"));
     }
 
     #[test]
