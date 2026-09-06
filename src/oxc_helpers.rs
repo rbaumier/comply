@@ -8592,27 +8592,32 @@ pub fn is_inside_type_predicate_fn(
     false
 }
 
-/// True when `kind` is a type-only binding context — a node whose bindings are
-/// erased at emit and never become runtime bindings (function/constructor
-/// types, call/construct/method/index signatures, mapped types, `infer`, plus
-/// `type` aliases and interfaces). A binding declared inside such a context
-/// shadows nothing observable.
-#[must_use]
-pub fn is_type_only_binding_context(kind: oxc_ast::AstKind<'_>) -> bool {
+/// True when `symbol` is a parameter name written inside an erased signature
+/// type — a function or constructor type, or a call, construct or method
+/// signature. See [`binds_in_value_space`].
+///
+/// oxc binds those parameters as function-scoped variables, which
+/// `SymbolFlags::Value` contains, but they are erased at emit and never become
+/// runtime bindings: `type F = (x: string) => void` written under a `const x`
+/// hides nothing.
+fn declared_in_erased_signature(
+    semantic: &oxc_semantic::Semantic<'_>,
+    symbol: oxc_semantic::SymbolId,
+) -> bool {
     use oxc_ast::AstKind;
-    matches!(
-        kind,
-        AstKind::TSFunctionType(_)
-            | AstKind::TSConstructorType(_)
-            | AstKind::TSCallSignatureDeclaration(_)
-            | AstKind::TSConstructSignatureDeclaration(_)
-            | AstKind::TSMethodSignature(_)
-            | AstKind::TSIndexSignature(_)
-            | AstKind::TSMappedType(_)
-            | AstKind::TSInferType(_)
-            | AstKind::TSTypeAliasDeclaration(_)
-            | AstKind::TSInterfaceDeclaration(_)
-    )
+
+    let nodes = semantic.nodes();
+    let decl_node = semantic.scoping().symbol_declaration(symbol);
+    nodes.ancestor_kinds(decl_node).any(|kind| {
+        matches!(
+            kind,
+            AstKind::TSFunctionType(_)
+                | AstKind::TSConstructorType(_)
+                | AstKind::TSCallSignatureDeclaration(_)
+                | AstKind::TSConstructSignatureDeclaration(_)
+                | AstKind::TSMethodSignature(_)
+        )
+    })
 }
 
 /// True when two bindings share at least one TypeScript declaration space, so a
@@ -8643,6 +8648,10 @@ pub fn declaration_spaces_overlap(
 /// A plain `import` counts unconditionally. Only its type-space claim is earned
 /// from references ([`binds_in_type_space`]): an import the file never uses in
 /// type position would otherwise sit in no space at all and shadow nothing.
+///
+/// A parameter of an erased signature type carries value-space flags without
+/// ever becoming a runtime binding, so it is excluded
+/// ([`declared_in_erased_signature`]).
 fn binds_in_value_space(
     semantic: &oxc_semantic::Semantic<'_>,
     symbol: oxc_semantic::SymbolId,
@@ -8652,6 +8661,7 @@ fn binds_in_value_space(
     const VALUE_SPACE: SymbolFlags = SymbolFlags::Value.union(SymbolFlags::Import);
 
     semantic.scoping().symbol_flags(symbol).intersects(VALUE_SPACE)
+        && !declared_in_erased_signature(semantic, symbol)
 }
 
 /// True when `symbol` binds a name TypeScript resolves in type position. See

@@ -1,9 +1,7 @@
 //! ts-no-shadow OXC backend — variable shadowing detection via oxc_semantic.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{
-    byte_offset_to_line_col, declaration_spaces_overlap, is_type_only_binding_context,
-};
+use crate::oxc_helpers::{byte_offset_to_line_col, declaration_spaces_overlap};
 use crate::rules::backend::{CheckCtx, OxcCheck};
 use oxc_ast::AstKind;
 use oxc_ast::ast::{BindingPattern, FunctionType};
@@ -40,12 +38,6 @@ impl OxcCheck for Check {
             // Enum members are scoped inside the enum object and are only
             // reachable as `Enum.Member`, so they never shadow a module binding.
             if matches!(nodes.kind(decl_node), AstKind::TSEnumMember(_)) {
-                continue;
-            }
-            if std::iter::once(nodes.kind(decl_node))
-                .chain(nodes.ancestor_kinds(decl_node))
-                .any(is_type_only_binding_context)
-            {
                 continue;
             }
             let ident = oxc_str::Ident::from(name);
@@ -755,6 +747,109 @@ mod tests {
              export function builder<Argv extends object>(argv: Argv) { return argv; }",
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_of_type_alias_shadowing_outer_type_alias() {
+        // The shadow follows the declaration space, not the node the inner
+        // binding hangs off: a type parameter written on a `type` alias hides an
+        // outer alias in type position exactly like one written on a function.
+        let d = run_on("type P = string;\ntype AliasHolder<P> = P;");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_of_function_type_shadowing_outer_type_alias() {
+        let d = run_on("type P = string;\nexport type FnType = <P>(x: P) => P;");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_of_method_signature_shadowing_outer_type_alias() {
+        let d = run_on("type P = string;\nexport interface WithMethod { m<P>(x: P): P }");
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_nested_type_alias_shadowing_outer_type_alias() {
+        let d = run_on(
+            "type N = string;\n\
+             export function h() { type N = number; const v: N = 1; return v; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_nested_interface_shadowing_outer_interface() {
+        let d = run_on(
+            "interface N { a: string }\n\
+             export function h() { interface N { b: number } const v: N = { b: 1 }; return v; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_namespace_member_alias_shadowing_module_level_alias() {
+        let d = run_on(
+            "export type Options = { x: 1 };\n\
+             export namespace Inner { export type Options = { y: 2 }; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_merged_interface_and_const_with_interface_first() {
+        // `interface M` merged with `const M` binds in the value space, so it
+        // shadows an outer `const M`. oxc keeps the *first* declaration node for
+        // a merged symbol, so writing the interface first must decide the same
+        // as writing it second — the shadow is a property of the spaces, not of
+        // statement order.
+        let d = run_on(
+            "const M = 1;\n\
+             export function h() { interface M { z: 1 } const M = { z: 1 as const }; return M; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_merged_interface_and_const_with_const_first() {
+        let d = run_on(
+            "const M = 1;\n\
+             export function h() { const M = { z: 1 as const }; interface M { z: 1 } return M; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_function_type_parameter_shadowing_outer_const() {
+        // A parameter name written in an erased signature type is emitted
+        // nowhere and never becomes a runtime binding, so it hides no value.
+        let d = run_on("const a = 1;\ntype F = (a: string) => void;");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_constructor_type_parameter_shadowing_outer_const() {
+        let d = run_on("const a = 1;\ntype C = new (a: string) => void;");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_call_signature_parameter_shadowing_outer_const() {
+        let d = run_on("const a = 1;\ntype I = { (a: string): void };");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_construct_signature_parameter_shadowing_outer_const() {
+        let d = run_on("const a = 1;\ntype I = { new (a: string): void };");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_method_signature_parameter_shadowing_outer_const() {
+        let d = run_on("const a = 1;\ntype I = { m(a: string): void };");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
     }
 
     #[test]
