@@ -30,7 +30,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::cfg_test_gates_compilation;
+use crate::rules::rust_helpers::cfg_gates_compilation;
 
 #[derive(Debug)]
 pub struct Check;
@@ -74,7 +74,7 @@ impl AstCheck for Check {
         // scope compiling it, or on a `mod <name>;` along the chain of module
         // declarations reaching this file from the crate root — zellij's
         // `#[cfg(test)] mod unit;` gates every file under `unit/`, however deep.
-        if cfg_test_gates_compilation(node, source_bytes)
+        if cfg_gates_compilation(node, source_bytes, "test")
             || ctx.project.rust_file_is_cfg_test_gated(ctx.path)
         {
             return;

@@ -7248,8 +7248,8 @@ fn source_gates_module_on_cfg_test(parent_src: &str, name: &str) -> Option<bool>
     let tree = parse_rust_source(parent_src)?;
     let bytes = parent_src.as_bytes();
     let decl = find_file_backed_mod(tree.root_node(), name, bytes)?;
-    Some(crate::rules::rust_helpers::cfg_test_gates_compilation(
-        decl, bytes,
+    Some(crate::rules::rust_helpers::cfg_gates_compilation(
+        decl, bytes, "test",
     ))
 }
 

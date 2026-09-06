@@ -504,22 +504,31 @@ fn is_cargo_test_target(path: &Path, project: &ProjectCtx) -> bool {
         .is_ok_and(crate::rules::path_utils::is_cargo_test_target_dir_path)
 }
 
-/// True if the author gated `node`'s compilation on `test`. Every legal
-/// spelling of that gate counts, whether it sits on the node or on a scope
-/// containing it:
+/// True if the author gated `node`'s compilation on the configuration option
+/// `flag` (`"test"`, `"debug_assertions"`, …). Every legal spelling of that gate
+/// counts, whether it sits on the node or on a scope containing it:
 ///
 /// - a `cfg` attribute on `node` itself, whatever its kind (`#[cfg(test)] use
 ///   sqlx::PgPool;` gates an import as much as a function), or on any enclosing
 ///   scope that can carry one: an item, a block, a match arm
-/// - an inner `#![cfg(test)]` opening `node`'s own module body or an enclosing
+/// - an inner `#![cfg(<flag>)]` opening `node`'s own module body or an enclosing
 ///   module's body
-/// - an inner `#![cfg(test)]` heading the file
+/// - an inner `#![cfg(<flag>)]` heading the file
 ///
-/// Narrower than [`is_in_test_context`], which also counts a `#[test]` function
-/// and `#[cfg_attr(test, …)]`: neither takes the item out of a release build.
-/// Rules reasoning about what ships in the binary want this one.
-pub fn cfg_test_gates_compilation(node: Node, source: &[u8]) -> bool {
-    if file_has_inner_attribute(node, source, cfg_gates_compilation_on_test) {
+/// Only a bare `cfg` gates: `#[cfg_attr(<flag>, …)]` applies *another attribute*
+/// conditionally and leaves the item compiled in every configuration, so a
+/// `panic!` under `#[cfg_attr(debug_assertions, …)]` ships in release. That is
+/// the difference with [`is_in_test_context`], which also counts a `#[test]`
+/// function and `#[cfg_attr(test, …)]`.
+///
+/// `cfg(any(<flag>, feature = "x"))` counts, so this answers "the author gated
+/// this on `<flag>`", not "this is provably absent from every release build".
+/// Rules reasoning about what ships in the binary want this one: a `#[cfg(test)]`
+/// module, or a `#[cfg(debug_assertions)]` panic the release profile compiles
+/// out.
+pub fn cfg_gates_compilation(node: Node, source: &[u8], flag: &str) -> bool {
+    let gates = |text: &str| cfg_predicate_activates(text, flag.as_bytes(), CFG_GATE_KEYWORDS);
+    if file_has_inner_attribute(node, source, gates) {
         return true;
     }
     let mut current = Some(node);
@@ -527,8 +536,8 @@ pub fn cfg_test_gates_compilation(node: Node, source: &[u8]) -> bool {
         // `any_outer_attribute` stops at the first non-attribute sibling and
         // `module_body_has_inner_attribute` self-guards on `mod_item`, so a node
         // that cannot carry an attribute simply answers false.
-        if any_outer_attribute(scope, source, cfg_gates_compilation_on_test)
-            || module_body_has_inner_attribute(scope, source, cfg_gates_compilation_on_test)
+        if any_outer_attribute(scope, source, gates)
+            || module_body_has_inner_attribute(scope, source, gates)
         {
             return true;
         }
@@ -593,46 +602,6 @@ fn enclosing_item_has_attribute(
         cur = parent;
     }
     false
-}
-
-/// True if `node` is gated by a `#[cfg(<flag>)]` outer attribute on any
-/// enclosing statement, block, or item — i.e. an ancestor (or `node` itself)
-/// carries a preceding `attribute_item` sibling whose `cfg`/`cfg_attr`
-/// predicate activates `flag` positively (outside any `not(…)`).
-///
-/// Walks every ancestor from `node` up to the crate root and, for each, scans
-/// its own preceding `attribute_item` siblings — the shape a statement- or
-/// item-level `#[cfg(<flag>)]` takes in tree-sitter-rust, where the attribute
-/// is a sibling of the item it decorates (`#[cfg(<flag>)] unreachable!();`,
-/// `#[cfg(<flag>)] { … }`, `#[cfg(<flag>)] fn f() { … }`). Interleaving
-/// `line_comment`/`block_comment` siblings are skipped. Shares the cfg-predicate
-/// reader with [`is_in_test_context`]: `#[cfg(all(<flag>, …))]` /
-/// `#[cfg(any(<flag>, …))]` count, while `#[cfg(not(<flag>))]` does not.
-///
-/// Rules that relax their discipline for code compiled out of a build
-/// configuration — e.g. a `#[cfg(debug_assertions)]`-gated `panic!` absent from
-/// the release artifact — call this to decide whether a candidate is exempt.
-pub fn is_gated_by_cfg(node: Node, source: &[u8], flag: &str) -> bool {
-    let flag = flag.as_bytes();
-    let mut cur = node;
-    loop {
-        if item_has_cfg_flag(cur, source, flag) {
-            return true;
-        }
-        match cur.parent() {
-            Some(parent) => cur = parent,
-            None => return false,
-        }
-    }
-}
-
-/// True if any `attribute_item` immediately preceding `item` (skipping
-/// interleaved doc comments) is a `#[cfg(…)]` / `#[cfg_attr(…)]` whose predicate
-/// activates `flag`. Mirrors [`has_test_attribute`]'s preceding-sibling scan.
-fn item_has_cfg_flag(item: Node, source: &[u8], flag: &[u8]) -> bool {
-    any_outer_attribute(item, source, |text| {
-        cfg_predicate_activates(text, flag, CFG_PREDICATE_KEYWORDS)
-    })
 }
 
 /// True if `node` is inside a [Kani](https://model-checking.github.io/kani/)
@@ -1154,7 +1123,7 @@ pub fn file_references_db_crate(node: Node, source: &[u8]) -> bool {
             leaves.clear();
             collect_use_leaves(current, source, &mut leaves);
             if leaves.iter().map(use_leaf_crate).any(is_db_crate)
-                && !cfg_test_gates_compilation(current, source)
+                && !cfg_gates_compilation(current, source, "test")
             {
                 return true;
             }
@@ -1163,7 +1132,7 @@ pub fn file_references_db_crate(node: Node, source: &[u8]) -> bool {
         }
         if matches!(current.kind(), "scoped_identifier" | "scoped_type_identifier")
             && path_root_segment(current, source).is_some_and(is_db_crate)
-            && !cfg_test_gates_compilation(current, source)
+            && !cfg_gates_compilation(current, source, "test")
         {
             return true;
         }
@@ -1720,18 +1689,12 @@ fn cfg_predicate_activates_test(text: &str) -> bool {
 /// it compiles unconditionally.
 const CFG_PREDICATE_KEYWORDS: &[&str] = &["cfg_attr(", "cfg("];
 
-/// True if `text` is a `cfg(…)` attribute whose predicate activates `test`
-/// positively — the author made the item it decorates conditional on `test`.
-///
-/// Narrower than [`cfg_predicate_activates_test`], which also accepts
-/// `#[cfg_attr(test, …)]`: that form applies *another attribute* conditionally
-/// and leaves the item itself compiled unconditionally, so it gates nothing.
-///
-/// `cfg(any(test, feature = "x"))` counts, so this answers "the author gated
-/// this on `test`", not "this is provably absent from every release build".
-pub fn cfg_gates_compilation_on_test(text: &str) -> bool {
-    cfg_predicate_activates(text, b"test", &["cfg("])
-}
+/// Attribute keywords whose parenthesized predicate is scanned when asking
+/// whether an attribute *gates* the item's compilation. `cfg_attr(` is excluded:
+/// it applies another attribute conditionally and leaves the item itself
+/// compiled in every configuration, so it gates nothing. See
+/// [`cfg_gates_compilation`].
+const CFG_GATE_KEYWORDS: &[&str] = &["cfg("];
 
 /// True if `text` contains a predicate opened by one of `keywords` in which the
 /// configuration option `flag` (e.g. `b"test"`, `b"debug_assertions"`) appears
@@ -12255,7 +12218,7 @@ mod tests {
     }
 
     #[test]
-    fn is_gated_by_cfg_detects_debug_assertions_gate() {
+    fn cfg_gates_compilation_detects_debug_assertions_gate() {
         // Anchored on the `macro_invocation`, as the panic-family rule is.
         let test_cases = [
             // Statement-level gate (the #7742 repro shape, in a match arm block).
@@ -12272,9 +12235,17 @@ mod tests {
             ),
             // Item-level gate on the enclosing function.
             ("#[cfg(debug_assertions)]\nfn f() { panic!(\"x\"); }", true),
+            // File-level inner gate: the whole file is compiled out.
+            ("#![cfg(debug_assertions)]\nfn f() { panic!(\"x\"); }", true),
             // Negative space: `not(debug_assertions)` ships in release.
             (
                 "fn f() {\n    #[cfg(not(debug_assertions))]\n    panic!(\"x\");\n}",
+                false,
+            ),
+            // Negative space (#7815): `cfg_attr` applies another attribute
+            // conditionally and compiles the item in every profile.
+            (
+                "#[cfg_attr(debug_assertions, allow(dead_code))]\nfn f() { panic!(\"x\"); }",
                 false,
             ),
             // Negative space: a feature gate is not a debug gate.
@@ -12287,9 +12258,9 @@ mod tests {
             let node = first_of_kind(tree.root_node(), "macro_invocation")
                 .expect("snippet should contain a macro_invocation");
             assert_eq!(
-                is_gated_by_cfg(node, src.as_bytes(), "debug_assertions"),
+                cfg_gates_compilation(node, src.as_bytes(), "debug_assertions"),
                 expected,
-                "is_gated_by_cfg mismatch for `{src}`"
+                "cfg_gates_compilation mismatch for `{src}`"
             );
         }
     }
@@ -12384,7 +12355,7 @@ mod tests {
             ("#[test]\nfn f() { fn h() { let x = 1; } }", true),
             // Negative space: gates that leave the item compiled, or compile it
             // out for another reason, are a different question. `#[cfg(test)]`
-            // belongs to `cfg_test_gates_compilation`.
+            // belongs to `cfg_gates_compilation`.
             ("#[cfg(test)]\nfn f() { let x = 1; }", false),
             ("#[cfg_attr(test, allow(dead_code))]\nfn f() { let x = 1; }", false),
             ("#[cfg(not(test))]\nfn f() { let x = 1; }", false),
@@ -12705,14 +12676,16 @@ mod tests {
     }
 
     #[test]
-    fn cfg_gates_compilation_on_test_accepts_only_real_compilation_gates() {
+    fn cfg_gate_keywords_accept_only_real_compilation_gates() {
+        let gates_on_test =
+            |text: &str| cfg_predicate_activates(text, b"test", CFG_GATE_KEYWORDS);
         for gate in [
             "#[cfg(test)]",
             "#![cfg(test)]",
             "#[cfg(all(test, unix))]",
             "#[cfg(any(test, feature = \"x\"))]",
         ] {
-            assert!(cfg_gates_compilation_on_test(gate), "should gate: {gate}");
+            assert!(gates_on_test(gate), "should gate: {gate}");
         }
         for not_a_gate in [
             // Applies another attribute conditionally; the item is compiled
@@ -12725,10 +12698,7 @@ mod tests {
             "#[cfg(feature = \"test\")]",
             "#[test]",
         ] {
-            assert!(
-                !cfg_gates_compilation_on_test(not_a_gate),
-                "should not gate: {not_a_gate}"
-            );
+            assert!(!gates_on_test(not_a_gate), "should not gate: {not_a_gate}");
         }
     }
 
@@ -14467,7 +14437,7 @@ mod tests {
     }
 
     #[test]
-    fn cfg_test_gates_compilation_reads_the_gate_on_any_enclosing_scope() {
+    fn cfg_gates_compilation_reads_the_gate_on_any_enclosing_scope() {
         let cases: &[(&str, &str, bool)] = &[
             // The gate sits on the candidate itself, whatever kind it has.
             ("#[cfg(test)]\nuse sqlx::PgPool;", "use_declaration", true),
@@ -14518,9 +14488,9 @@ mod tests {
             let node = first_node_of_kind(tree.root_node(), kind)
                 .unwrap_or_else(|| panic!("snippet should contain a `{kind}` node"));
             assert_eq!(
-                cfg_test_gates_compilation(node, src.as_bytes()),
+                cfg_gates_compilation(node, src.as_bytes(), "test"),
                 *expected,
-                "cfg_test_gates_compilation mismatch for `{src}`"
+                "cfg_gates_compilation mismatch for `{src}`"
             );
         }
     }

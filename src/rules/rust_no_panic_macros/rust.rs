@@ -33,7 +33,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::{
-    enclosing_fn, is_gated_by_cfg, is_in_trait_impl, is_test_code, macro_body,
+    cfg_gates_compilation, enclosing_fn, is_in_trait_impl, is_test_code, macro_body,
     split_top_level_args, string_literal_content,
 };
 
@@ -86,9 +86,10 @@ impl AstCheck for Check {
         // `unsafe` invariant loudly in debug while keeping release codegen
         // zero-cost. Exempt it, mirroring the `#[cfg(test)]` exemption: both gate
         // code out of the artifact by a cfg predicate. A `#[cfg(not(debug_
-        // assertions))]` gate (which ships in release) or a non-debug
-        // `#[cfg(feature = "…")]` gate does not qualify.
-        if is_gated_by_cfg(node, source_bytes, "debug_assertions") {
+        // assertions))]` gate (which ships in release), a non-debug
+        // `#[cfg(feature = "…")]` gate, or a `#[cfg_attr(debug_assertions, …)]`
+        // (which compiles the item in every profile) does not qualify.
+        if cfg_gates_compilation(node, source_bytes, "debug_assertions") {
             return;
         }
         // A `proc-macro = true` crate runs at compile time during macro
@@ -662,6 +663,16 @@ libfuzzer-sys = "0.4"
         // A non-debug `#[cfg(feature = "…")]` gate is not the debug/release
         // divergence idiom — the feature may be enabled in release, so it flags.
         let source = "fn f() {\n    #[cfg(feature = \"foo\")]\n    panic!(\"feature-gated\");\n}";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
+    fn repro_7815_flags_panic_gated_only_by_cfg_attr_debug_assertions() {
+        // rbaumier/comply#7815 — `#[cfg_attr(debug_assertions, …)]` applies
+        // another attribute conditionally; the item itself is compiled in every
+        // profile, so the panic ships in release and must still flag.
+        let source = "#[cfg_attr(debug_assertions, allow(dead_code))]\n\
+                      fn ships_in_release() { panic!(\"aborts production\"); }";
         assert_eq!(run_on(source).len(), 1);
     }
 
