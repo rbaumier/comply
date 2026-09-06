@@ -131,13 +131,17 @@ fn param_type_text<'a>(shape: &SigShape<'a>, index: usize, source: &'a str) -> O
     Some(&source[span.start as usize..span.end as usize])
 }
 
-/// How many of the first `count` parameter positions have a parameter type text not
+/// Which of the first `count` parameter positions have a parameter type text not
 /// shared by every signature in the group. A unified signature can union at most one
 /// position, so two or more differing positions (the equal-arity case) block the
 /// merge; for differing-arity overloads any differing *shared* position blocks it,
 /// because adding only a trailing parameter requires the shorter signature to be a
 /// type-prefix of the longer.
-fn differing_param_positions<'a>(shapes: &[SigShape<'a>], count: usize, source: &'a str) -> usize {
+fn differing_param_positions<'a>(
+    shapes: &[SigShape<'a>],
+    count: usize,
+    source: &'a str,
+) -> Vec<usize> {
     (0..count)
         .filter(|&pos| {
             let baseline = param_type_text(&shapes[0], pos, source);
@@ -145,7 +149,31 @@ fn differing_param_positions<'a>(shapes: &[SigShape<'a>], count: usize, source: 
                 .iter()
                 .any(|s| param_type_text(s, pos, source) != baseline)
         })
-        .count()
+        .collect()
+}
+
+/// The union type a merged signature would declare at the group's single
+/// differing parameter position — every signature's type text there, in source
+/// order, without repeats. `None` when the signatures do not share an arity,
+/// when no position or more than one differs, or when that position is untyped
+/// in some signature: the merge is then not a single union parameter, and the
+/// diagnostic has no union to name.
+fn union_parameter_text<'a>(shapes: &[SigShape<'a>], source: &'a str) -> Option<String> {
+    let arity = shapes.first()?.params.items.len();
+    if shapes.iter().any(|s| s.params.items.len() != arity) {
+        return None;
+    }
+    let [position] = differing_param_positions(shapes, arity, source)[..] else {
+        return None;
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for shape in shapes {
+        let text = param_type_text(shape, position, source)?;
+        if !parts.contains(&text) {
+            parts.push(text);
+        }
+    }
+    Some(parts.join(" | "))
 }
 
 /// Whether the signatures form an "overloaded narrowing" group: every signature
@@ -269,7 +297,7 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
         if signatures_narrow_return_type(shapes, source) {
             return false;
         }
-        let differing = differing_param_positions(shapes, min, source);
+        let differing = differing_param_positions(shapes, min, source).len();
         if !all_returns_identical(shapes, source) && differing > 0 {
             return false;
         }
@@ -279,7 +307,7 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
     if !all_returns_identical(shapes, source) {
         return false;
     }
-    differing_param_positions(shapes, min, source) == 0
+    differing_param_positions(shapes, min, source).is_empty()
 }
 
 /// One overload group sharing a name: the source offsets where each signature
@@ -312,9 +340,10 @@ fn member_name(key: &PropertyKey) -> Option<String> {
 }
 
 /// Emit one diagnostic per unifiable group, anchored on the group's first
-/// signature. An overload group is one finding: the same advice reported per
-/// mergeable pair repeats positions once the group has three members, and no
-/// pair states the merge the reader has to perform.
+/// signature and naming the union the merge proposes. An overload group is one
+/// finding: the same advice reported per mergeable pair repeats positions once
+/// the group has three members, and each pair names only part of the union the
+/// reader has to write.
 fn report_unifiable_groups(
     groups: SigGroups<'_>,
     ctx: &CheckCtx,
@@ -331,12 +360,13 @@ fn report_unifiable_groups(
             } else {
                 format!("`{name}` signatures")
             };
+            let merge = match union_parameter_text(&group.shapes, ctx.source) {
+                Some(union) => format!("taking `{union}`"),
+                None => "with a union or optional parameter".to_owned(),
+            };
             (
                 group.offsets[0],
-                format!(
-                    "{subject} can be unified into a single signature \
-                     with a union or optional parameter."
-                ),
+                format!("{subject} can be unified into a single signature {merge}."),
             )
         })
         .collect();
@@ -841,6 +871,11 @@ diff(a: string, b: string, o?: OptsSync): string[];";
              m(x: string | number): void {}\n}",
         );
         assert_eq!(diags.len(), 1);
+        assert!(
+            diags[0].message.contains("`string | number`"),
+            "{}",
+            diags[0].message
+        );
     }
 
     // Guard: a genuinely mergeable function-declaration overload pair fires once.
@@ -938,6 +973,92 @@ diff(a: string, b: string, o?: OptsSync): string[];";
         );
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].line, 1);
+        assert!(
+            diags[0].message.contains("`'a' | 'b' | 'c' | 'd' | 'e'`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    // ── differing type-parameter lists, and the union the merge proposes (#8282) ─
+
+    // Regression #8282: vueuse `useStorage` — `<T>` infers the stored type from
+    // `defaults`, while `<T = unknown>` has no inference site there and falls back
+    // to its default. The merged `defaults: T | null` infers `T = null` for the
+    // call the second overload types as `unknown`, which tsgo rejects at the call
+    // site: the merge is a breaking change to the public type, not a refactor.
+    #[test]
+    fn allows_overloads_with_differing_type_parameter_defaults() {
+        assert!(
+            run_on(
+                "export function c<T>(key: string, defaults: T): Ref<T>\n\
+                 export function c<T = unknown>(key: string, defaults: null): Ref<T>\n\
+                 export function c<T>(key: string, defaults: T | null): Ref<T> {\n  \
+                 return { value: defaults as T }\n}\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: the same pair with *identical* type-parameter lists states one
+    // inference rule for both overloads, so the union merge is sound and fires —
+    // the discriminator is the type-parameter list, not the `null` parameter.
+    #[test]
+    fn flags_overloads_with_identical_type_parameters_and_null_param() {
+        let diags = run_on(
+            "export function c<T>(key: string, defaults: T): Ref<T>\n\
+             export function c<T>(key: string, defaults: null): Ref<T>\n\
+             export function c<T>(key: string, defaults: T | null): Ref<T> {\n  \
+             return { value: defaults as T }\n}\n",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Overloads that name their type parameter differently declare two distinct
+    // bindings; a merged signature has one list to state.
+    #[test]
+    fn allows_overloads_with_differing_type_parameter_names() {
+        assert!(
+            run_on(
+                "export function c<T>(x: T): R<T>\n\
+                 export function c<U>(x: null): R<U>\n\
+                 export function c(x: unknown): unknown { return x }\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // Regression #8282: three mergeable overloads are one finding that names the
+    // whole union, not one per pair proposing a partial merge.
+    #[test]
+    fn reports_a_three_member_group_once_with_the_full_union() {
+        let diags = run_on(
+            "export function e(x: string): void\n\
+             export function e(x: number): void\n\
+             export function e(x: boolean): void\n\
+             export function e(x: any): void { void x }\n",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].line, 1);
+        assert!(
+            diags[0].message.contains("`string | number | boolean`"),
+            "{}",
+            diags[0].message
+        );
+    }
+
+    // Overloads of differing arity merge with an optional trailing parameter, so
+    // there is no single position to union and no union to name.
+    #[test]
+    fn allows_function_overloads_of_differing_arity() {
+        assert!(
+            run_on(
+                "export function b(url: string, opts: FetchOpts): void\n\
+                 export function b(url: string, init: RequestInit, opts?: FetchOpts): void\n\
+                 export function b(url: string, ...args: any[]): void { void url; void args }\n"
+            )
+            .is_empty()
+        );
     }
 
     // vueuse `useAverage` — an array overload beside a variadic one. The two state
