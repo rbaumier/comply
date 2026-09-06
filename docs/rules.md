@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2057 rules across 152 categories.
+2056 rules across 152 categories.
 
 ## Categories
 
@@ -149,7 +149,7 @@
 - [typescript > code-quality](#typescript-code-quality) (1 rules)
 - [typescript > jsdoc](#typescript-jsdoc) (2 rules)
 - [typescript > security](#typescript-security) (1 rules)
-- [typescript > type-aware](#typescript-type-aware) (81 rules)
+- [typescript > type-aware](#typescript-type-aware) (80 rules)
 - [ui](#ui) (28 rules)
 - [vue](#vue) (67 rules)
 - [vue > security](#vue-security) (4 rules)
@@ -2782,7 +2782,6 @@
 | `ts-no-in-operator` | The `in` operator probes the shape of an unvalidated `unknown`/`any` value by hand instead of parsing it. | Parse the external input with a schema (e.g. Zod) to obtain a typed value. `in` is fine on an already-typed value, a caught error, or inside a user-defined type predicate (`x is T`). |
 | `ts-no-typeof-operator` | `typeof` on an `any` value sniffs at runtime in place of typing it — the `any` means the type was lost. | Give the value a real type, or narrow it from `unknown` (typeof-narrowing an honest `unknown` is fine — `any` is the smell). Also fine: an environment guard (`typeof window`), a caught error, a `z.preprocess` normaliser, or inside a user-defined type predicate (`x is T`). |
 | `unbound-method` | Method passed as callback loses its `this` binding. | Bind the method: `.bind(this)` or use an arrow function. |
-| `unified-signatures` | Overloads can be unified into a single signature. | Use union type in single signature instead of overloads. |
 | `use-unknown-in-catch-callback-variable` | Catch callback parameter should be `unknown`, not `any`. | Type the catch parameter as `unknown` and narrow it. |
 
 ## ui

@@ -1,28 +1,46 @@
-//! ts-unified-signatures OXC backend — flag adjacent function overload signatures
-//! in interfaces/type literals that share the same name.
+//! ts-unified-signatures OXC backend — flag overload signature groups that one
+//! signature with a union or optional parameter would express, in every carrier
+//! TypeScript spells overloads with: interfaces, type literals, class bodies,
+//! and function declarations.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{
-    FormalParameters, PropertyKey, TSCallSignatureDeclaration, TSLiteral, TSSignature,
-    TSType, TSTypeAnnotation, TSTypeParameterDeclaration,
+    ClassBody, ClassElement, Declaration, FormalParameters, Function, MethodDefinition,
+    MethodDefinitionKind, PropertyKey, Statement, TSCallSignatureDeclaration, TSLiteral,
+    TSSignature, TSType, TSTypeAnnotation, TSTypeParameterDeclaration,
 };
 use oxc_span::GetSpan;
-use rustc_hash::FxHashSet;
 use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 pub struct Check;
 
+/// The group key of a type's call signatures, which have no name of their own.
+const CALL_SIGNATURE_KEY: &str = "[[call]]";
+
 /// The type parameters, parameter list, and declared return type of an overload
 /// signature — the facets that determine whether a group of overloads can be
-/// merged. Lets the unifiability heuristics treat call signatures and named method
-/// signatures uniformly.
+/// merged. Lets the unifiability heuristics treat call signatures, method
+/// signatures, class methods and function declarations uniformly.
 struct SigShape<'a> {
     type_params: Option<&'a TSTypeParameterDeclaration<'a>>,
     params: &'a FormalParameters<'a>,
     return_type: Option<&'a TSTypeAnnotation<'a>>,
+}
+
+impl<'a> SigShape<'a> {
+    /// The shape of a body-less `Function` — the node behind both a function
+    /// overload declaration and a class-method overload.
+    fn from_function(func: &'a Function<'a>) -> Self {
+        Self {
+            type_params: func.type_parameters.as_deref(),
+            params: &func.params,
+            return_type: func.return_type.as_deref(),
+        }
+    }
 }
 
 /// The single string-literal value typing a call signature's first parameter,
@@ -81,6 +99,21 @@ fn params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> &'a str {
 fn type_params_text<'a>(shape: &SigShape<'a>, source: &'a str) -> Option<&'a str> {
     let decl = shape.type_params?;
     Some(&source[decl.span.start as usize..decl.span.end as usize])
+}
+
+/// The source text of the type of a signature's rest parameter, e.g. `number[]`
+/// for `(...args: number[])`. `None` when the signature declares no rest
+/// parameter, or declares an untyped one.
+fn rest_param_type_text<'a>(shape: &SigShape<'a>, source: &'a str) -> Option<&'a str> {
+    let span = shape
+        .params
+        .rest
+        .as_ref()?
+        .type_annotation
+        .as_ref()?
+        .type_annotation
+        .span();
+    Some(&source[span.start as usize..span.end as usize])
 }
 
 /// The source text of the type annotation of the parameter at `index`, or `None`
@@ -148,9 +181,11 @@ fn all_returns_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
         .all(|s| return_type_text(s, source) == first)
 }
 
-/// Whether every signature in the group declares the same type-parameter list text
-/// (all equal, or all absent). Distinguishes overloads whose parameter lists read
-/// identically but whose method-level generic constraints differ.
+/// Whether the group binds its generics identically: one type-parameter list text
+/// across all of it (or none anywhere), so same count, names, constraints and
+/// defaults. Overloads that bind them differently are not interchangeable —
+/// unioning one value parameter leaves a single type-parameter list, which cannot
+/// reproduce per-overload inference.
 fn all_type_params_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
     let first = type_params_text(&shapes[0], source);
     shapes[1..]
@@ -158,9 +193,36 @@ fn all_type_params_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bo
         .all(|s| type_params_text(s, source) == first)
 }
 
+/// Whether one and the same variadic tail closes each of the group's parameter
+/// lists — a rest parameter of equal type everywhere, or none anywhere. A rest
+/// parameter accepts an unbounded number of arguments, so it is neither the one
+/// optional parameter a merged signature may add nor a position a union can
+/// express: the vueuse `useAverage(array: T[])` / `useAverage(...args: T[])` pair
+/// states two call conventions, not two types at one position.
+fn all_rest_params_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bool {
+    let declares_rest = shapes[0].params.rest.is_some();
+    let first = rest_param_type_text(&shapes[0], source);
+    shapes[1..].iter().all(|s| {
+        s.params.rest.is_some() == declares_rest && rest_param_type_text(s, source) == first
+    })
+}
+
 /// Whether a group of overload signatures could be merged into one with a union
 /// or optional trailing parameter.
 ///
+/// * The type-parameter lists must be identical. Overloads that bind their generics
+///   differently — a differing count, name, constraint or default — each declare
+///   their own inference rule, and a merged signature has only one type-parameter
+///   list to state. The vueuse `useStorage<T>(key, defaults: T)` /
+///   `useStorage<T = unknown>(key, defaults: null)` pair is the canonical case: the
+///   first infers `T` *from* the differing parameter, the second has no inference
+///   site and falls back to its default, so the merged `defaults: T | null` infers
+///   `T = null` for the `null` call the second overload types as `unknown`. The DOM
+///   `addEventListener` idiom, where each overload correlates a target constraint
+///   with its event map, is the same disqualifier.
+/// * The variadic tails must match. An overload that ends in a rest parameter takes
+///   an unbounded argument list, which is neither the single optional parameter a
+///   merged signature may add nor a position a union can widen.
 /// * Parameter counts may differ by at most one — a larger gap would need more
 ///   than one optional trailing parameter, which the overloads do not express.
 /// * When the counts *do* differ, the unified form has to add an optional
@@ -176,14 +238,13 @@ fn all_type_params_identical<'a>(shapes: &[SigShape<'a>], source: &'a str) -> bo
 /// * When the counts are equal the merge unions a single parameter's type. This is
 ///   unsafe — so the group is not unifiable — when the signatures form an
 ///   overloaded-narrowing group (distinct parameter lists each mapping to a
-///   distinct, narrower return), or their return types are not all identical *while*
-///   the inputs differ (a differing parameter position or type-parameter
-///   constraint), because then each overload narrows the return conditionally on its
-///   input — the trpc `subscription<$Output extends AsyncIterable>: SubscriptionProcedure`
-///   vs `subscription<$Output extends Observable>: LegacyObservableSubscriptionProcedure`
-///   idiom — which a single union return cannot express, or they differ at two or
-///   more parameter positions (the EventEmitter idiom, where a string-literal event
-///   and its narrowed listener both differ from the catch-all overload; a
+///   distinct, narrower return), or their return types are not all identical while a
+///   parameter position differs, because then each overload narrows the return
+///   conditionally on its input — the trpc `useTRPCInfiniteQuery` idiom, where the
+///   `opts` shape selects between `DefinedUseInfiniteQueryResult` and
+///   `UseInfiniteQueryResult` — which a single union return cannot express, or they
+///   differ at two or more parameter positions (the EventEmitter idiom, where a
+///   string-literal event and its narrowed listener both differ from the catch-all overload; a
 ///   per-position union would admit listener/event combinations the overloads
 ///   reject). Overloads with identical inputs but differing returns are a redundant
 ///   duplicate whose only merge — a union return — is itself the smell, so they
@@ -201,14 +262,15 @@ fn signatures_are_unifiable<'a>(shapes: &[SigShape<'a>], source: &'a str) -> boo
     if max - min > 1 {
         return false;
     }
+    if !all_type_params_identical(shapes, source) || !all_rest_params_identical(shapes, source) {
+        return false;
+    }
     if min == max {
         if signatures_narrow_return_type(shapes, source) {
             return false;
         }
         let differing = differing_param_positions(shapes, min, source);
-        if !all_returns_identical(shapes, source)
-            && (differing > 0 || !all_type_params_identical(shapes, source))
-        {
+        if !all_returns_identical(shapes, source) && differing > 0 {
             return false;
         }
         return differing < 2;
@@ -228,81 +290,194 @@ struct SigGroup<'a> {
     shapes: Vec<SigShape<'a>>,
 }
 
-fn collect_signatures<'a>(
-    members: &'a [TSSignature<'a>],
+impl<'a> SigGroup<'a> {
+    fn push(&mut self, offset: u32, shape: SigShape<'a>) {
+        self.offsets.push(offset);
+        self.shapes.push(shape);
+    }
+}
+
+/// The overload groups of one carrier, keyed by the name the overloads share
+/// ([`CALL_SIGNATURE_KEY`] for call signatures, `static m` for a static method).
+type SigGroups<'a> = FxHashMap<String, SigGroup<'a>>;
+
+/// The name a member groups its overloads under. A computed key has no
+/// statically-known name, so it cannot be matched against a sibling.
+fn member_name(key: &PropertyKey) -> Option<String> {
+    match key {
+        PropertyKey::StaticIdentifier(id) => Some(id.name.to_string()),
+        PropertyKey::StringLiteral(s) => Some(s.value.to_string()),
+        _ => None,
+    }
+}
+
+/// Emit one diagnostic per unifiable group, anchored on the group's first
+/// signature. An overload group is one finding: the same advice reported per
+/// mergeable pair repeats positions once the group has three members, and no
+/// pair states the merge the reader has to perform.
+fn report_unifiable_groups(
+    groups: SigGroups<'_>,
     ctx: &CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut seen: FxHashMap<String, SigGroup<'a>> = FxHashMap::default();
+    let mut findings: Vec<(u32, String)> = groups
+        .into_iter()
+        .filter(|(_, group)| {
+            group.offsets.len() >= 2 && signatures_are_unifiable(&group.shapes, ctx.source)
+        })
+        .map(|(name, group)| {
+            let subject = if name == CALL_SIGNATURE_KEY {
+                "Call signatures".to_owned()
+            } else {
+                format!("`{name}` signatures")
+            };
+            (
+                group.offsets[0],
+                format!(
+                    "{subject} can be unified into a single signature \
+                     with a union or optional parameter."
+                ),
+            )
+        })
+        .collect();
+    findings.sort_unstable_by_key(|(offset, _)| *offset);
+
+    for (offset, message) in findings {
+        let (line, column) = byte_offset_to_line_col(ctx.source, offset as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message,
+            severity: Severity::Error,
+            span: None,
+        });
+    }
+}
+
+/// The overload groups of an interface body or type literal: its call
+/// signatures under one key, its method signatures under their names.
+/// Path-discriminated call signatures are dropped from the result.
+fn collect_signatures<'a>(members: &'a [TSSignature<'a>]) -> SigGroups<'a> {
+    let mut groups = SigGroups::default();
     let mut call_sigs: Vec<&TSCallSignatureDeclaration<'a>> = Vec::new();
 
     for sig in members {
         match sig {
             TSSignature::TSCallSignatureDeclaration(call) => {
-                let group = seen.entry("[[call]]".to_string()).or_default();
-                group.offsets.push(call.span.start);
-                group.shapes.push(SigShape {
-                    type_params: call.type_parameters.as_deref(),
-                    params: &call.params,
-                    return_type: call.return_type.as_deref(),
-                });
+                groups.entry(CALL_SIGNATURE_KEY.to_owned()).or_default().push(
+                    call.span.start,
+                    SigShape {
+                        type_params: call.type_parameters.as_deref(),
+                        params: &call.params,
+                        return_type: call.return_type.as_deref(),
+                    },
+                );
                 call_sigs.push(call);
             }
             TSSignature::TSMethodSignature(method) => {
-                let name = match &method.key {
-                    PropertyKey::StaticIdentifier(id) => id.name.to_string(),
-                    PropertyKey::StringLiteral(s) => s.value.to_string(),
-                    _ => continue,
+                let Some(name) = member_name(&method.key) else {
+                    continue;
                 };
-                let group = seen.entry(name).or_default();
-                group.offsets.push(method.span.start);
-                group.shapes.push(SigShape {
-                    type_params: method.type_parameters.as_deref(),
-                    params: &method.params,
-                    return_type: method.return_type.as_deref(),
-                });
+                groups.entry(name).or_default().push(
+                    method.span.start,
+                    SigShape {
+                        type_params: method.type_parameters.as_deref(),
+                        params: &method.params,
+                        return_type: method.return_type.as_deref(),
+                    },
+                );
             }
             _ => {}
         }
     }
 
     if call_signatures_are_path_discriminated(&call_sigs) {
-        seen.remove("[[call]]");
+        groups.remove(CALL_SIGNATURE_KEY);
     }
+    groups
+}
 
-    seen.retain(|_, group| signatures_are_unifiable(&group.shapes, ctx.source));
-
-    for (name, group) in &seen {
-        let offsets = &group.offsets;
-        if offsets.len() < 2 {
-            continue;
-        }
-        for &offset in &offsets[1..] {
-            let display_name = if name == "[[call]]" {
-                "Call signatures".to_string()
-            } else {
-                format!("`{name}` signatures")
-            };
-            let (line, _column) = byte_offset_to_line_col(ctx.source, offset as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column: 1,
-                rule_id: super::META.id.into(),
-                message: format!(
-                    "{display_name} can be unified into a single signature \
-                     with a union or optional parameter."
-                ),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
+/// The group key and node of a class element that is an overload signature: a
+/// body-less method or constructor. Accessors cannot be overloaded, and a static
+/// and an instance method of the same name are two members rather than two
+/// overloads, so the key carries `static`.
+fn class_method_overload<'a>(
+    element: &'a ClassElement<'a>,
+) -> Option<(String, &'a MethodDefinition<'a>)> {
+    let ClassElement::MethodDefinition(method) = element else {
+        return None;
+    };
+    if method.value.body.is_some()
+        || !matches!(
+            method.kind,
+            MethodDefinitionKind::Method | MethodDefinitionKind::Constructor
+        )
+    {
+        return None;
     }
+    let name = member_name(&method.key)?;
+    let key = if method.r#static {
+        format!("static {name}")
+    } else {
+        name
+    };
+    Some((key, method))
+}
+
+/// The overload groups of a class body, keyed by [`class_method_overload`].
+fn collect_class_methods<'a>(body: &'a ClassBody<'a>) -> SigGroups<'a> {
+    let mut groups = SigGroups::default();
+    for (key, method) in body.body.iter().filter_map(class_method_overload) {
+        groups
+            .entry(key)
+            .or_default()
+            .push(method.span.start, SigShape::from_function(&method.value));
+    }
+    groups
+}
+
+/// The name and node of a statement that declares an overload signature: a
+/// function declaration with no body — an implementation signature is not one of
+/// the overloads it implements. Both `function f(…): T` and
+/// `export function f(…): T` carry the declaration, so both spellings are read.
+fn function_overload<'a>(statement: &'a Statement<'a>) -> Option<(&'a str, &'a Function<'a>)> {
+    let func = match statement {
+        Statement::FunctionDeclaration(func) => func,
+        Statement::ExportNamedDeclaration(export) => match export.declaration.as_ref()? {
+            Declaration::FunctionDeclaration(func) => func,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if func.body.is_some() {
+        return None;
+    }
+    Some((func.id.as_ref()?.name.as_str(), func))
+}
+
+/// The overload groups of a statement list, keyed by function name.
+fn collect_function_declarations<'a>(statements: &'a [Statement<'a>]) -> SigGroups<'a> {
+    let mut groups = SigGroups::default();
+    for (name, func) in statements.iter().filter_map(function_overload) {
+        groups
+            .entry(name.to_owned())
+            .or_default()
+            .push(func.span.start, SigShape::from_function(func));
+    }
+    groups
 }
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
+        &[
+            AstType::TSInterfaceDeclaration,
+            AstType::TSTypeAliasDeclaration,
+            AstType::ClassBody,
+            AstType::Program,
+            AstType::TSModuleBlock,
+        ]
     }
 
     fn run<'a>(
@@ -314,11 +489,28 @@ impl OxcCheck for Check {
     ) {
         match node.kind() {
             AstKind::TSInterfaceDeclaration(decl) => {
-                collect_signatures(&decl.body.body, ctx, diagnostics);
+                report_unifiable_groups(collect_signatures(&decl.body.body), ctx, diagnostics);
+            }
+            AstKind::ClassBody(body) => {
+                report_unifiable_groups(collect_class_methods(body), ctx, diagnostics);
+            }
+            AstKind::Program(program) => {
+                report_unifiable_groups(
+                    collect_function_declarations(&program.body),
+                    ctx,
+                    diagnostics,
+                );
+            }
+            AstKind::TSModuleBlock(block) => {
+                report_unifiable_groups(
+                    collect_function_declarations(&block.body),
+                    ctx,
+                    diagnostics,
+                );
             }
             AstKind::TSTypeAliasDeclaration(decl) => {
                 if let oxc_ast::ast::TSType::TSTypeLiteral(lit) = &decl.type_annotation {
-                    collect_signatures(&lit.members, ctx, diagnostics);
+                    report_unifiable_groups(collect_signatures(&lit.members), ctx, diagnostics);
                 }
             }
             _ => {}
@@ -603,5 +795,227 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    // ── overload carriers other than interfaces and type literals (#8181) ────
+
+    /// The jsdiff `Diff.diff` overload group, whose five signatures map each
+    /// option shape to its own narrowed return.
+    const NARROWED_RETURN_OVERLOADS: &str = "\
+diff(a: string, b: string, o: Cb): undefined;
+diff(a: string, b: string, o: OptsAbortable & { callback: Cb }): undefined;
+diff(a: string, b: string, o: OptsSync & { callback: Cb }): undefined;
+diff(a: string, b: string, o: OptsAbortable): string[] | undefined;
+diff(a: string, b: string, o?: OptsSync): string[];";
+
+    // Regression #8181: kpdecker/jsdiff `Diff.diff` — the same overload group the
+    // interface spelling already exempts, spelled as class methods. Each option
+    // shape maps to its own return, so a union parameter would erase the
+    // correlation callers rely on.
+    #[test]
+    fn allows_class_method_overloads_with_narrowed_return_types() {
+        assert!(
+            run_on(&format!(
+                "export class Diff {{\n  {NARROWED_RETURN_OVERLOADS}\n  \
+                 diff(a: string, b: string, o?: any): string[] | undefined {{ return []; }}\n}}"
+            ))
+            .is_empty()
+        );
+    }
+
+    // Regression #8181: the same group spelled as function declarations.
+    #[test]
+    fn allows_function_overloads_with_narrowed_return_types() {
+        let source = NARROWED_RETURN_OVERLOADS.replace("diff(", "export function diff(");
+        assert!(run_on(&source).is_empty());
+    }
+
+    // Guard: a genuinely mergeable class-method overload pair fires — once, from
+    // the class body, with the implementation signature left out of the group.
+    #[test]
+    fn flags_unifiable_class_method_overloads() {
+        let diags = run_on(
+            "export class C {\n  \
+             m(x: string): void;\n  \
+             m(x: number): void;\n  \
+             m(x: string | number): void {}\n}",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Guard: a genuinely mergeable function-declaration overload pair fires once.
+    #[test]
+    fn flags_unifiable_function_overloads() {
+        let diags = run_on(
+            "export function foo(x: string): void;\n\
+             export function foo(x: number): void;\n\
+             export function foo(x: string | number): void {}\n",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Guard: overloads declared inside an ambient module block are read too.
+    #[test]
+    fn flags_unifiable_overloads_in_a_module_block() {
+        let diags = run_on(
+            "declare module 'pkg' {\n  \
+             export function f(x: string): void;\n  \
+             export function f(x: number): void;\n}",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // A static and an instance method of the same name are two members, not two
+    // overloads: they cannot be merged into one signature.
+    #[test]
+    fn allows_same_name_static_and_instance_methods() {
+        assert!(
+            run_on(
+                "declare class C {\n  \
+                 static m(x: string): void;\n  \
+                 m(x: number): void;\n}"
+            )
+            .is_empty()
+        );
+    }
+
+    // Regression #5506: vobyjs/voby `useEventListener` — each overload pairs a
+    // target constraint (`T extends Window`) with the matching event map
+    // (`U extends keyof WindowEventMap`). The correlated constraints differ per
+    // overload, so no single union-parameter signature expresses them.
+    #[test]
+    fn allows_target_type_discriminated_dom_overloads() {
+        assert!(
+            run_on(
+                "function useEventListener<T extends Window, U extends keyof WindowEventMap>(target: T, event: U): Disposer;\n\
+                 function useEventListener<T extends Document, U extends keyof DocumentEventMap>(target: T, event: U): Disposer;\n\
+                 function useEventListener<T extends HTMLElement, U extends keyof HTMLElementEventMap>(target: T, event: U): Disposer;\n\
+                 function useEventListener(target: unknown, event: string): Disposer {\n  return () => {};\n}\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: overloads whose generic constraints are identical differ only in a
+    // unionizable value parameter, so they remain genuinely mergeable.
+    #[test]
+    fn flags_function_overloads_with_identical_generic_constraints() {
+        let diags = run_on(
+            "function wrap<T extends object>(x: T, k: string): T;\n\
+             function wrap<T extends object>(x: T, k: number): T;\n\
+             function wrap<T extends object>(x: T, k: string | number): T {\n  return x;\n}\n",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // A group mixing a constrained-generic member with a plain one binds its
+    // type parameters differently per overload: a meaningful generic constraint
+    // and its absence are not unifiable into one signature.
+    #[test]
+    fn allows_mixed_generic_and_plain_function_overloads() {
+        assert!(
+            run_on(
+                "function pick<T extends object>(x: T): T;\n\
+                 function pick(x: string): string;\n\
+                 function pick(x: unknown): unknown {\n  return x;\n}\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // Regression #8181: an overload group is one finding. Reporting per mergeable
+    // pair emits `n choose 2` diagnostics for at most `n - 1` available merges,
+    // and anchors the later ones on a position it already used.
+    #[test]
+    fn reports_a_five_member_group_once() {
+        let diags = run_on(
+            "export function e(x: 'a'): void\n\
+             export function e(x: 'b'): void\n\
+             export function e(x: 'c'): void\n\
+             export function e(x: 'd'): void\n\
+             export function e(x: 'e'): void\n\
+             export function e(x: string): void { void x }\n",
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].line, 1);
+    }
+
+    // vueuse `useAverage` — an array overload beside a variadic one. The two state
+    // two call conventions, `useAverage([a, b])` and `useAverage(a, b)`; neither a
+    // union at one position nor an optional trailing parameter expresses both.
+    #[test]
+    fn allows_overloads_differing_by_a_rest_parameter() {
+        assert!(
+            run_on(
+                "export function useAverage(array: MaybeRefOrGetter<number>[]): ComputedRef<number>\n\
+                 export function useAverage(...args: MaybeRefOrGetter<number>[]): ComputedRef<number>\n\
+                 export function useAverage(...args: any[]): ComputedRef<number> {\n  \
+                 return { value: args.length }\n}\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // Guard: a zero-argument overload beside a one-argument one is genuinely
+    // `f(a?: string)` — the rest-parameter guard must not swallow it.
+    #[test]
+    fn flags_zero_arg_and_one_arg_function_overloads() {
+        let diags = run_on(
+            "export function opt(): number\n\
+             export function opt(a: string): number\n\
+             export function opt(a?: string): number { return a ? a.length : 0 }\n",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Guard: overloads that share the same variadic tail still differ at one
+    // fixed position, so they remain mergeable.
+    #[test]
+    fn flags_overloads_sharing_a_rest_parameter() {
+        let diags = run_on(
+            "export function tag(first: string, ...rest: number[]): void\n\
+             export function tag(first: number, ...rest: number[]): void\n\
+             export function tag(first: any, ...rest: number[]): void { void first; void rest }\n",
+        );
+        assert_eq!(diags.len(), 1);
+    }
+
+    // Overloads whose returns are narrowed per parameter type stay exempt when
+    // spelled as function declarations.
+    #[test]
+    fn allows_function_overloads_with_distinct_return_types() {
+        assert!(
+            run_on(
+                "export function d(x: string): string\n\
+                 export function d(x: number): number\n\
+                 export function d(x: any): any { return x }\n"
+            )
+            .is_empty()
+        );
+    }
+
+    // No two diagnostics ever share a position: each is a whole overload group,
+    // so a reader fixing one is not told the same thing again, and downstream
+    // deduplication by `(path, line, column)` drops nothing.
+    #[test]
+    fn never_reports_two_diagnostics_at_one_position() {
+        let diags = run_on(
+            "interface I { m(x: string): void; m(x: number): void; n(x: string): void; n(x: number): void }\n\
+             export class C {\n  \
+             p(x: string): void;\n  \
+             p(x: number): void;\n  \
+             p(x: boolean): void;\n  \
+             p(x: any): void {}\n}\n\
+             export function q(x: string): void\n\
+             export function q(x: number): void\n\
+             export function q(x: boolean): void\n\
+             export function q(x: any): void { void x }\n",
+        );
+        assert_eq!(diags.len(), 4, "{diags:?}");
+        let mut positions: Vec<(usize, usize)> = diags.iter().map(|d| (d.line, d.column)).collect();
+        positions.sort_unstable();
+        let mut deduped = positions.clone();
+        deduped.dedup();
+        assert_eq!(positions, deduped, "duplicate positions: {positions:?}");
     }
 }

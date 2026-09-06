@@ -301,7 +301,7 @@ mod tests {
         }
 
         // (canonical id kept) → (alias or retired ids that must NOT be registered).
-        let groups: [(&str, &[&str]); 7] = [
+        let groups: [(&str, &[&str]); 8] = [
             (
                 "ts-no-explicit-any",
                 &["typescript/no-explicit-any", "no-explicit-any"],
@@ -318,6 +318,7 @@ mod tests {
             ("vue-no-array-index-key", &["vue-v-for-needs-stable-key"]),
             ("no-delete", &["ts-no-dynamic-delete"]),
             ("no-implicit-deps", &["unlisted-dependency"]),
+            ("ts-unified-signatures", &["unified-signatures"]),
         ];
         for (canonical, aliases) in groups {
             assert!(
