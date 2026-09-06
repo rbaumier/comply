@@ -149,7 +149,18 @@ pub const PROC_MACRO_CARGO_TOML: &str = "[package]\nname = \"derive-like\"\nvers
 pub const BINARY_ONLY_CARGO_TOML: &str =
     "[package]\nname = \"cli\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
 
-/// Manifest of an ordinary library crate, the negative control for the two above.
+/// Manifest of an FFI bridge crate whose only library target is a C dynamic
+/// library, so no Rust crate can depend on it.
+pub const FFI_BRIDGE_CARGO_TOML: &str = "[package]\nname = \"bridge\"\nversion = \"0.1.0\"\n\
+    edition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\"]\n";
+
+/// Manifest of a crate shipping both a C dynamic library and an `rlib`: Rust
+/// consumers can still depend on it, so it is the negative control for
+/// [`FFI_BRIDGE_CARGO_TOML`].
+pub const CDYLIB_PLUS_RLIB_CARGO_TOML: &str = "[package]\nname = \"mixed\"\nversion = \"0.1.0\"\n\
+    edition = \"2021\"\n\n[lib]\ncrate-type = [\"cdylib\", \"rlib\"]\n";
+
+/// Manifest of an ordinary library crate, the negative control for the three above.
 pub const LIB_CARGO_TOML: &str = "[package]\nname = \"normal-lib\"\nversion = \"0.1.0\"\n\
     edition = \"2021\"\n\n[lib]\nname = \"normal_lib\"\n";
 

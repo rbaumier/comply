@@ -3443,18 +3443,21 @@ fn file_is_non_library_target(path: &Path) -> bool {
 
 /// True when a consumer outside this crate can name its `pub` items at all.
 ///
-/// A binary-only crate (no `[lib]` target, no `src/lib.rs`) exports nothing, and
-/// a `proc-macro` crate exports only macros, so no consumer can ever hold one of
-/// its types. A rule whose rationale is "an outside consumer cannot fix this"
+/// Three crate shapes export nothing a Rust consumer can hold: a binary-only
+/// crate (no `[lib]` target, no `src/lib.rs`) exports nothing at all, a
+/// `proc-macro` crate exports only macros, and an FFI bridge crate (a `[lib]
+/// crate-type` of `cdylib`/`staticlib` with no `rlib`/`lib`) exports only a C
+/// ABI — Cargo cannot resolve it as a dependency, so no Rust crate links
+/// against it. A rule whose rationale is "an outside consumer cannot fix this"
 /// has no subject there, and pairs this with [`is_effectively_pub`]: one asks
 /// whether the item is reachable, the other whether anything can reach it.
 ///
 /// An absent or unparseable manifest answers `true`, so the rule keeps flagging
 /// rather than suppress on a guess.
 pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
-    project
-        .nearest_cargo_manifest(path)
-        .is_none_or(|manifest| !manifest.is_binary_only() && !manifest.is_proc_macro())
+    project.nearest_cargo_manifest(path).is_none_or(|manifest| {
+        !manifest.is_binary_only() && !manifest.is_proc_macro() && !manifest.is_ffi_bridge_crate()
+    })
 }
 
 /// True when `node` is test code, by any of the ways Rust marks it:

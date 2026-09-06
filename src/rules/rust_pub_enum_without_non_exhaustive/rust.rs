@@ -91,10 +91,10 @@ impl AstCheck for Check {
         if crate::rules::path_utils::has_vendored_source_banner(ctx.source) {
             return;
         }
-        // A binary-only crate (no `[lib]` target) has no external consumers, and
-        // a `proc-macro` crate can export only macros, so no downstream crate
-        // can import the enum. Adding a variant is never a SemVer break there,
-        // and `#[non_exhaustive]` (a cross-crate API attribute) is pointless.
+        // A crate no Rust code can depend on — binary-only, `proc-macro`, or an
+        // FFI bridge exporting only a C ABI — has no downstream crate that can
+        // import the enum. Adding a variant is never a SemVer break there, and
+        // `#[non_exhaustive]` (a cross-crate API attribute) is pointless.
         if !crate_has_external_consumers(ctx.project, ctx.path) {
             return;
         }
