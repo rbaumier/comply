@@ -241,16 +241,15 @@ impl AstCheck for Check {
         if match_covers_glob_imported_external_enum(node, &enum_like_arms, source_bytes) {
             return;
         }
-        // If the scrutinee enum is defined in *this* file and has a
-        // `#[cfg(...)]`-gated variant, its variant set is target-dependent:
-        // listing every variant explicitly fails to compile on the excluded
-        // target (the gated variant is absent there), so a wildcard `_` is the
-        // portable, compiler-required way to match it. Resolution is same-file
-        // only — the enum name is read from the qualified arm patterns
-        // (`Addr::SocketAddr` → `Addr`) and matched against this file's
-        // `enum_item` definitions. Skip the whole match, like the other
-        // whole-match exemptions.
-        if match_covers_same_file_cfg_gated_enum(node, &enum_like_arms, source_bytes) {
+        // If the scrutinee enum has a `#[cfg(...)]`-gated variant, its variant
+        // set is target-dependent: listing every variant explicitly fails to
+        // compile on the excluded target (the gated variant is absent there), so
+        // a wildcard `_` is the portable, compiler-required way to match it. The
+        // enum name is read from the qualified arm patterns
+        // (`Addr::SocketAddr` → `Addr`) and resolved against this file's
+        // `enum_item` definitions first, then against the enclosing crate's.
+        // Skip the whole match, like the other whole-match exemptions.
+        if match_covers_cfg_gated_enum(node, &enum_like_arms, source_bytes, ctx) {
             return;
         }
         // If the scrutinee enum is declared inside a `#[cxx::bridge]` module in
@@ -1119,19 +1118,20 @@ fn attribute_item_is_cfg(attr_item: tree_sitter::Node, source: &[u8]) -> bool {
         .any(|path| matches!(path.utf8_text(source), Ok("cfg") | Ok("cfg_attr")))
 }
 
-/// True if the match's scrutinee is an enum defined in the same file that has a
-/// `#[cfg(...)]`-gated variant.
+/// True if the match's scrutinee is an enum with a `#[cfg(...)]`-gated variant.
 ///
 /// Reads the enum names from the qualified `enum_like_arms` patterns
-/// (`Addr::SocketAddr(addr)` → `Addr`), then walks up to the enclosing
-/// `source_file` and checks every `enum_item` whose name is one of those: if any
-/// has a cfg-gated variant, the wildcard arm is portability-mandated. Bare
+/// (`Addr::SocketAddr(addr)` → `Addr`) and resolves them in two steps: this
+/// file's own `enum_item` definitions first, then — for an enum declared in a
+/// sibling file — the enclosing crate's, via the memoized project index. If the
+/// enum has a cfg-gated variant, the wildcard arm is portability-mandated. Bare
 /// unqualified variants (no `::`) carry no enum name to resolve and are ignored
 /// here — the match then falls through to normal flagging.
-fn match_covers_same_file_cfg_gated_enum(
+fn match_covers_cfg_gated_enum(
     match_node: tree_sitter::Node,
     enum_like_arms: &[tree_sitter::Node],
     source: &[u8],
+    ctx: &CheckCtx,
 ) -> bool {
     let names: Vec<&str> = enum_like_arms
         .iter()
@@ -1140,14 +1140,26 @@ fn match_covers_same_file_cfg_gated_enum(
     if names.is_empty() {
         return false;
     }
+    // Same-file resolution is a subtree walk over an already-parsed tree; the
+    // crate-wide index parses every `.rs` file of the project on first use, so
+    // it is only consulted once the local definitions come up empty.
     let mut current = match_node.parent();
     while let Some(node) = current {
         if node.kind() == "source_file" {
-            return source_file_has_cfg_gated_enum(node, &names, source);
+            if source_file_has_cfg_gated_enum(node, &names, source) {
+                return true;
+            }
+            break;
         }
         current = node.parent();
     }
-    false
+    // `Self` is a path keyword standing for the enclosing type, never an
+    // `enum_item` name: a `Self::Variant` match resolves in this file or not at
+    // all, so it must not pay for the crate-wide index.
+    names
+        .iter()
+        .filter(|name| **name != "Self")
+        .any(|name| ctx.project.crate_enum_has_cfg_gated_variant(ctx.path, name))
 }
 
 /// Extract the enum type name from a qualified variant pattern: the path
@@ -2331,5 +2343,100 @@ mod tests {
         // enum-with-wildcard match. A bare PascalCase variant arm still flags.
         let src = "fn f(e: E) -> i32 { match e { Variant1 => 1, _ => 0 } }";
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    /// Write the files into a temp crate, index them, and run the rule on the
+    /// last one — the shared cross-file harness, so a sibling-file enum resolves
+    /// through `indexed_paths()`.
+    fn run_cross_file(files: &[(&str, &str)]) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_in_indexed_crate(&Check, files)
+    }
+
+    const POEM_CARGO_TOML: &str = r#"
+[package]
+name = "poem"
+version = "0.1.0"
+edition = "2021"
+"#;
+
+    const REAL_IP_MATCH: &str = "use crate::addr::Addr;\n\
+                                 pub struct RealIp(pub Option<IpAddr>);\n\
+                                 pub fn from_request(remote: Addr) -> Result<RealIp, Error> {\n\
+                                     match remote {\n\
+                                         Addr::SocketAddr(addr) => Ok(RealIp(Some(addr.ip()))),\n\
+                                         _ => Ok(RealIp(None)),\n\
+                                     }\n\
+                                 }";
+
+    /// Closes #3873: poem declares `Addr` in `src/addr.rs` with a `#[cfg(unix)]`
+    /// `Unix` variant and matches it in `src/web/real_ip.rs`. Listing every
+    /// variant there is `rustc` error E0599 on a non-unix target, so the
+    /// wildcard is compiler-mandated — the cross-file crate scan must resolve
+    /// the sibling-file enum and not flag it.
+    #[test]
+    fn allows_wildcard_on_cfg_gated_enum_in_sibling_file_of_same_crate() {
+        let addr = "pub enum Addr {\n\
+                        SocketAddr(SocketAddr),\n\
+                        #[cfg(unix)]\n\
+                        Unix(Arc<UnixSocketAddr>),\n\
+                        Custom(&'static str, Cow<'static, str>),\n\
+                    }";
+        let diags = run_cross_file(&[
+            ("Cargo.toml", POEM_CARGO_TOML),
+            ("src/addr.rs", addr),
+            ("src/web/real_ip.rs", REAL_IP_MATCH),
+        ]);
+        assert!(
+            diags.is_empty(),
+            "a cfg-gated enum declared in a sibling file of the same crate must be recognized"
+        );
+    }
+
+    /// Issue #3873 negative space: the sibling-file enum has no cfg-gated
+    /// variant, so its variant set is target-stable and the wildcard is a real
+    /// catch-all. The cross-file resolution must not blanket-exempt every
+    /// cross-file enum.
+    #[test]
+    fn flags_wildcard_on_sibling_file_enum_without_cfg_gated_variant() {
+        let addr = "pub enum Addr {\n\
+                        SocketAddr(SocketAddr),\n\
+                        Unix(Arc<UnixSocketAddr>),\n\
+                        Custom(&'static str, Cow<'static, str>),\n\
+                    }";
+        let diags = run_cross_file(&[
+            ("Cargo.toml", POEM_CARGO_TOML),
+            ("src/addr.rs", addr),
+            ("src/web/real_ip.rs", REAL_IP_MATCH),
+        ]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a sibling-file enum with a target-stable variant set must still flag"
+        );
+    }
+
+    /// Load-bearing keying check: a cfg-gated `Addr` in a *different* crate must
+    /// not exempt the `Addr` matched in this crate. The two live under separate
+    /// `Cargo.toml`s, so the cross-file index keys them apart.
+    #[test]
+    fn flags_wildcard_when_cfg_gated_enum_is_in_a_different_crate() {
+        let other_addr = "pub enum Addr {\n\
+                              SocketAddr(SocketAddr),\n\
+                              #[cfg(unix)]\n\
+                              Unix(Arc<UnixSocketAddr>),\n\
+                          }";
+        let local_addr = "pub enum Addr { SocketAddr(SocketAddr), Custom(C) }";
+        let diags = run_cross_file(&[
+            ("a/Cargo.toml", POEM_CARGO_TOML),
+            ("a/src/addr.rs", local_addr),
+            ("b/Cargo.toml", POEM_CARGO_TOML),
+            ("b/src/addr.rs", other_addr),
+            ("a/src/web/real_ip.rs", REAL_IP_MATCH),
+        ]);
+        assert_eq!(
+            diags.len(),
+            1,
+            "a cfg-gated `Addr` in crate B must not exempt crate A's `Addr`"
+        );
     }
 }
