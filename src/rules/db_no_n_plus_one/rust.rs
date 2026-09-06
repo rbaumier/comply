@@ -703,7 +703,7 @@ mod tests {
     // itself names no database crate; the module declaring the type does.
     #[test]
     fn flags_pool_execute_in_loop_through_crate_local_db_module() {
-        let diags = crate::rules::test_helpers::run_rule_in_indexed_crate(
+        let diags = crate::rules::test_helpers::run_rule_in_indexed_files(
             &Check,
             &[
                 ("Cargo.toml", APP_CARGO_TOML),
@@ -731,7 +731,7 @@ mod tests {
     // handle, and stays silent.
     #[test]
     fn allows_pool_execute_in_loop_through_crate_local_non_db_module() {
-        let diags = crate::rules::test_helpers::run_rule_in_indexed_crate(
+        let diags = crate::rules::test_helpers::run_rule_in_indexed_files(
             &Check,
             &[
                 ("Cargo.toml", APP_CARGO_TOML),

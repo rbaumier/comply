@@ -197,26 +197,27 @@ pub fn run_rule_with_ctx(
 /// `ProjectCtx::for_test_with_files`, and runs `check` on the source file.
 #[must_use]
 pub fn run_rule_with_cargo(
-    check: &dyn AstCheck,
+    check: &dyn RunRule,
     cargo_toml: &str,
     source: &str,
     rel_src: &str,
 ) -> Vec<Diagnostic> {
-    run_rule_in_indexed_crate(check, &[("Cargo.toml", cargo_toml), (rel_src, source)])
+    run_rule_in_indexed_files(check, &[("Cargo.toml", cargo_toml), (rel_src, source)])
 }
 
-/// Write every `(path relative to the crate root, source)` pair into a temporary
-/// crate, index them all via `ProjectCtx::for_test_with_files`, then run `check`
-/// on the last one. A rule that resolves a symbol across the crate's files — a
-/// crate-scoped index reads sibling sources off `indexed_paths()` — needs them
-/// indexed, which [`run_rule_in_module_tree`] (default project context) does not
-/// do. Each file's language is inferred from its extension.
+/// Write every `(path relative to the temp root, source)` pair to disk, index
+/// them all via `ProjectCtx::for_test_with_files`, then run `check` on the last
+/// one. A rule that resolves a symbol across sibling files — a crate-scoped
+/// index reading `indexed_paths()`, or the TS/JS `ImportIndex` reading another
+/// module's export table — needs them indexed, which [`run_rule_in_module_tree`]
+/// (default project context) does not do. Each file's language is inferred from
+/// its extension.
 ///
 /// # Panics
 ///
 /// Panics when `files` is empty: there is no file to run the rule on.
 #[must_use]
-pub fn run_rule_in_indexed_crate(check: &dyn AstCheck, files: &[(&str, &str)]) -> Vec<Diagnostic> {
+pub fn run_rule_in_indexed_files(check: &dyn RunRule, files: &[(&str, &str)]) -> Vec<Diagnostic> {
     use std::fs;
     use tempfile::TempDir;
     let dir = TempDir::new().expect("tempdir");
@@ -232,7 +233,7 @@ pub fn run_rule_in_indexed_crate(check: &dyn AstCheck, files: &[(&str, &str)]) -
     let leaf_path = leaf.path.clone();
     let refs: Vec<&SourceFile> = written.iter().map(|(file, _)| file).collect();
     let project = ProjectCtx::for_test_with_files(&refs);
-    run_ast_check(
+    run_rule_with_ctx(
         check,
         leaf_source,
         &leaf_path,

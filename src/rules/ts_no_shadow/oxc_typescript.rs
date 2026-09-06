@@ -48,7 +48,13 @@ impl OxcCheck for Check {
                 // still finds the outer `State()` function. Same intent as
                 // `@typescript-eslint/no-shadow`'s `ignoreTypeValueShadow`
                 // default.
-                if !declaration_spaces_overlap(semantic, symbol_id, outer_symbol) {
+                if !declaration_spaces_overlap(
+                    semantic,
+                    ctx.project,
+                    ctx.path,
+                    symbol_id,
+                    outer_symbol,
+                ) {
                     continue;
                 }
                 let outer_decl = scoping.symbol_declaration(outer_symbol);
@@ -700,6 +706,77 @@ mod tests {
             "import { State } from './state';\n\
              export let initial: State;\n\
              export function Process<State extends object>(state: State): State { return state; }",
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_dual_space_import_used_only_as_value() {
+        // Issue #8377 reproduction: `./m` publishes `Q` in both declaration
+        // spaces. The importing file exercises the value face alone, so no
+        // reference in it proves the type-space membership — the source module's
+        // export table does, and the `<Q>` type parameter hides that type name.
+        let d = crate::rules::test_helpers::run_rule_in_indexed_files(
+            &Check,
+            &[
+                (
+                    "src/m.ts",
+                    "export type Q = string;\n\
+                     export const Q = \"q\";\n\
+                     export function use(a: unknown) { return a; }\n",
+                ),
+                (
+                    "src/c.ts",
+                    "import { Q, use } from './m';\n\
+                     export function f<Q>(x: Q) { return use(Q) && x; }\n",
+                ),
+            ],
+        );
+        assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
+    }
+
+    #[test]
+    fn allows_type_param_shadowing_value_only_export_across_files() {
+        // Negative space: the same shape where `./m` publishes `Q` in the value
+        // space alone. The export table must not invent a type name the module
+        // never declares.
+        let d = crate::rules::test_helpers::run_rule_in_indexed_files(
+            &Check,
+            &[
+                (
+                    "src/m.ts",
+                    "export const Q = \"q\";\n\
+                     export function use(a: unknown) { return a; }\n",
+                ),
+                (
+                    "src/c.ts",
+                    "import { Q, use } from './m';\n\
+                     export function f<Q>(x: Q) { return use(Q) && x; }\n",
+                ),
+            ],
+        );
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn still_flags_type_param_shadowing_reexported_type_import() {
+        // The type face reaches the importer through one
+        // `export { Q } from './origin'` hop, which the index resolves.
+        let d = crate::rules::test_helpers::run_rule_in_indexed_files(
+            &Check,
+            &[
+                ("src/origin.ts", "export type Q = string;\n"),
+                (
+                    "src/m.ts",
+                    "export { Q } from './origin';\n\
+                     export function use(a: unknown) { return a; }\n",
+                ),
+                (
+                    "src/c.ts",
+                    "import { Q, use } from './m';\n\
+                     export function f<Q>(x: Q) { return use(Q) && x; }\n",
+                ),
+            ],
         );
         assert_eq!(d.len(), 1, "expected one diagnostic, got: {d:?}");
     }

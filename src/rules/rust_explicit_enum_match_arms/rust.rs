@@ -2349,7 +2349,7 @@ mod tests {
     /// last one — the shared cross-file harness, so a sibling-file enum resolves
     /// through `indexed_paths()`.
     fn run_cross_file(files: &[(&str, &str)]) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule_in_indexed_crate(&Check, files)
+        crate::rules::test_helpers::run_rule_in_indexed_files(&Check, files)
     }
 
     const POEM_CARGO_TOML: &str = r#"
