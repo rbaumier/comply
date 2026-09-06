@@ -1,104 +1,30 @@
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Argument, BinaryExpression, BinaryOperator, Expression, Statement, UnaryOperator};
-use oxc_span::GetSpan;
+use crate::rules::test_guard_helpers::{is_narrowing_guard, test_scope_statements};
+use oxc_ast::ast::{Argument, Expression, Statement};
+use oxc_semantic::{NodeId, Semantic};
 use std::sync::Arc;
 
-fn is_type_narrowing(expr: &Expression) -> bool {
-    match expr.without_parentheses() {
-        Expression::CallExpression(call) => {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
-                let m = member.property.name.as_str();
-                return matches!(m, "isErr" | "isOk");
-            }
-            false
-        }
-        Expression::BinaryExpression(bin) => {
-            matches!(bin.operator, BinaryOperator::Instanceof) || is_nullish_check(bin)
-        }
-        Expression::UnaryExpression(unary) => {
-            matches!(unary.operator, UnaryOperator::LogicalNot)
-                && is_type_narrowing(&unary.argument)
-        }
-        _ => false,
+/// The statements a guard lookup may consult, materialised on the first `if`
+/// this test body contains — most test bodies have none, and the walk spans the
+/// whole enclosing `describe`.
+struct GuardScope<'a> {
+    from: NodeId,
+    semantic: &'a Semantic<'a>,
+    statements: Option<Vec<&'a Statement<'a>>>,
+}
+
+impl<'a> GuardScope<'a> {
+    fn new(from: NodeId, semantic: &'a Semantic<'a>) -> Self {
+        Self { from, semantic, statements: None }
     }
-}
 
-fn is_nullish_check(bin: &BinaryExpression) -> bool {
-    if !matches!(
-        bin.operator,
-        BinaryOperator::StrictInequality
-            | BinaryOperator::StrictEquality
-            | BinaryOperator::Inequality
-            | BinaryOperator::Equality
-    ) {
-        return false;
+    fn statements(&mut self) -> &[&'a Statement<'a>] {
+        let (from, semantic) = (self.from, self.semantic);
+        self.statements
+            .get_or_insert_with(|| test_scope_statements(from, semantic))
     }
-    is_nullish_literal(&bin.left) || is_nullish_literal(&bin.right)
-}
-
-fn is_nullish_literal(expr: &Expression) -> bool {
-    matches!(expr.without_parentheses(), Expression::NullLiteral(_))
-        || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
-}
-
-/// A discriminated-union type guard whose discriminant was already asserted.
-///
-/// Zod/neverthrow/Result patterns force an `if (x.success)` / `if (!x.success)`
-/// to narrow a `{ success: true; data } | { success: false; error }` union
-/// before touching a branch-specific field. When a preceding sibling statement
-/// already asserts that discriminant (`expect(x.success).toBe(false)`), the
-/// `if` is provably single-branch — type-system boilerplate, not hidden logic.
-fn is_asserted_discriminant_guard(test: &Expression, preceding: &[Statement], source: &str) -> bool {
-    let Some(target) = discriminant_target(test, source) else {
-        return false;
-    };
-    preceding
-        .iter()
-        .any(|stmt| stmt_asserts_member(stmt, target, source))
-}
-
-/// Source text of the member expression used as a guard discriminant, peeling a
-/// leading `!` and parentheses. `None` when the guard is not a bare member access.
-fn discriminant_target<'s>(expr: &Expression, source: &'s str) -> Option<&'s str> {
-    match expr.without_parentheses() {
-        Expression::UnaryExpression(u) if matches!(u.operator, UnaryOperator::LogicalNot) => {
-            discriminant_target(&u.argument, source)
-        }
-        Expression::StaticMemberExpression(m) => Some(span_text(m.span, source)),
-        _ => None,
-    }
-}
-
-/// True when `stmt` is `expect(<target>)...` asserting the same member text.
-fn stmt_asserts_member(stmt: &Statement, target: &str, source: &str) -> bool {
-    let Statement::ExpressionStatement(es) = stmt else {
-        return false;
-    };
-    let mut cur = es.expression.without_parentheses();
-    loop {
-        let Expression::CallExpression(call) = cur else {
-            return false;
-        };
-        match &call.callee {
-            Expression::Identifier(id) if id.name.as_str() == "expect" => {
-                return call
-                    .arguments
-                    .first()
-                    .and_then(|a| a.as_expression())
-                    .is_some_and(|arg| span_text(arg.span(), source) == target);
-            }
-            Expression::StaticMemberExpression(m) => {
-                cur = m.object.without_parentheses();
-            }
-            _ => return false,
-        }
-    }
-}
-
-fn span_text(span: oxc_span::Span, source: &str) -> &str {
-    &source[span.start as usize..span.end as usize]
 }
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
@@ -121,7 +47,7 @@ impl OxcCheck for Check {
         &self,
         node: &oxc_semantic::AstNode<'a>,
         ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
+        semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         if !is_test_file(ctx.path) {
@@ -138,7 +64,8 @@ impl OxcCheck for Check {
             return;
         };
         let mut hits: Vec<(&str, u32)> = Vec::new();
-        collect_control_flow(body_stmts, ctx.source, &mut hits);
+        let mut scope = GuardScope::new(node.id(), semantic);
+        collect_control_flow(body_stmts, ctx.source, &mut scope, &mut hits);
 
         for (label, start) in hits {
             let (line, column) = byte_offset_to_line_col(ctx.source, start as usize);
@@ -202,32 +129,25 @@ fn test_body_stmts<'a>(
 /// Recursively find control-flow nodes in statements, skipping nested
 /// function bodies and setup-hook calls.
 fn collect_control_flow<'a>(
-    stmts: &'a oxc_allocator::Vec<'a, Statement<'a>>,
+    stmts: &'a [Statement<'a>],
     source: &str,
+    scope: &mut GuardScope<'a>,
     out: &mut Vec<(&'static str, u32)>,
 ) {
-    for (i, stmt) in stmts.iter().enumerate() {
-        if let Statement::IfStatement(s) = stmt {
-            if is_type_narrowing(&s.test)
-                || is_asserted_discriminant_guard(&s.test, &stmts[..i], source)
-            {
-                continue;
-            }
-            out.push(("if", s.span.start));
-            continue;
-        }
-        collect_control_flow_stmt(stmt, source, out);
+    for stmt in stmts {
+        collect_control_flow_stmt(stmt, source, scope, out);
     }
 }
 
 fn collect_control_flow_stmt<'a>(
     stmt: &'a Statement<'a>,
     source: &str,
+    scope: &mut GuardScope<'a>,
     out: &mut Vec<(&'static str, u32)>,
 ) {
     match stmt {
         Statement::IfStatement(s) => {
-            if !is_type_narrowing(&s.test) {
+            if !is_narrowing_guard(s, scope.statements(), source) {
                 out.push(("if", s.span.start));
             }
         }
@@ -245,7 +165,7 @@ fn collect_control_flow_stmt<'a>(
             // loops whose body itself has if/for/while/switch inside, since
             // those can silently skip assertions on some iterations.
             let mut body_hits: Vec<(&str, u32)> = Vec::new();
-            collect_control_flow_stmt(&s.body, source, &mut body_hits);
+            collect_control_flow_stmt(&s.body, source, scope, &mut body_hits);
             if !body_hits.is_empty() {
                 out.push(("for", s.span.start));
             }
@@ -269,18 +189,18 @@ fn collect_control_flow_stmt<'a>(
             // No control flow to find in a plain expression statement.
         }
         Statement::BlockStatement(block) => {
-            collect_control_flow(&block.body, source, out);
+            collect_control_flow(&block.body, source, scope, out);
         }
         Statement::LabeledStatement(labeled) => {
-            collect_control_flow_stmt(&labeled.body, source, out);
+            collect_control_flow_stmt(&labeled.body, source, scope, out);
         }
         Statement::TryStatement(try_stmt) => {
-            collect_control_flow(&try_stmt.block.body, source, out);
+            collect_control_flow(&try_stmt.block.body, source, scope, out);
             if let Some(handler) = &try_stmt.handler {
-                collect_control_flow(&handler.body.body, source, out);
+                collect_control_flow(&handler.body.body, source, scope, out);
             }
             if let Some(finalizer) = &try_stmt.finalizer {
-                collect_control_flow(&finalizer.body, source, out);
+                collect_control_flow(&finalizer.body, source, scope, out);
             }
         }
         _ => {}
@@ -377,6 +297,34 @@ mod tests {
         let source = "test('x', () => {\n    const r = parse('a');\n    expect(r.success).toBe(true);\n    if (r.success) {\n        expect(r.data).toBe('a');\n    }\n});";
         let diags = run_test_file("src/foo.test.ts", source);
         assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_negated_discriminant_assertion_guard() {
+        // `.not.toBe(true)` asserts the opposite of what the branch needs —
+        // it does not make the `if` a guard.
+        let source = "test('x', () => {\n    const r = parse('a');\n    expect(r.success).not.toBe(true);\n    if (r.success) {\n        expect(r.data).toBe('a');\n    }\n});";
+        let diags = run_test_file("src/foo.test.ts", source);
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
+    }
+
+    #[test]
+    fn allows_discriminant_asserted_in_a_sibling_test() {
+        // Regression for #8213: the subject is bound at `describe` scope and its
+        // discriminant fixed by an object-literal assertion in a sibling test —
+        // the `if` only narrows the union so `dataset.value` is callable.
+        let source = "describe('args', () => {\n    const dataset = run();\n    test('should return new function', () => {\n        expect(dataset).toStrictEqual({ typed: true, value: expect.any(Function) });\n    });\n    test('should not throw error for valid args', () => {\n        if (dataset.typed) {\n            expect(dataset.value(123)).toBe(123);\n        }\n    });\n});";
+        let diags = run_test_file("src/args.test.ts", source);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+    }
+
+    #[test]
+    fn flags_discriminant_guard_never_asserted() {
+        // Same shape with no assertion anywhere on the discriminant — genuine
+        // conditional logic.
+        let source = "describe('args', () => {\n    const dataset = run();\n    test('should not throw error for valid args', () => {\n        if (dataset.typed) {\n            expect(dataset.value(123)).toBe(123);\n        }\n    });\n});";
+        let diags = run_test_file("src/args.test.ts", source);
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
     }
 
     #[test]

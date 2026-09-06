@@ -6,148 +6,9 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{BinaryExpression, BinaryOperator, Expression, Statement, UnaryOperator};
+use crate::rules::test_guard_helpers::{is_narrowing_guard, test_scope_statements};
+use oxc_ast::ast::{Expression, Statement};
 use std::sync::Arc;
-
-fn is_type_narrowing(expr: &Expression) -> bool {
-    match expr.without_parentheses() {
-        Expression::CallExpression(call) => {
-            if let Expression::StaticMemberExpression(member) = &call.callee {
-                let m = member.property.name.as_str();
-                return matches!(m, "isErr" | "isOk");
-            }
-            false
-        }
-        Expression::BinaryExpression(bin) => {
-            matches!(bin.operator, BinaryOperator::Instanceof) || is_nullish_check(bin)
-        }
-        Expression::UnaryExpression(unary) => {
-            matches!(unary.operator, UnaryOperator::LogicalNot)
-                && is_type_narrowing(&unary.argument)
-        }
-        _ => false,
-    }
-}
-
-fn is_nullish_check(bin: &BinaryExpression) -> bool {
-    if !matches!(
-        bin.operator,
-        BinaryOperator::StrictInequality
-            | BinaryOperator::StrictEquality
-            | BinaryOperator::Inequality
-            | BinaryOperator::Equality
-    ) {
-        return false;
-    }
-    is_nullish_literal(&bin.left) || is_nullish_literal(&bin.right)
-}
-
-fn is_nullish_literal(expr: &Expression) -> bool {
-    matches!(expr.without_parentheses(), Expression::NullLiteral(_))
-        || matches!(expr.without_parentheses(), Expression::Identifier(id) if id.name.as_str() == "undefined")
-}
-
-/// Extracts `(expect_arg_text, matcher_value_text)` from an equality assertion
-/// like `expect(A).toBe(B)`, `expect(A).toEqual(B)`, `expect(A).toStrictEqual(B)`.
-/// Returns `None` for negated forms or unrecognised matchers.
-fn equality_assertion_parts<'a>(stmt: &Statement<'a>, source: &'a str) -> Option<(&'a str, &'a str)> {
-    use oxc_span::GetSpan;
-    let Statement::ExpressionStatement(es) = stmt else { return None };
-    let Expression::CallExpression(call) = &es.expression else { return None };
-    let Expression::StaticMemberExpression(matcher) = &call.callee else { return None };
-    if !matches!(matcher.property.name.as_str(), "toBe" | "toEqual" | "toStrictEqual") {
-        return None;
-    }
-    // The object must be a bare `expect(...)`, not `expect(...).not`
-    let Expression::CallExpression(expect_call) = &matcher.object else { return None };
-    let Expression::Identifier(id) = &expect_call.callee else { return None };
-    if id.name.as_str() != "expect" {
-        return None;
-    }
-    let expect_arg = expect_call.arguments.first()?.as_expression()?;
-    let matcher_arg = call.arguments.first()?.as_expression()?;
-    let expect_text = source[expect_arg.span().start as usize..expect_arg.span().end as usize].trim();
-    let matcher_text = source[matcher_arg.span().start as usize..matcher_arg.span().end as usize].trim();
-    Some((expect_text, matcher_text))
-}
-
-/// Source text of the `expect(ARG)` argument when `stmt` is an unconditional
-/// truthiness assertion (`expect(ARG).toBe(true)` / `expect(ARG).toBeTruthy()`),
-/// else `None`. Negated forms (`expect(ARG).not.toBe(true)`) return `None`.
-fn truthy_assertion_target<'a>(stmt: &Statement<'a>, source: &'a str) -> Option<&'a str> {
-    use oxc_span::GetSpan;
-    let Statement::ExpressionStatement(es) = stmt else { return None };
-    let Expression::CallExpression(call) = &es.expression else { return None };
-    let Expression::StaticMemberExpression(matcher) = &call.callee else { return None };
-    let asserts_truthy = match matcher.property.name.as_str() {
-        "toBeTruthy" => true,
-        "toBe" | "toEqual" | "toStrictEqual" => matches!(
-            call.arguments.first().and_then(|a| a.as_expression()),
-            Some(Expression::BooleanLiteral(b)) if b.value
-        ),
-        _ => false,
-    };
-    if !asserts_truthy {
-        return None;
-    }
-    let Expression::CallExpression(expect_call) = &matcher.object else { return None };
-    let Expression::Identifier(id) = &expect_call.callee else { return None };
-    if id.name.as_str() != "expect" {
-        return None;
-    }
-    let arg = expect_call.arguments.first()?.as_expression()?;
-    let span = arg.span();
-    Some(source[span.start as usize..span.end as usize].trim())
-}
-
-/// True when a statement preceding the `if` in the same block unconditionally
-/// asserts the condition is truthy (`expect(cond).toBe(true)`) or asserts both
-/// sides of an equality condition (`expect(A).toBe(B)` preceding `if (A === B)`),
-/// so the branch is guaranteed taken — the `if` only narrows the type for the
-/// compiler.
-fn block_has_truthy_guard<'a>(
-    stmts: &oxc_allocator::Vec<'a, Statement<'a>>,
-    if_stmt: &oxc_ast::ast::IfStatement<'a>,
-    source: &'a str,
-) -> bool {
-    use oxc_span::GetSpan;
-    let test = if_stmt.test.span();
-    let cond_text = source[test.start as usize..test.end as usize].trim();
-
-    // When the condition is `A === B` or `A == B`, a preceding `expect(A).toBe(B)`
-    // (or with sides swapped) guarantees the branch.
-    let equality_sides: Option<(&str, &str)> = match if_stmt.test.without_parentheses() {
-        Expression::BinaryExpression(bin)
-            if matches!(
-                bin.operator,
-                BinaryOperator::StrictEquality | BinaryOperator::Equality
-            ) =>
-        {
-            let left = source[bin.left.span().start as usize..bin.left.span().end as usize].trim();
-            let right =
-                source[bin.right.span().start as usize..bin.right.span().end as usize].trim();
-            Some((left, right))
-        }
-        _ => None,
-    };
-
-    for stmt in stmts.iter() {
-        if stmt.span().start >= if_stmt.span.start {
-            break;
-        }
-        if truthy_assertion_target(stmt, source) == Some(cond_text) {
-            return true;
-        }
-        if let Some((left, right)) = equality_sides {
-            if let Some((exp_arg, mat_arg)) = equality_assertion_parts(stmt, source) {
-                if (exp_arg == left && mat_arg == right) || (exp_arg == right && mat_arg == left) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
 
 /// True when `expr` is, or chains off, a bare `expect(...)` call — covering
 /// `expect(a).toBe(b)`, `expect(a).to.equal(b)` (chai), and bare `expect(a)`.
@@ -220,6 +81,7 @@ impl OxcCheck for Check {
         // Walk ancestors: need both an if-statement body and a test/it call.
         let mut in_if_body = false;
         let mut in_test = false;
+        let mut scope: Option<Vec<&Statement>> = None;
         let nodes = semantic.nodes();
         let mut cur_id = nodes.parent_id(node.id());
         loop {
@@ -230,17 +92,17 @@ impl OxcCheck for Check {
             match parent_kind {
                 AstKind::IfStatement(if_stmt) => {
                     use oxc_span::GetSpan;
-                    let guarded = match nodes.kind(nodes.parent_id(cur_id)) {
-                        AstKind::BlockStatement(b) => block_has_truthy_guard(&b.body, if_stmt, ctx.source),
-                        AstKind::FunctionBody(b) => block_has_truthy_guard(&b.statements, if_stmt, ctx.source),
-                        AstKind::Program(p) => block_has_truthy_guard(&p.body, if_stmt, ctx.source),
-                        _ => false,
-                    };
-                    if is_type_narrowing(&if_stmt.test) || guarded || every_arm_asserts(if_stmt) {
-                        // Type narrowing (result.isErr(), instanceof, !== null), a
-                        // preceding unconditional assertion, or an if/else chain
-                        // whose every arm asserts (a final `else` present) all
-                        // guarantee that an assertion fires — not conditional logic.
+                    let guarded = every_arm_asserts(if_stmt)
+                        || is_narrowing_guard(
+                            if_stmt,
+                            scope.get_or_insert_with(|| test_scope_statements(node.id(), semantic)),
+                            ctx.source,
+                        );
+                    if guarded {
+                        // An if/else chain whose every arm asserts (a final
+                        // `else` present), or an `if` the enclosing test scope
+                        // already narrows, both guarantee that an assertion
+                        // fires — not conditional logic.
                     } else if !in_test {
                         // Only an `if` reached before crossing the enclosing
                         // `it()`/`test()` call sits inside the test body. Once
@@ -365,6 +227,46 @@ mod tests {
                      }\n\
                    });";
         assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // Regression for #8213: the discriminant is fixed by an object-literal
+    // assertion in a sibling `test()` of the same `describe` — the `if` only
+    // narrows the union so `dataset.value` is callable, and the remediation the
+    // rule prescribes does not type-check.
+    #[test]
+    fn allows_discriminant_guard_asserted_in_a_sibling_test() {
+        let src = "describe('args', () => {\n\
+                     const dataset = run();\n\
+                     test('should return new function', () => {\n\
+                       expect(dataset).toStrictEqual({ typed: true, value: expect.any(Function) });\n\
+                     });\n\
+                     test('should not throw error for valid args', () => {\n\
+                       if (dataset.typed) { expect(dataset.value(123)).toBe(123); }\n\
+                     });\n\
+                   });";
+        assert!(run(src).is_empty(), "{:?}", run(src));
+    }
+
+    // With no assertion anywhere on the discriminant the same shape is a
+    // genuine conditional assertion.
+    #[test]
+    fn flags_discriminant_guard_never_asserted() {
+        let src = "describe('args', () => {\n\
+                     const dataset = run();\n\
+                     test('should not throw error for valid args', () => {\n\
+                       if (dataset.typed) { expect(dataset.value(123)).toBe(123); }\n\
+                     });\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    // An assertion inside the guarded branch cannot prove the branch is taken.
+    #[test]
+    fn flags_guard_asserted_only_inside_its_own_branch() {
+        let src = "test('x', () => {\n\
+                     if (dataset.typed) { expect(dataset.typed).toBe(true); }\n\
+                   });";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
     }
 
     // Regression for #1004: an `if` wrapping the `describe()`/`it()` registration

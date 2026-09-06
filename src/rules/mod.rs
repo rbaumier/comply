@@ -57,6 +57,7 @@ pub mod rust_helpers;
 pub mod shell_exec_helpers;
 pub mod sql_helpers;
 pub mod test_assertion_helpers;
+pub mod test_guard_helpers;
 #[cfg(test)]
 pub mod test_helpers;
 #[cfg(test)]
