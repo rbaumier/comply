@@ -2,7 +2,6 @@
 
 mod common;
 
-use assert_cmd::Command;
 use common::write_ts_file;
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -21,8 +20,7 @@ fn exit_code_zero_on_clean_file() {
         "test('ok', () => {});\n",
     )
     .unwrap();
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .success();
@@ -34,8 +32,7 @@ fn exit_code_one_on_violations() {
         "bad.ts",
         "function handleClick() { throw new Error('boom'); }\n",
     );
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .code(1);
@@ -45,8 +42,7 @@ fn exit_code_one_on_violations() {
 fn comply_ignore_suppresses_diagnostic() {
     let source = "// comply-ignore: no-throw — legacy migration path\nfunction f() { throw new Error('x'); }\n";
     let (_dir, path) = write_ts_file("ignored.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-throw").not());
@@ -56,8 +52,7 @@ fn comply_ignore_suppresses_diagnostic() {
 fn comply_ignore_without_justification_is_flagged() {
     let source = "// comply-ignore: no-throw\nfunction f() { return 1; }\n";
     let (_dir, path) = write_ts_file("bad_ignore.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains(
@@ -67,8 +62,7 @@ fn comply_ignore_without_justification_is_flagged() {
 
 #[test]
 fn help_flag_prints_usage() {
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg("--help")
         .assert()
         .success()
@@ -78,8 +72,7 @@ fn help_flag_prints_usage() {
 #[test]
 fn unknown_extension_is_skipped_silently() {
     let (_dir, path) = write_ts_file("file.txt", "throw new Error('x');\n");
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .success()
@@ -89,8 +82,7 @@ fn unknown_extension_is_skipped_silently() {
 #[test]
 fn empty_directory_returns_clean() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(dir.path())
         .assert()
         .success();
@@ -119,8 +111,7 @@ fn no_tsconfig_does_not_fail_type_aware() {
         "test('ok', () => {});\n",
     )
     .unwrap();
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stderr(
@@ -132,8 +123,7 @@ fn no_tsconfig_does_not_fail_type_aware() {
 #[test]
 fn output_format_matches_eslint_pattern() {
     let (_dir, path) = write_ts_file("err.ts", "function f() { throw 1; }\n");
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::is_match(r":\d+:\d+: (error|warning) \[").unwrap());

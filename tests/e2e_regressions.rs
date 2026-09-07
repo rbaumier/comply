@@ -2,7 +2,6 @@
 
 mod common;
 
-use assert_cmd::Command;
 use common::write_ts_file;
 use predicates::prelude::*;
 use std::fs;
@@ -15,8 +14,7 @@ fn marker_inside_string_literal_is_not_honored() {
     // a phantom suppression that swallows the next line.
     let source = "const fake = \"// comply-ignore: no-nested-ternary — bypass\";\nexport const x = a ? b ? 1 : 2 : 3;\n";
     let (_dir, path) = write_ts_file("phantom.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-nested-ternary"));
@@ -28,8 +26,7 @@ fn parse_errors_do_not_emit_phantom_diagnostics() {
     // body doesn't emit a max-function-lines diagnostic on recovered junk.
     let source = "function f() { const x =\n";
     let (_dir, path) = write_ts_file("broken.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("max-function-lines").not());
@@ -43,8 +40,7 @@ fn jsx_files_use_tsx_grammar() {
     let source =
         "export const App = () => <div onClick={() => { const x = a ? b ? 1 : 2 : 3; }}>x</div>;\n";
     let (_dir, path) = write_ts_file("app.jsx", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-nested-ternary"));
@@ -56,8 +52,7 @@ fn banned_identifiers_does_not_flag_document_or_database() {
     // are not flagged for starting with "do".
     let source = "const document = {}; const database = {}; const domain = '';\n";
     let (_dir, path) = write_ts_file("words.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-generic-names").not());
@@ -69,8 +64,7 @@ fn trailing_comply_ignore_suppresses_current_line() {
     let source =
         "export const x = a ? b ? 1 : 2 : 3; // comply-ignore: no-nested-ternary — boundary\n";
     let (_dir, path) = write_ts_file("trailing.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-nested-ternary").not());
@@ -82,8 +76,7 @@ fn bom_prefixed_file_honors_line_one_ignore() {
     // otherwise line-1 ignores silently never apply.
     let source = "\u{FEFF}// comply-ignore: no-nested-ternary — startup boundary\nexport const x = a ? b ? 1 : 2 : 3;\n";
     let (_dir, path) = write_ts_file("bom.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("no-nested-ternary").not());
@@ -112,8 +105,7 @@ fn comply_ignore_above_jsdoc_suppresses_function_below() {
             return 12;\n\
         }\n";
     let (_dir, path) = write_ts_file("authorize.ts", source);
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(&path)
         .assert()
         .stdout(predicate::str::contains("cyclomatic-complexity").not());
@@ -143,8 +135,7 @@ fn comply_ignore_file_suppresses_unused_file_on_plugin_resolved_entry() {
     )
     .unwrap();
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(dir.path())
         .assert()
         .stdout(predicate::str::contains("unused-file").not());
@@ -173,8 +164,7 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
     )
     .unwrap();
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(dir.path())
         .assert()
         // Framework package source must NOT get the lock-timeout warning…
@@ -229,8 +219,7 @@ fn vue_and_tsx_backends_of_a_rule_anchor_on_the_same_construct() {
     )
     .unwrap();
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg("rules")
         .arg("a11y-alt-text")
         .arg(dir.path())
@@ -283,8 +272,7 @@ fn undeclared_dependency_reports_once_per_import_site_at_the_import() {
     )
     .unwrap();
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg("rules")
         .arg("no-implicit-deps")
         .arg(dir.path())
@@ -342,8 +330,7 @@ fn diff_only_survives_a_non_utf8_file_in_the_diff_issue_8502() {
     fs::write(root.join("sample.csv"), b"name\nCaf\xe9\nTh\xe9\n").unwrap();
     git(root, &["add", "-A"]);
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .current_dir(root)
         .args(["--staged", "--diff-only"])
         .assert()
@@ -404,8 +391,7 @@ fn ansi_fixture_does_not_cost_its_batch_its_diagnostics_issue_8402() {
     )
     .unwrap();
 
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(dir.path())
         .assert()
         .stdout(predicate::str::contains("no-debugger"))

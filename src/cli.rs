@@ -113,6 +113,26 @@ pub enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Record a diagnostic judged to be a false positive.
+    /// `comply stats` then ranks rules by wrongness.
+    ReportFp {
+        /// The rule that fired, e.g. "no-throw".
+        rule_id: String,
+        /// Where it fired, as `path:line`.
+        location: String,
+        /// Why the diagnostic is wrong.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Name of the model that judged it.
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Aggregate the recorded lint runs and false positives.
+    Stats {
+        /// Output as JSON instead of a text table.
+        #[arg(long = "json")]
+        should_emit_json: bool,
+    },
     /// Run as a Language Server Protocol server on stdio. Editors
     /// connect to this to display comply diagnostics inline as the
     /// user types. Skips oxlint and clippy (subprocess overhead is

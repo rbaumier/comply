@@ -42,6 +42,7 @@ mod parsing;
 mod project;
 mod rules;
 mod runner_helpers;
+mod telemetry;
 mod toolchain;
 mod tui;
 mod typeaware;
@@ -378,6 +379,21 @@ fn run() -> Result<bool> {
             run_config_action(action)?;
             Ok(false)
         }
+        Some(Command::ReportFp {
+            ref rule_id,
+            ref location,
+            ref reason,
+            ref model,
+        }) => telemetry::report_false_positive(
+            rule_id,
+            location,
+            reason.as_deref(),
+            model.as_deref(),
+        ),
+        Some(Command::Stats { should_emit_json }) => {
+            telemetry::run_stats(should_emit_json)?;
+            Ok(false)
+        }
         Some(Command::Lsp) => {
             // Spin up a small tokio runtime for the LSP server.
             // Comply itself is sync; we don't pay the runtime cost
@@ -487,7 +503,7 @@ const CARGO_SUBPROCESS_RULE_IDS: &[&str] = &[cargo_modules::RULE_ID, cargo_shear
 
 /// Whether `id` names a rule comply can emit — an engine rule, an in-process
 /// cross-file detector, or a subprocess-backed rule.
-fn is_known_rule_id(id: &str) -> bool {
+pub(crate) fn is_known_rule_id(id: &str) -> bool {
     rules::all_rule_defs().iter().any(|r| r.meta.id == id)
         || CROSS_FILE_RULE_IDS.contains(&id)
         || CARGO_SUBPROCESS_RULE_IDS.contains(&id)
@@ -710,6 +726,14 @@ fn lint_project(cli: &Cli) -> Result<bool> {
 
     let has_violations = !after_suppressions.is_empty();
 
+    // Total is taken before the output step.
+    // The TUI blocks until the user quits, not lint time.
+    // Telemetry is best-effort: a failure only warns.
+    timings.total = t_total.elapsed();
+    if let Err(e) = telemetry::record_run(&after_suppressions, discovered.len(), timings.total) {
+        eprintln!("comply: telemetry write failed: {e:#}");
+    }
+
     if cli.tui {
         if !std::io::stdout().is_terminal() {
             eprintln!("comply: --tui requires an interactive terminal");
@@ -744,7 +768,6 @@ fn lint_project(cli: &Cli) -> Result<bool> {
     } else {
         report_diagnostics(&after_suppressions);
     }
-    timings.total = t_total.elapsed();
     if cli.timings {
         print_timings(&timings);
     }
