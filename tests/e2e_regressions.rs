@@ -361,8 +361,7 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
     // Whether `node` itself or the package is what's absent decides which
     // sentence comply prints; both are toolchain gaps and both must exit 2
     // through the actionable path.
-    Command::cargo_bin("comply")
-        .unwrap()
+    common::comply()
         .arg(dir.path())
         .assert()
         .code(2)
