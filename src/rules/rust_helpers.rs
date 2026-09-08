@@ -2029,7 +2029,7 @@ pub fn has_panics_doc_section(item: Node, source: &[u8]) -> bool {
             "attribute_item" => {}
             "line_comment" | "block_comment" => {
                 if let Ok(text) = s.utf8_text(source)
-                    && comment_has_panics_heading(text)
+                    && doc_section_heading_span(text, "Panics").is_some()
                 {
                     return true;
                 }
@@ -2041,25 +2041,46 @@ pub fn has_panics_doc_section(item: Node, source: &[u8]) -> bool {
     false
 }
 
-/// True if a doc comment's text contains a `# Panics` markdown heading. Handles
-/// both single-line `///` comments (one line) and multi-line `/** */` blocks (a
-/// `# Panics` line among many). Only outer/inner doc comments count: a plain
-/// `//`/`/* */` comment is not rustdoc, so its text is ignored.
-fn comment_has_panics_heading(text: &str) -> bool {
+/// Byte range `(offset, length)` of the rustdoc `# <section>` heading inside a
+/// doc comment's own text, or `None` when the comment carries no such heading.
+/// The range covers the heading line with its comment markers and surrounding
+/// whitespace trimmed off, so a caller that knows the comment node's start byte
+/// can point a diagnostic straight at the heading.
+///
+/// Handles both single-line `///` comments (one line) and multi-line `/** */`
+/// blocks (a heading among many lines). Only outer/inner doc comments count: a
+/// plain `//`/`/* */` comment is not rustdoc, so its text is ignored. Each line
+/// is stripped of its `///`/`//!`/`/**`/`*` markers and matched against a
+/// markdown heading (one or more `#` then exactly `section`), so prose merely
+/// mentioning the section name does not match.
+pub fn doc_section_heading_span(text: &str, section: &str) -> Option<(usize, usize)> {
     let is_doc = text.starts_with("///")
         || text.starts_with("//!")
         || text.starts_with("/**")
         || text.starts_with("/*!");
     if !is_doc {
-        return false;
+        return None;
     }
-    text.lines().any(|line| {
-        let stripped = line.trim().trim_start_matches(['/', '*', '!']).trim();
-        let Some(after_hashes) = stripped.strip_prefix('#') else {
-            return false;
-        };
-        after_hashes.trim_start_matches('#').trim() == "Panics"
-    })
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let heading = line.trim();
+        if is_section_heading(heading, section) {
+            let leading = line.len() - line.trim_start().len();
+            return Some((offset + leading, heading.len()));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// True if a doc-comment line, already trimmed of surrounding whitespace, is the
+/// markdown heading for `section` — its comment markers followed by one or more
+/// `#` and nothing but the section name.
+fn is_section_heading(line: &str, section: &str) -> bool {
+    let stripped = line.trim_start_matches(['/', '*', '!']).trim();
+    stripped
+        .strip_prefix('#')
+        .is_some_and(|after_hashes| after_hashes.trim_start_matches('#').trim() == section)
 }
 
 /// True if a comment documents `node`: a `line_comment` or `block_comment` that
