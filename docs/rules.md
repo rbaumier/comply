@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2056 rules across 152 categories.
+2057 rules across 152 categories.
 
 ## Categories
 
@@ -25,7 +25,7 @@
 - [code-quality](#code-quality) (258 rules)
 - [code-quality > imports](#code-quality-imports) (4 rules)
 - [code-quality > regex](#code-quality-regex) (17 rules)
-- [comments](#comments) (6 rules)
+- [comments](#comments) (7 rules)
 - [comments > suppressions](#comments-suppressions) (1 rules)
 - [complexity](#complexity) (4 rules)
 - [correctness](#correctness) (11 rules)
@@ -679,6 +679,7 @@
 | `comment-no-mid-sentence-wrap` | A comment line breaks mid-sentence. | Break the line on punctuation, or shorten the sentence so it fits on one line. |
 | `comment-paraphrases-code` | Comment shares too many tokens with the function name — likely a paraphrase. | Rewrite the comment to explain WHY the code exists, not WHAT it does. Name the consequence: what breaks if this line is deleted? If you can't name a consequence, delete the comment instead. |
 | `comment-prose-quality` | Comments with weasel words, passive voice, or lexical illusions reduce clarity. | Rewrite the comment to be direct. Replace passive voice with active. Remove filler words. Fix repeated words. |
+| `no-comment-banner` | Decorative banner comment: a drawn rule of repeated characters frames the line. | Delete the rule characters. Keep the label as a plain comment only if it earns its place; a section that needs a banner wants its own module or function. |
 | `no-commented-out-code` | Commented-out code is unreviewable, unreachable, and rots. | Delete the commented-out code. Git history preserves the original if you need to recover it. |
 
 ## comments > suppressions
