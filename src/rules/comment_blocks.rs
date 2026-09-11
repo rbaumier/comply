@@ -22,9 +22,12 @@ pub enum LineKind {
     /// A sample the author transcribed.
     /// Fenced lines and `@example` bodies hold one.
     Code,
-    /// A fence, a banner, a directive or a bare tag.
+    /// A fence, a heading, a directive or a bare tag.
     /// It frames the prose around it and belongs to no sentence.
     Structure,
+    /// A line framed by a drawn rule, as in `─── Section ───`.
+    /// It divides the comments around it and belongs to no sentence.
+    Banner,
 }
 
 /// One marker-stripped physical line, with the row it sits on and what it holds.
@@ -431,8 +434,11 @@ fn classify(text: &str, reading: &mut Reading) -> LineKind {
     if reading.in_fence {
         return LineKind::Code;
     }
-    if is_tool_directive(text) || is_banner(text) {
+    if is_tool_directive(text) || is_markdown_heading(text) {
         return LineKind::Structure;
+    }
+    if is_banner(text) {
+        return LineKind::Banner;
     }
     if let Some(tag) = jsdoc_block_tag(text) {
         reading.in_example = tag.name == EXAMPLE_TAG;
@@ -459,11 +465,21 @@ fn opens_or_closes_fence(text: &str) -> bool {
 /// How many repeats of one line-drawing character make a rule.
 const RULE_RUN: usize = 3;
 
+/// True when `text` is a Markdown ATX heading such as `### Examples`.
+/// Its `#` run opens a title, not a rule, unless a rule also closes the line.
+fn is_markdown_heading(text: &str) -> bool {
+    let title = text.trim_start_matches('#');
+    let level = text.len() - title.len();
+    (1..=6).contains(&level)
+        && title.starts_with(' ')
+        && leading_rule_len(text.chars().rev()) < RULE_RUN
+}
+
 /// True when `text` is a section banner rather than a sentence.
 ///
 /// A banner is framed by a rule — `RULE_RUN` or more repeats of one
 /// line-drawing character at the start or the end of the line, as in
-/// `─── Section ───`. It divides the comments around it and belongs to neither.
+/// `─── Section ───`.
 fn is_banner(text: &str) -> bool {
     leading_rule_len(text.chars()) >= RULE_RUN || leading_rule_len(text.chars().rev()) >= RULE_RUN
 }
@@ -694,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn a_section_banner_is_structure() {
+    fn a_section_banner_is_a_banner() {
         let blocks = merge(
             vec![line_comment(
                 0,
@@ -703,8 +719,23 @@ mod tests {
             )],
             "// ─── Attach / Detach gamme-product ──────────────",
         );
+        assert_eq!(blocks[0].lines[0].kind, LineKind::Banner);
+        assert_eq!(blocks[0].word_count(), 0);
+    }
+
+    #[test]
+    fn a_markdown_heading_is_structure_not_a_banner() {
+        let raw = "/// ### Examples";
+        let blocks = merge(vec![line_comment(0, 1, raw)], raw);
         assert_eq!(blocks[0].lines[0].kind, LineKind::Structure);
         assert_eq!(blocks[0].word_count(), 0);
+    }
+
+    #[test]
+    fn a_heading_closed_by_a_rule_is_a_banner() {
+        let raw = "// ### Section ###";
+        let blocks = merge(vec![line_comment(0, 1, raw)], raw);
+        assert_eq!(blocks[0].lines[0].kind, LineKind::Banner);
     }
 
     #[test]
