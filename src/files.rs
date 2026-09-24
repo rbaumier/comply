@@ -8,12 +8,15 @@
 //!   config dirs (`.storybook/`, `.vscode/`) whose real ES imports must
 //!   register in the cross-file import index.
 //! - Git modes → shell out to `git diff` / `git show` and validate exit
-//!   status (silent empty output used to mask real failures).
+//!   status (silent empty output used to mask real failures). The paths git
+//!   lists go through the same `.complyignore` files as the walk.
 //! - Each file is classified by extension into a Language; unknown
 //!   extensions are silently skipped.
 
 use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -202,16 +205,83 @@ pub fn is_javascript_source(path: &Path) -> bool {
 /// Discover files to lint based on the resolved scan mode.
 #[must_use = "discovered files must be linted or the scan was wasted"]
 pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
-    match mode {
-        ScanMode::All(path) => walk_directory(path),
-        ScanMode::WorkingTree => git_diff_files(&[]),
-        ScanMode::Staged => git_diff_files(&["--cached"]),
+    let files = match mode {
+        ScanMode::All(path) => return walk_directory(path),
+        ScanMode::WorkingTree => git_diff_files(&[])?,
+        ScanMode::Staged => git_diff_files(&["--cached"])?,
         // `HEAD~1 HEAD` — without the second `HEAD`, git diffs against the
         // working tree and mixes unstaged changes into "last commit" results.
-        ScanMode::LastCommit => git_diff_files(&["HEAD~1", "HEAD"]),
-        ScanMode::Commit(sha) => git_show_files(sha),
-        ScanMode::Range(from, to) => git_diff_files(&[from.as_str(), to.as_str()]),
+        ScanMode::LastCommit => git_diff_files(&["HEAD~1", "HEAD"])?,
+        ScanMode::Commit(sha) => git_show_files(sha)?,
+        ScanMode::Range(from, to) => git_diff_files(&[from.as_str(), to.as_str()])?,
+    };
+    let top = git_toplevel()?;
+    // `git show` lists paths from the repository root, `git diff --relative`
+    // from the working directory.
+    let base = if matches!(mode, ScanMode::Commit(_)) {
+        top.clone()
+    } else {
+        std::env::current_dir()
+            .and_then(|cwd| cwd.canonicalize())
+            .context("failed to resolve the working directory")?
+    };
+    Ok(drop_complyignored(files, &base, &top))
+}
+
+/// Drop the files a `.complyignore` excludes. The walk gets this from the
+/// `ignore` crate; git lists paths itself, so every `.complyignore` between
+/// `top` and the file applies, the deepest one deciding, as in the walk.
+fn drop_complyignored(files: Vec<SourceFile>, base: &Path, top: &Path) -> Vec<SourceFile> {
+    let mut matchers: FxHashMap<PathBuf, Option<Gitignore>> = FxHashMap::default();
+    files
+        .into_iter()
+        .filter(|file| {
+            let path = base.join(&file.path);
+            let ignored = path
+                .ancestors()
+                .skip(1)
+                .take_while(|dir| dir.starts_with(top))
+                .find_map(|dir| {
+                    let matcher = matchers
+                        .entry(dir.to_path_buf())
+                        .or_insert_with(|| complyignore_in(dir));
+                    let decision = matcher.as_ref()?.matched_path_or_any_parents(&path, false);
+                    (!decision.is_none()).then(|| decision.is_ignore())
+                });
+            !ignored.unwrap_or(false)
+        })
+        .collect()
+}
+
+/// The `.complyignore` of `dir`, if it has one that parses.
+fn complyignore_in(dir: &Path) -> Option<Gitignore> {
+    let file = dir.join(".complyignore");
+    if !file.is_file() {
+        return None;
     }
+    let mut builder = GitignoreBuilder::new(dir);
+    if builder.add(&file).is_some() {
+        return None;
+    }
+    builder.build().ok()
+}
+
+/// The absolute root of the repository comply runs in.
+fn git_toplevel() -> Result<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .context("failed to invoke git — is git installed and on PATH?")?;
+    if !output.status.success() {
+        bail!(
+            "git rev-parse --show-toplevel failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let top = std::str::from_utf8(&output.stdout)
+        .context("git output contained non-UTF-8 bytes — paths cannot be safely processed")?;
+    Ok(PathBuf::from(top.trim_end()))
 }
 
 /// Walk a directory tree and classify every file.
@@ -250,10 +320,7 @@ const SCANNED_CONFIG_DOT_DIRS: &[&str] = &[".storybook", ".vitepress", ".vscode"
 /// "skip hidden" behaviour for every other dot-path.
 fn is_hidden_non_config(path: &Path) -> bool {
     path.iter().filter_map(|seg| seg.to_str()).any(|seg| {
-        seg.starts_with('.')
-            && seg != "."
-            && seg != ".."
-            && !SCANNED_CONFIG_DOT_DIRS.contains(&seg)
+        seg.starts_with('.') && seg != "." && seg != ".." && !SCANNED_CONFIG_DOT_DIRS.contains(&seg)
     })
 }
 
@@ -415,9 +482,9 @@ fn classify(path: &Path) -> Option<SourceFile> {
             || name.ends_with(".d.mts")
             || name.ends_with(".d.cts")
             || name.ends_with(".d.tsx"))
-        {
-            return None;
-        }
+    {
+        return None;
+    }
     let language = if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         if TS_EXTENSIONS.contains(&ext) {
             Language::TypeScript
@@ -564,6 +631,46 @@ mod tests {
         assert!(names.contains(&"kept.ts".to_string()));
         assert!(!names.contains(&"skipped.ts".to_string()));
         assert!(!names.contains(&"also-skipped.ts".to_string()));
+    }
+
+    #[test]
+    fn git_modes_honor_complyignore() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let top = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(top.join("skill/scripts")).unwrap();
+        std::fs::create_dir_all(top.join("app/keep")).unwrap();
+        std::fs::write(top.join(".complyignore"), "skill/\napp/*.ts\n").unwrap();
+        std::fs::write(top.join("app/.complyignore"), "!kept.ts\n").unwrap();
+        let listed = [
+            "skill/scripts/live.js",
+            "app/dropped.ts",
+            "app/kept.ts",
+            "app/keep/deep.ts",
+        ]
+        .map(|path| classify(Path::new(path)).unwrap());
+
+        let kept: Vec<_> = drop_complyignored(listed.into(), &top, &top)
+            .into_iter()
+            .map(|file| file.path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(kept, ["app/kept.ts", "app/keep/deep.ts"]);
+    }
+
+    #[test]
+    fn git_modes_resolve_paths_from_a_subdirectory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let top = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(top.join("app/vendored")).unwrap();
+        std::fs::write(top.join(".complyignore"), "app/vendored/\n").unwrap();
+        let listed = ["vendored/a.js", "b.js"].map(|path| classify(Path::new(path)).unwrap());
+
+        let kept: Vec<_> = drop_complyignored(listed.into(), &top.join("app"), &top)
+            .into_iter()
+            .map(|file| file.path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(kept, ["b.js"]);
     }
 
     #[test]
