@@ -206,7 +206,21 @@ pub fn is_javascript_source(path: &Path) -> bool {
 #[must_use = "discovered files must be linted or the scan was wasted"]
 pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
     let files = match mode {
-        ScanMode::All(path) => return walk_directory(path),
+        ScanMode::All(path) => {
+            let files = walk_directory(path)?;
+            // The walk reads the `.complyignore` files at and below `path`; a
+            // scan of a subdirectory also answers to the ones above it, up to
+            // the repository root. Outside a repository there are none.
+            let dir = if path.is_dir() {
+                path.as_path()
+            } else {
+                path.parent().unwrap_or(path)
+            };
+            let Ok(top) = git_toplevel(dir) else {
+                return Ok(files);
+            };
+            return Ok(drop_complyignored(files, &working_directory()?, &top));
+        }
         ScanMode::WorkingTree => git_diff_files(&[])?,
         ScanMode::Staged => git_diff_files(&["--cached"])?,
         // `HEAD~1 HEAD` — without the second `HEAD`, git diffs against the
@@ -215,17 +229,21 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
         ScanMode::Commit(sha) => git_show_files(sha)?,
         ScanMode::Range(from, to) => git_diff_files(&[from.as_str(), to.as_str()])?,
     };
-    let top = git_toplevel()?;
+    let top = git_toplevel(Path::new("."))?;
     // `git show` lists paths from the repository root, `git diff --relative`
     // from the working directory.
     let base = if matches!(mode, ScanMode::Commit(_)) {
         top.clone()
     } else {
-        std::env::current_dir()
-            .and_then(|cwd| cwd.canonicalize())
-            .context("failed to resolve the working directory")?
+        working_directory()?
     };
     Ok(drop_complyignored(files, &base, &top))
+}
+
+fn working_directory() -> Result<PathBuf> {
+    std::env::current_dir()
+        .and_then(|cwd| cwd.canonicalize())
+        .context("failed to resolve the working directory")
 }
 
 /// Drop the files a `.complyignore` excludes. The walk gets this from the
@@ -266,9 +284,11 @@ fn complyignore_in(dir: &Path) -> Option<Gitignore> {
     builder.build().ok()
 }
 
-/// The absolute root of the repository comply runs in.
-fn git_toplevel() -> Result<PathBuf> {
+/// The absolute root of the repository that holds `dir`.
+fn git_toplevel(dir: &Path) -> Result<PathBuf> {
     let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .context("failed to invoke git — is git installed and on PATH?")?;
@@ -671,6 +691,32 @@ mod tests {
             .collect();
 
         assert_eq!(kept, ["b.js"]);
+    }
+
+    #[test]
+    fn subdirectory_scan_honors_complyignore_above_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let top = tmp.path().canonicalize().unwrap();
+        let init = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(&top)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        std::fs::create_dir_all(top.join("app/vendored")).unwrap();
+        std::fs::write(top.join("app/kept.ts"), "x").unwrap();
+        std::fs::write(top.join("app/vendored/skipped.ts"), "x").unwrap();
+        std::fs::write(top.join(".complyignore"), "app/vendored/\n").unwrap();
+
+        let names: Vec<_> = discover(&ScanMode::All(top.join("app/vendored")))
+            .expect("discover")
+            .into_iter()
+            .chain(discover(&ScanMode::All(top.join("app"))).expect("discover"))
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(names, ["kept.ts"]);
     }
 
     #[test]
