@@ -34,6 +34,13 @@ pub struct CargoMessage {
 pub struct RustcDiagnostic {
     #[serde(default)]
     pub message: String,
+    /// `error`, `warning`, `note`… An `error` without a `clippy::` code
+    /// stopped the build: clippy linted nothing past it.
+    #[serde(default)]
+    pub level: String,
+    /// rustc's own rendering, file and line included.
+    #[serde(default)]
+    pub rendered: Option<String>,
     /// `code.code` is the lint name, e.g. `clippy::unwrap_used`.
     /// rustc messages without a code (build errors, parse errors)
     /// have `code: null`.

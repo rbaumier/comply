@@ -42,7 +42,7 @@ use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::rules::meta::RuleMeta;
-use schema::CargoMessage;
+use schema::{CargoMessage, RustcDiagnostic};
 
 /// Cached availability probe for `cargo clippy`. Rust toolchains usually
 /// ship clippy via rustup, but in container builds it can be missing.
@@ -98,6 +98,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
                     &lint_args,
                     clippy_conf.as_ref().map(|(_, p)| p.as_path()),
                 )?;
+                ensure_compiled(&root, &output)?;
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -253,6 +254,61 @@ fn invoke_clippy(
     Ok(output)
 }
 
+/// How many build errors the refusal quotes.
+const QUOTED_BUILD_ERRORS: usize = 5;
+
+/// Refuse a clippy run that could not build the workspace.
+///
+/// rustc's own errors carry no `clippy::` code, so `parse_clippy_jsonl`
+/// drops them. A workspace that fails to compile therefore yielded zero
+/// diagnostics and comply printed "all clear" on code clippy never saw.
+/// A cargo failure that emitted no JSON at all (bad manifest, lockfile)
+/// is refused the same way, with cargo's stderr.
+fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()> {
+    let errors = build_errors(&output.stdout);
+    let silent_failure = !output.status.success() && errors.is_empty() && !lints_reported(&output.stdout);
+    if errors.is_empty() && !silent_failure {
+        return Ok(());
+    }
+    let detail = if errors.is_empty() {
+        String::from_utf8_lossy(&output.stderr).trim().to_owned()
+    } else {
+        errors.into_iter().take(QUOTED_BUILD_ERRORS).collect::<Vec<_>>().join("\n")
+    };
+    Err(crate::toolchain::ToolchainError::Unusable {
+        what: format!(
+            "cargo clippy could not compile {}; no Rust file was linted.\n{detail}",
+            workspace.display()
+        ),
+    }
+    .into())
+}
+
+/// rustc errors that stopped the build, as rustc rendered them.
+/// A denied clippy lint is a finding, not a build error.
+fn build_errors(stdout: &[u8]) -> Vec<String> {
+    compiler_messages(stdout)
+        .filter(|diag| diag.level == "error")
+        .filter(|diag| !diag.code.as_ref().is_some_and(|code| code.code.starts_with("clippy::")))
+        .filter(|diag| !diag.message.starts_with("aborting due to"))
+        .map(|diag| diag.rendered.unwrap_or(diag.message))
+        .collect()
+}
+
+/// True when cargo streamed at least one compiler message.
+fn lints_reported(stdout: &[u8]) -> bool {
+    compiler_messages(stdout).next().is_some()
+}
+
+fn compiler_messages(stdout: &[u8]) -> impl Iterator<Item = RustcDiagnostic> + '_ {
+    BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<CargoMessage>(&line).ok())
+        .filter(|envelope| envelope.reason == "compiler-message")
+        .filter_map(|envelope| envelope.message)
+}
+
 /// Parse cargo's JSONL output stream and yield Diagnostic structs for
 /// every primary span that lives in `file_filter`.
 ///
@@ -357,6 +413,20 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_errors_keeps_rustc_errors_and_leaves_denied_clippy_lints() {
+        let json = br#"{"reason":"compiler-message","message":{"message":"mismatched types","code":{"code":"E0308"},"level":"error","rendered":"error[E0308]: mismatched types","spans":[]}}
+{"reason":"compiler-message","message":{"message":"error communicating with database","code":null,"level":"error","spans":[]}}
+{"reason":"compiler-message","message":{"message":"used unwrap","code":{"code":"clippy::unwrap_used"},"level":"error","spans":[]}}
+{"reason":"compiler-message","message":{"message":"aborting due to 2 previous errors","code":null,"level":"error","spans":[]}}
+{"reason":"compiler-message","message":{"message":"unused variable","code":{"code":"unused_variables"},"level":"warning","spans":[]}}
+{"reason":"build-finished","success":false}"#;
+        assert_eq!(
+            build_errors(json),
+            vec!["error[E0308]: mismatched types".to_owned(), "error communicating with database".to_owned()]
+        );
+    }
 
     #[test]
     fn parse_clippy_jsonl_extracts_diagnostics_for_filtered_files() {
