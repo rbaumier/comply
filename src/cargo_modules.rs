@@ -14,6 +14,9 @@
 //!
 //!        cargo modules orphans --manifest-path <root>/Cargo.toml
 //!
+//!    cargo-modules walks one target and refuses a package with several, so
+//!    such a package is walked once per lib or bin target `cargo metadata`
+//!    lists (`--lib`, `--bin <name>`) and the scans are merged.
 //!    cargo-modules outputs colored text (no JSON reporter as of v0.25),
 //!    so we strip ANSI escapes and parse the `warning: orphaned module
 //!    'X' at <path>` lines via a small regex.
@@ -21,9 +24,12 @@
 //!    file path.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use rayon::prelude::*;
+use rustc_hash::FxHashSet;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
@@ -53,8 +59,139 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
 }
 
 fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
+    let targets = targets_of(workspace)?;
+    if targets.len() <= 1 {
+        return scan_target(workspace, &[]);
+    }
+    // Parallel: each scan loads the whole crate graph. About 17 s on Qualneo.
+    let scans = targets
+        .par_iter()
+        .map(|target| scan_target(workspace, &target.selector))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(merge_scans(&targets, scans))
+}
+
+/// One lib or bin target of a package.
+struct Target {
+    /// The flags that make `cargo modules` walk this target alone.
+    selector: Vec<String>,
+    /// The target's crate root file.
+    root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+// comply-ignore: rust-serde-deny-unknown-fields — cargo owns the `cargo metadata` schema.
+struct Metadata {
+    packages: Vec<Package>,
+}
+
+#[derive(Debug, Deserialize)]
+// comply-ignore: rust-serde-deny-unknown-fields — same contract as `Metadata`.
+struct Package {
+    manifest_path: PathBuf,
+    targets: Vec<RawTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+// comply-ignore: rust-serde-deny-unknown-fields — same contract as `Metadata`.
+struct RawTarget {
+    name: String,
+    kind: Vec<String>,
+    src_path: PathBuf,
+}
+
+/// The lib and bin targets of the package in `workspace`.
+/// Empty for a virtual manifest: it declares no package.
+fn targets_of(workspace: &Path) -> Result<Vec<Target>> {
+    let manifest = workspace.join("Cargo.toml");
     let output = Command::new("cargo")
-        .args(["modules", "orphans", "--manifest-path"])
+        .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+        .arg(&manifest)
+        .output()
+        .with_context(|| format!("failed to invoke `cargo metadata` in {}", workspace.display()))?;
+    if !output.status.success() {
+        return Err(crate::toolchain::ToolchainError::Unusable {
+            what: format!(
+                "cargo metadata failed in {}, so its targets are unknown and no module tree \
+                 was walked. Repair the crate, then re-run comply.\n{}",
+                workspace.display(),
+                quote(&String::from_utf8_lossy(&output.stderr))
+            ),
+        }
+        .into());
+    }
+    let metadata: Metadata = serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("unreadable `cargo metadata` output in {}", workspace.display()))?;
+    let Some(package) = metadata.packages.into_iter().find(|p| p.manifest_path == manifest) else {
+        return Ok(vec![]);
+    };
+    Ok(package
+        .targets
+        .into_iter()
+        .filter_map(|raw| {
+            let selector = if raw.kind.iter().any(|k| k == "bin") {
+                vec!["--bin".to_owned(), raw.name]
+            } else if raw.kind.iter().any(|k| k.ends_with("lib") || k == "proc-macro") {
+                vec!["--lib".to_owned()]
+            } else {
+                return None;
+            };
+            Some(Target { selector, root: raw.src_path })
+        })
+        .collect())
+}
+
+/// Each scan judges a directory against its own crate root.
+/// Roots sharing a directory must all report an orphan.
+/// A crate root is never an orphan.
+fn merge_scans(targets: &[Target], scans: Vec<Vec<Diagnostic>>) -> Vec<Diagnostic> {
+    let reported: Vec<FxHashSet<Arc<Path>>> =
+        scans.iter().map(|scan| scan.iter().map(|d| d.path.clone()).collect()).collect();
+    let mut kept = FxHashSet::default();
+    scans
+        .into_iter()
+        .flatten()
+        .filter(|orphan| {
+            let dir = candidate_dir(&orphan.path);
+            let unanimous = targets
+                .iter()
+                .zip(&reported)
+                .filter(|(target, _)| module_dir(&target.root).as_deref() == dir)
+                .all(|(_, paths)| paths.contains(&orphan.path));
+            unanimous
+                && !targets.iter().any(|target| *target.root == *orphan.path)
+                && kept.insert(orphan.path.clone())
+        })
+        .collect()
+}
+
+/// The directory cargo-modules listed `file` from.
+/// A `x/mod.rs` module is entry `x` of its grandparent.
+fn candidate_dir(file: &Path) -> Option<&Path> {
+    let parent = file.parent()?;
+    if file.file_name().is_some_and(|name| name == "mod.rs") { parent.parent() } else { Some(parent) }
+}
+
+/// The directory a module rooted at `file` declares from.
+/// `lib.rs`, `main.rs` and `mod.rs` own their directory.
+/// `x.rs` owns `x/`.
+fn module_dir(file: &Path) -> Option<PathBuf> {
+    let parent = file.parent()?;
+    let stem = file.file_stem()?;
+    if ["lib", "main", "mod"].iter().any(|own| stem == *own) {
+        Some(parent.to_path_buf())
+    } else {
+        Some(parent.join(stem))
+    }
+}
+
+/// One `cargo modules orphans` run.
+/// `selector` picks the target; empty when the package has one.
+fn scan_target(workspace: &Path, selector: &[String]) -> Result<Vec<Diagnostic>> {
+    let output = Command::new("cargo")
+        .args(["modules", "orphans"])
+        .args(selector)
+        .arg("--manifest-path")
         .arg(workspace.join("Cargo.toml"))
         .output()
         .with_context(|| {
@@ -85,18 +222,23 @@ const QUOTED_LINES: usize = 5;
 fn read_orphans(said: &str, succeeded: bool, workspace: &Path) -> Result<Vec<Diagnostic>> {
     let orphans = parse_orphans(said, workspace);
     if orphans.is_empty() && !succeeded {
-        let detail = strip_ansi(said).lines().take(QUOTED_LINES).collect::<Vec<_>>().join("\n");
         return Err(crate::toolchain::ToolchainError::Unusable {
             what: format!(
                 "cargo modules orphans failed in {} without naming one orphan; no module tree \
                  was walked. Repair the crate, then re-run comply.\n{}",
                 workspace.display(),
-                if detail.trim().is_empty() { "(no output)" } else { detail.trim() }
+                quote(said)
             ),
         }
         .into());
     }
     Ok(orphans)
+}
+
+/// A tool's first lines, ANSI stripped, for a refusal.
+fn quote(said: &str) -> String {
+    let detail = strip_ansi(said).lines().take(QUOTED_LINES).collect::<Vec<_>>().join("\n");
+    if detail.trim().is_empty() { "(no output)".to_owned() } else { detail.trim().to_owned() }
 }
 
 /// Strip ANSI color escapes and pull `at <path>` snippets out of the
@@ -201,6 +343,65 @@ mod tests {
         assert!(
             read_orphans("error: failed to parse manifest", false, ws).is_err(),
             "exit 1 with nothing parsed is a crate that was never walked"
+        );
+    }
+
+    /// A Qualneo-shaped package with a lib and three bins.
+    /// `main.rs` declares a module of its own.
+    /// Not one file of it is an orphan.
+    const LIB_AND_BINS: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [[bin]]\nname = \"worker\"\npath = \"src/worker.rs\"\n",
+        ),
+        ("src/lib.rs", "pub mod used;\n"),
+        ("src/used.rs", "pub fn f() {}\n"),
+        ("src/main.rs", "mod helper;\nfn main() { helper::g(); }\n"),
+        ("src/helper.rs", "pub fn g() {}\n"),
+        ("src/worker.rs", "fn main() {}\n"),
+        ("src/bin/tool.rs", "fn main() {}\n"),
+    ];
+
+    /// Writes `files` into a fresh directory.
+    /// Returns it with its canonical path, as production does.
+    fn package(files: &[(&str, &str)]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let root = dir.path().canonicalize().expect("canonical temp dir");
+        for (path, content) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().expect("parent dir")).expect("source dirs");
+            std::fs::write(file, content).expect("source file");
+        }
+        (dir, root)
+    }
+
+    /// `cargo modules orphans` refuses a package with several targets.
+    /// Each target is walked on its own.
+    /// A module one target declares is no orphan.
+    #[test]
+    fn a_package_with_a_lib_and_bins_is_walked_target_by_target() {
+        let (_dir, root) = package(LIB_AND_BINS);
+        let found = scan_workspace(&root).map_err(|err| format!("{err:#}"));
+        assert_eq!(found.map(|d| d.len()), Ok(0));
+    }
+
+    #[test]
+    fn an_orphan_beside_a_bin_is_reported() {
+        let mut files = LIB_AND_BINS.to_vec();
+        files.push(("src/bin/tool/lost.rs", "pub fn x() {}\n"));
+        files.push(("src/stray.rs", "pub fn y() {}\n"));
+        let (_dir, root) = package(&files);
+        let found = scan_workspace(&root).map_err(|err| format!("{err:#}"));
+        let paths = found.map(|d| {
+            let mut paths: Vec<_> =
+                d.iter().map(|d| d.path.strip_prefix(&root).ok().map(Path::to_path_buf)).collect();
+            paths.sort();
+            paths
+        });
+        assert_eq!(
+            paths,
+            Ok(vec![Some("src/bin/tool/lost.rs".into()), Some("src/stray.rs".into())])
         );
     }
 
