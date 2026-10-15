@@ -65,9 +65,38 @@ fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
         })?;
     // cargo-modules writes its rustc-style warnings to STDOUT (not stderr,
     // contrary to most cargo subcommands) and exits non-zero when orphans
-    // exist — we expect both, so we read stdout and ignore the exit code.
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(parse_orphans(&stdout, workspace))
+    // exist. A run that fails before walking anything prints on stderr
+    // instead, so that is where its reason is read from.
+    let said = if output.stdout.is_empty() { &output.stderr } else { &output.stdout };
+    let text = String::from_utf8_lossy(said).into_owned();
+    read_orphans(&text, output.status.success(), workspace)
+}
+
+/// How many lines of the tool's own words a refusal quotes.
+const QUOTED_LINES: usize = 5;
+
+/// The orphans `said` names, or the refusal of a scan that read nothing.
+///
+/// `cargo modules orphans` exits non-zero in two opposite cases: when it found
+/// orphans, and when it could not walk the module tree at all. The exit code was
+/// ignored, so the second case returned an empty list that read as "no orphan in
+/// this crate" — a verdict on a tree nobody walked. A failure that names an orphan
+/// is a finding; a failure that names none is a refusal.
+fn read_orphans(said: &str, succeeded: bool, workspace: &Path) -> Result<Vec<Diagnostic>> {
+    let orphans = parse_orphans(said, workspace);
+    if orphans.is_empty() && !succeeded {
+        let detail = strip_ansi(said).lines().take(QUOTED_LINES).collect::<Vec<_>>().join("\n");
+        return Err(crate::toolchain::ToolchainError::Unusable {
+            what: format!(
+                "cargo modules orphans failed in {} without naming one orphan; no module tree \
+                 was walked. Repair the crate, then re-run comply.\n{}",
+                workspace.display(),
+                if detail.trim().is_empty() { "(no output)" } else { detail.trim() }
+            ),
+        }
+        .into());
+    }
+    Ok(orphans)
 }
 
 /// Strip ANSI color escapes and pull `at <path>` snippets out of the
@@ -152,6 +181,27 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].path.ends_with("src/rules/foo/rust.rs"));
         assert!(diagnostics[0].message.contains("rust"));
+    }
+
+    /// `cargo modules orphans` exits 1 both when it found orphans and when
+    /// it could not scan at all. The exit code was ignored, so a crate it
+    /// never walked yielded an empty list that read as "no orphan here".
+    #[test]
+    fn a_failed_scan_that_found_nothing_is_refused() {
+        let ws = Path::new("/proj");
+        let found = "warning: orphaned module 'rust' at src/rules/foo/rust.rs";
+        assert!(
+            read_orphans(found, false, ws).is_ok_and(|d| d.len() == 1),
+            "exit 1 with an orphan is how a finding is reported"
+        );
+        assert!(
+            read_orphans("No orphans found.", true, ws).is_ok_and(|d| d.is_empty()),
+            "exit 0 with nothing parsed is a genuinely clean crate"
+        );
+        assert!(
+            read_orphans("error: failed to parse manifest", false, ws).is_err(),
+            "exit 1 with nothing parsed is a crate that was never walked"
+        );
     }
 
     #[test]
