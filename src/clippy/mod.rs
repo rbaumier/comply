@@ -98,7 +98,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
                     &lint_args,
                     clippy_conf.as_ref().map(|(_, p)| p.as_path()),
                 )?;
-                ensure_compiled(&root, &output)?;
+                ensure_analyzed(&root, &output)?;
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -227,6 +227,7 @@ fn invoke_clippy(
         "--manifest-path",
     ]);
     cmd.arg(&manifest);
+    apply_sqlx_offline(&mut cmd, workspace);
     cmd.arg("--");
     for arg in lint_args {
         cmd.arg(arg);
@@ -257,31 +258,64 @@ fn invoke_clippy(
 /// How many build errors the refusal quotes.
 const QUOTED_BUILD_ERRORS: usize = 5;
 
-/// Refuse a clippy run that could not build the workspace.
-///
-/// rustc's own errors carry no `clippy::` code, so `parse_clippy_jsonl`
-/// drops them. A workspace that fails to compile therefore yielded zero
-/// diagnostics and comply printed "all clear" on code clippy never saw.
-/// A cargo failure that emitted no JSON at all (bad manifest, lockfile)
-/// is refused the same way, with cargo's stderr.
-fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()> {
-    let errors = build_errors(&output.stdout);
-    let silent_failure = !output.status.success() && errors.is_empty() && !lints_reported(&output.stdout);
-    if errors.is_empty() && !silent_failure {
-        return Ok(());
+/// A workspace that ships a `.sqlx` cache is linted offline, the way CI
+/// builds it. Left online, `sqlx::query!` dials the database of the
+/// nearest `.env` while rustc expands it; an unreachable one stops the
+/// build and clippy then lints nothing at all. Honor an explicit
+/// `SQLX_OFFLINE` from the caller: a stale cache still fails loudly.
+fn apply_sqlx_offline(cmd: &mut Command, workspace: &Path) {
+    if forces_sqlx_offline(workspace, std::env::var_os("SQLX_OFFLINE").as_deref()) {
+        cmd.env("SQLX_OFFLINE", "true");
     }
-    let detail = if errors.is_empty() {
-        String::from_utf8_lossy(&output.stderr).trim().to_owned()
-    } else {
-        errors.into_iter().take(QUOTED_BUILD_ERRORS).collect::<Vec<_>>().join("\n")
-    };
-    Err(crate::toolchain::ToolchainError::Unusable {
+}
+
+/// Split out of [`apply_sqlx_offline`] so the decision is testable
+/// without touching the environment of the whole test process.
+fn forces_sqlx_offline(workspace: &Path, caller_choice: Option<&std::ffi::OsStr>) -> bool {
+    let already_chosen = caller_choice.is_some_and(|v| !v.is_empty());
+    !already_chosen && workspace.join(".sqlx").is_dir()
+}
+
+/// Refuse a clippy run that linted nothing while looking successful.
+///
+/// Three silences read as a clean run. rustc's own errors carry no
+/// `clippy::` code, so `parse_clippy_jsonl` drops them: a workspace that
+/// fails to compile yielded zero diagnostics and comply printed "all
+/// clear" on code clippy never saw. A cargo failure that emitted no JSON
+/// at all (bad manifest, lockfile) is just as blind. So is a stream
+/// carrying no artifact of the workspace: cargo compiled none of its
+/// crates, so no Rust rule ran on them.
+fn ensure_analyzed(workspace: &Path, output: &std::process::Output) -> Result<()> {
+    let errors = build_errors(&output.stdout);
+    if !errors.is_empty() {
+        let quoted = errors.into_iter().take(QUOTED_BUILD_ERRORS).collect::<Vec<_>>().join("\n");
+        return Err(unusable(workspace, "could not compile", &quoted));
+    }
+    if !output.status.success() && !lints_reported(&output.stdout) {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(unusable(workspace, "could not compile", &stderr));
+    }
+    if compiled_crates(&output.stdout, workspace) == 0 {
+        return Err(unusable(
+            workspace,
+            "compiled no crate of",
+            "cargo reported no artifact for this workspace. \
+             Check that `cargo clippy --workspace` builds there.",
+        ));
+    }
+    Ok(())
+}
+
+/// A clippy run comply cannot trust, with rustc's own words.
+fn unusable(workspace: &Path, what_failed: &str, detail: &str) -> anyhow::Error {
+    crate::toolchain::ToolchainError::Unusable {
         what: format!(
-            "cargo clippy could not compile {}; no Rust file was linted.\n{detail}",
+            "cargo clippy {what_failed} {}; no Rust file was linted. \
+             Repair the build, then re-run comply.\n{detail}",
             workspace.display()
         ),
     }
-    .into())
+    .into()
 }
 
 /// rustc errors that stopped the build, as rustc rendered them.
@@ -300,13 +334,29 @@ fn lints_reported(stdout: &[u8]) -> bool {
     compiler_messages(stdout).next().is_some()
 }
 
+/// How many crates of `workspace` cargo reported compiling, fresh ones
+/// included. Dependencies live outside the workspace, so they are not
+/// evidence that the workspace itself was analyzed.
+fn compiled_crates(stdout: &[u8], workspace: &Path) -> usize {
+    let root = canonicalize_or_self(workspace);
+    envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-artifact")
+        .filter_map(|envelope| envelope.manifest_path)
+        .filter(|manifest| canonicalize_or_self(Path::new(manifest)).starts_with(&root))
+        .count()
+}
+
 fn compiler_messages(stdout: &[u8]) -> impl Iterator<Item = RustcDiagnostic> + '_ {
+    envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-message")
+        .filter_map(|envelope| envelope.message)
+}
+
+fn envelopes(stdout: &[u8]) -> impl Iterator<Item = CargoMessage> + '_ {
     BufReader::new(stdout)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<CargoMessage>(&line).ok())
-        .filter(|envelope| envelope.reason == "compiler-message")
-        .filter_map(|envelope| envelope.message)
 }
 
 /// Parse cargo's JSONL output stream and yield Diagnostic structs for
@@ -413,6 +463,34 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cargo names the crate it built; a dependency sits outside the
+    /// workspace, so its artifact proves nothing about this one.
+    #[test]
+    fn compiled_crates_counts_only_the_artifacts_of_this_workspace() {
+        let json = br#"{"reason":"compiler-artifact","manifest_path":"/ws/member/Cargo.toml","fresh":true}
+{"reason":"compiler-artifact","manifest_path":"/elsewhere/serde/Cargo.toml","fresh":true}
+{"reason":"compiler-message","manifest_path":"/ws/member/Cargo.toml","message":{"message":"x","level":"warning","spans":[]}}
+{"reason":"build-finished","success":true}"#;
+        assert_eq!(compiled_crates(json, Path::new("/ws")), 1);
+        assert_eq!(compiled_crates(json, Path::new("/other")), 0);
+    }
+
+    /// A workspace whose `.sqlx` cache is committed must lint offline,
+    /// unless the caller already picked a mode.
+    #[test]
+    fn sqlx_offline_is_forced_only_for_a_cached_workspace_the_caller_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = dir.path().join("cached");
+        std::fs::create_dir_all(cached.join(".sqlx")).unwrap();
+        let plain = dir.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+
+        assert!(forces_sqlx_offline(&cached, None));
+        assert!(forces_sqlx_offline(&cached, Some(std::ffi::OsStr::new(""))));
+        assert!(!forces_sqlx_offline(&cached, Some(std::ffi::OsStr::new("false"))));
+        assert!(!forces_sqlx_offline(&plain, None));
+    }
 
     #[test]
     fn build_errors_keeps_rustc_errors_and_leaves_denied_clippy_lints() {
