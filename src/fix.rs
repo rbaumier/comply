@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -186,19 +186,18 @@ fn run_oxlint_fix(files: &[&SourceFile], config: &Config) -> Result<()> {
 }
 
 /// Run `cargo clippy --fix --allow-dirty --allow-staged` once per
-/// distinct workspace touched by the input files. Returns the
-/// successful invocation count.
+/// distinct workspace touched by the input files, on the packages that
+/// own them. Returns the successful invocation count.
 fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
     let mut runs = 0;
-    let workspaces = group_by_workspace(files);
+    let workspaces = crate::clippy::group_by_workspace(files);
     let mut skipped: Vec<String> = Vec::new();
 
     for (workspace, files_in_ws) in workspaces {
         match workspace {
             Some(root) => {
-                let touched: FxHashSet<&Path> =
-                    files_in_ws.iter().map(|f| f.path.as_path()).collect();
-                if let Err(e) = invoke_clippy_fix(&root, &touched, config) {
+                let packages = crate::runner_helpers::cargo_package_args(&root, &files_in_ws);
+                if let Err(e) = invoke_clippy_fix(&root, &packages, config) {
                     eprintln!("comply: clippy --fix failed for {}: {e:#}", root.display());
                 } else {
                     runs += 1;
@@ -224,48 +223,14 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
     Ok(runs)
 }
 
-/// Walk up parents from each file looking for the nearest Cargo.toml.
-/// Files outside any workspace land under the `None` key.
-///
-/// Deliberately groups by the nearest member manifest, not the workspace
-/// root (unlike the clippy *lint* path). `cargo clippy --fix` rewrites
-/// source, so we keep the edit scope to the member crates the user
-/// actually touched rather than fixing every sibling in the workspace.
-fn group_by_workspace<'a>(
-    files: &[&'a SourceFile],
-) -> rustc_hash::FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
-    let mut out: rustc_hash::FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> =
-        rustc_hash::FxHashMap::default();
-    for f in files {
-        let root = find_workspace_root(&f.path);
-        out.entry(root).or_default().push(*f);
-    }
-    out
-}
-
-fn find_workspace_root(file: &Path) -> Option<PathBuf> {
-    let mut cur = file.parent()?.to_path_buf();
-    loop {
-        if cur.join("Cargo.toml").is_file() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
-}
-
-/// Spawn `cargo clippy --fix` for one workspace.
-///
-/// `_touched` is currently unused — clippy --fix runs on the entire
-/// crate, not on a per-file basis, so we can't restrict it to the
-/// files comply was asked about. We accept the broader edit scope
-/// because the alternative (no auto-fix at all on Rust) is worse.
-fn invoke_clippy_fix(workspace: &Path, _touched: &FxHashSet<&Path>, config: &Config) -> Result<()> {
+/// Spawn `cargo clippy --fix` for one workspace on `packages`
+/// (`-p` flags from `cargo_package_args`). Clippy fixes whole crates,
+/// so other files of those packages may be edited too.
+fn invoke_clippy_fix(workspace: &Path, packages: &[String], config: &Config) -> Result<()> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
+    cmd.arg("clippy").args(packages);
     cmd.args([
-        "clippy",
         "--fix",
         // clippy refuses dirty or staged trees without these.
         "--all-targets",
@@ -305,59 +270,4 @@ fn invoke_clippy_fix(workspace: &Path, _touched: &FxHashSet<&Path>, config: &Con
         anyhow::bail!("cargo clippy --fix exited with status {status}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn find_workspace_root_finds_immediate_cargo_toml() {
-        let tmp = TempDir::new().unwrap();
-        fs::write(
-            tmp.path().join("Cargo.toml"),
-            "[package]\nname=\"x\"\nversion=\"0.0.0\"",
-        )
-        .unwrap();
-        let src = tmp.path().join("src");
-        fs::create_dir(&src).unwrap();
-        let file = src.join("main.rs");
-        fs::write(&file, "fn main() {}").unwrap();
-        assert_eq!(find_workspace_root(&file), Some(tmp.path().to_path_buf()));
-    }
-
-    #[test]
-    fn group_by_workspace_buckets_files_correctly() {
-        let tmp_a = TempDir::new().unwrap();
-        let tmp_b = TempDir::new().unwrap();
-        fs::write(
-            tmp_a.path().join("Cargo.toml"),
-            "[package]\nname=\"a\"\nversion=\"0.0.0\"",
-        )
-        .unwrap();
-        fs::write(
-            tmp_b.path().join("Cargo.toml"),
-            "[package]\nname=\"b\"\nversion=\"0.0.0\"",
-        )
-        .unwrap();
-        let file_a = tmp_a.path().join("src/main.rs");
-        let file_b = tmp_b.path().join("src/main.rs");
-        fs::create_dir_all(file_a.parent().unwrap()).unwrap();
-        fs::create_dir_all(file_b.parent().unwrap()).unwrap();
-        fs::write(&file_a, "fn main() {}").unwrap();
-        fs::write(&file_b, "fn main() {}").unwrap();
-
-        let sf_a = SourceFile {
-            path: file_a,
-            language: Language::Rust,
-        };
-        let sf_b = SourceFile {
-            path: file_b,
-            language: Language::Rust,
-        };
-        let groups = group_by_workspace(&[&sf_a, &sf_b]);
-        assert_eq!(groups.len(), 2);
-    }
 }

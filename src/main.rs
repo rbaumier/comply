@@ -889,7 +889,7 @@ fn collect_all_diagnostics(
             )?);
         }
         if !by_lang.rs.is_empty() {
-            diags.extend(lint_rust(&by_lang.rs, config, &project, timings)?);
+            diags.extend(lint_rust(&by_lang.rs, config, &project, timings, is_partial)?);
         }
         if !by_lang.vue.is_empty() {
             let t = Instant::now();
@@ -1013,6 +1013,7 @@ fn lint_rust(
     config: &Config,
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
+    is_partial: bool,
 ) -> Result<Vec<Diagnostic>> {
     // clippy, cargo-shear and cargo-modules each back Rust rules; none is
     // optional, since a missing one would silently under-report. Refuse to run
@@ -1050,7 +1051,7 @@ fn lint_rust(
 
     let clippy_phase = || -> PhaseOut {
         let t = Instant::now();
-        (clippy::lint_files(rs_files, config), t.elapsed())
+        (clippy::lint_files(rs_files, config, is_partial), t.elapsed())
     };
     let shear_phase = || -> PhaseOut {
         let t = Instant::now();

@@ -98,6 +98,41 @@ pub fn find_cargo_workspace_root(path: &Path) -> Option<PathBuf> {
     nearest
 }
 
+/// Cargo's package selection for a clippy run over `files` in `workspace`:
+/// one `-p <name>` per package owning a file, so a scoped run builds only
+/// those crates. Falls back to `--workspace` when a file has no package.
+#[must_use]
+pub fn cargo_package_args(workspace: &Path, files: &[&SourceFile]) -> Vec<String> {
+    let names: Option<std::collections::BTreeSet<String>> = files
+        .iter()
+        .map(|f| owning_package(workspace, &f.path))
+        .collect();
+    match names {
+        Some(names) if !names.is_empty() => names
+            .into_iter()
+            .flat_map(|name| ["-p".to_owned(), name])
+            .collect(),
+        _ => vec!["--workspace".to_owned()],
+    }
+}
+
+/// Name of the nearest `[package]` manifest above `file`, searched up to
+/// `workspace` (canonical) inclusive.
+fn owning_package(workspace: &Path, file: &Path) -> Option<String> {
+    let canonical = file.canonicalize().ok()?;
+    canonical
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(workspace))
+        .find_map(|dir| {
+            let manifest: toml::Value = std::fs::read_to_string(dir.join("Cargo.toml"))
+                .ok()?
+                .parse()
+                .ok()?;
+            Some(manifest.get("package")?.get("name")?.as_str()?.to_owned())
+        })
+}
+
 /// Collapse a slice of input files into the set of unique workspace
 /// roots they belong to. Files that don't live under any workspace
 /// (no ancestor with `marker_filename`) are silently dropped — the
@@ -182,6 +217,77 @@ mod tests {
         assert_eq!(
             find_cargo_workspace_root(&file),
             Some(std::fs::canonicalize(root).unwrap())
+        );
+    }
+
+    /// Writes `files` (path, content) under a fresh temp dir.
+    fn fixture(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for (path, content) in files {
+            let full = tmp.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        tmp
+    }
+
+    fn package_args_for(tmp: &tempfile::TempDir, paths: &[&str]) -> Vec<String> {
+        let files: Vec<SourceFile> = paths
+            .iter()
+            .map(|p| SourceFile {
+                path: tmp.path().join(p),
+                language: crate::files::Language::Rust,
+            })
+            .collect();
+        let refs: Vec<&SourceFile> = files.iter().collect();
+        let root = find_cargo_workspace_root(&refs[0].path).unwrap();
+        cargo_package_args(&root, &refs)
+    }
+
+    #[test]
+    fn package_args_select_only_the_members_owning_the_files() {
+        let tmp = fixture(&[
+            ("Cargo.toml", "[workspace]\nmembers = [\"a\", \"b\"]\n"),
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("a/src/lib.rs", ""),
+            ("a/tests/it.rs", ""),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+            ("b/src/lib.rs", ""),
+        ]);
+        assert_eq!(
+            package_args_for(&tmp, &["a/src/lib.rs", "a/tests/it.rs"]),
+            ["-p", "a"]
+        );
+        assert_eq!(
+            package_args_for(&tmp, &["b/src/lib.rs", "a/src/lib.rs"]),
+            ["-p", "a", "-p", "b"]
+        );
+    }
+
+    #[test]
+    fn package_args_select_a_root_package() {
+        let tmp = fixture(&[
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"a\"]\n\n[package]\nname = \"root\"\n",
+            ),
+            ("src/main.rs", ""),
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+        ]);
+        assert_eq!(package_args_for(&tmp, &["src/main.rs"]), ["-p", "root"]);
+    }
+
+    #[test]
+    fn package_args_fall_back_to_workspace_for_a_file_outside_any_package() {
+        let tmp = fixture(&[
+            ("Cargo.toml", "[workspace]\nmembers = [\"a\"]\n"),
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("a/src/lib.rs", ""),
+            ("scripts/loose.rs", ""),
+        ]);
+        assert_eq!(
+            package_args_for(&tmp, &["a/src/lib.rs", "scripts/loose.rs"]),
+            ["--workspace"]
         );
     }
 }

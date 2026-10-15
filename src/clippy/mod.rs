@@ -6,10 +6,10 @@
 //!    `OnceLock` so we don't fork cargo on every invocation.
 //! 2. `lint_files()` collects every `Backend::Clippy` binding from the
 //!    rule registry, groups the input files by their containing Cargo
-//!    workspace (the nearest `Cargo.toml` ancestor), and for each
-//!    workspace runs:
+//!    workspace root, and for each workspace runs:
 //!
-//!        cargo clippy --message-format=json --quiet \
+//!        cargo clippy <--workspace | -p <owning package>...> \
+//!            --all-targets --message-format=json --quiet \
 //!            --manifest-path <workspace>/Cargo.toml \
 //!            -- -W clippy::lint1 -W clippy::lint2 ...
 //!
@@ -68,7 +68,14 @@ pub fn is_available() -> bool {
 ///     `[rules."clippy::too_many_lines"] threshold = 50` actually
 ///     reaches clippy
 #[must_use = "diagnostics from clippy must be reported"]
-pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnostic>> {
+///
+/// `is_partial` (a git file scope) limits each run to the packages owning
+/// `files`; a plain path scan lints the whole workspace.
+pub fn lint_files(
+    files: &[&SourceFile],
+    config: &Config,
+    is_partial: bool,
+) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
     }
@@ -97,7 +104,12 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
                     .iter()
                     .map(|f| canonicalize_or_self(&f.path))
                     .collect();
-                let output = invoke_clippy(&root, &lint_args, &clippy_conf_dir)?;
+                let packages = if is_partial {
+                    crate::runner_helpers::cargo_package_args(&root, &files_in_ws)
+                } else {
+                    vec!["--workspace".to_owned()]
+                };
+                let output = invoke_clippy(&root, &packages, &lint_args, &clippy_conf_dir)?;
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -186,7 +198,7 @@ fn build_lint_args(bindings: &[(&'static str, &'static RuleMeta, Severity)]) -> 
 
 /// Group files by their workspace root. Files outside any Cargo workspace
 /// land under the `None` key so the caller can warn the user.
-fn group_by_workspace<'a>(
+pub(crate) fn group_by_workspace<'a>(
     files: &[&'a SourceFile],
 ) -> FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> {
     let mut out: FxHashMap<Option<PathBuf>, Vec<&'a SourceFile>> = FxHashMap::default();
@@ -201,23 +213,22 @@ fn group_by_workspace<'a>(
 /// We pass `--quiet` to suppress cargo's progress noise on stderr, and
 /// `--message-format=json` to get structured diagnostics on stdout.
 ///
-/// `--workspace` lints every member in one shared build. `workspace` is
-/// the workspace root (resolved via `find_cargo_workspace_root`), so a
-/// virtual manifest covers all members, and a root that is itself a
-/// package still reaches the other members instead of only the root crate.
+/// `workspace` is the workspace root (resolved via `find_cargo_workspace_root`)
+/// and `packages` the selection (`--workspace` or `-p` flags), so a root that
+/// is itself a package still reaches the other members.
 ///
 /// `clippy_conf_dir` holds comply's generated `clippy.toml` (`CLIPPY_CONF_DIR`).
 /// `lint_files` refused any project `clippy.toml` beforehand.
 fn invoke_clippy(
     workspace: &Path,
+    packages: &[String],
     lint_args: &[String],
     clippy_conf_dir: &Path,
 ) -> Result<std::process::Output> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
+    cmd.arg("clippy").args(packages);
     cmd.args([
-        "clippy",
-        "--workspace",
         "--all-targets",
         "--message-format=json",
         "--quiet",
