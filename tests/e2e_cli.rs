@@ -100,12 +100,21 @@ fn empty_directory_returns_clean() {
 // stderr message keeps the test robust to node-absence while still surfacing a
 // real regression (a no-tsconfig run failing for some *other* reason).
 #[test]
-fn no_tsconfig_does_not_fail_type_aware() {
-    let (_dir, path) = write_ts_file(
-        "no_tsconfig.ts",
+fn no_tsconfig_is_refused_not_silently_skipped() {
+    // The type-aware rules need a resolved TypeScript program, which needs a
+    // tsconfig.json. The phase used to skip itself on a stderr notice and the
+    // run still ended on "all clear" and exit 0 — a verdict on code those rules
+    // never saw. It is a refusal now, with the two ways out of it. The fixture
+    // is built here rather than through `write_ts_file`, whose comply.toml
+    // turns those rules off.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    let path = dir.path().join("no_tsconfig.ts");
+    std::fs::write(
+        &path,
         "// comply-ignore: dead-export — isolated test file\n\
          export const GREETING = \"hello\";\n",
-    );
+    )
+    .unwrap();
     std::fs::write(
         path.with_file_name("no_tsconfig.test.ts"),
         "test('ok', () => {});\n",
@@ -114,8 +123,10 @@ fn no_tsconfig_does_not_fail_type_aware() {
     common::comply()
         .arg(&path)
         .assert()
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
         .stderr(
-            predicate::str::contains("no tsconfig.json found")
+            predicate::str::contains("no tsconfig.json")
                 .or(predicate::str::contains("needs Node.js on PATH")),
         );
 }

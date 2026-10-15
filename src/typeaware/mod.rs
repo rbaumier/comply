@@ -12,14 +12,13 @@
 //! dominates the run, so a project that disables them all skips the phase
 //! entirely and keeps the AstCheck-only budget.
 //!
-//! Failure handling splits by cause, because silently skipping the phase makes
-//! a clean exit indistinguishable from "the toolchain wasn't there". A
-//! *toolchain* failure — `node` absent, `@typescript/native-preview`
-//! unresolved, the checker API failing to initialize, or the program snapshot
-//! failing — is a hard `ToolchainError`: non-zero exit, and the remedy comply
-//! knows. A missing tsconfig (nothing to type-check) and a sidecar timeout (a
-//! hang, not a toolchain gap) stay graceful: a one-line stderr notice and no
-//! diagnostics.
+//! Every failure is a hard `ToolchainError`, because a phase that did not run
+//! makes a clean exit indistinguishable from "the rules were checked". `node`
+//! absent, `@typescript/native-preview` unresolved, the checker API failing to
+//! initialize, the program snapshot failing, no `tsconfig.json` to build a
+//! program from, a sidecar that hangs past its ceiling: each ends the run
+//! non-zero with the remedy comply knows, never on a stderr notice the caller
+//! can mistake for a result.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -88,10 +87,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     }
 
     let Some(tsconfig) = find_tsconfig(files) else {
-        eprintln!(
-            "comply: no tsconfig.json found — skipping type-aware rules."
-        );
-        return Ok(vec![]);
+        return Err(no_tsconfig(&enabled).into());
     };
     let project_dir = tsconfig
         .parent()
@@ -127,10 +123,7 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     })
     .to_string();
 
-    let response = match run_sidecar(&project_dir, &request)? {
-        Some(r) => r,
-        None => return Ok(vec![]),
-    };
+    let response = run_sidecar(&project_dir, &request)?;
 
     if let Some(err) = response.error.as_deref() {
         return Err(sidecar_error(err).into());
@@ -141,6 +134,30 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         &enabled,
         &canon_to_orig,
     ))
+}
+
+/// How many rule ids the refusal names before summarizing the rest.
+const QUOTED_RULES: usize = 5;
+
+/// The refusal of a type-aware phase with no TypeScript program to build.
+///
+/// The rules in `enabled` answer type queries, which needs a resolved program,
+/// which needs a `tsconfig.json`. Skipping them on a stderr notice left the run
+/// reporting "all clear" for code they never saw. The project decides instead:
+/// add a `tsconfig.json`, or disable those rules in its `comply.toml`.
+fn no_tsconfig(enabled: &[&'static crate::rules::meta::RuleMeta]) -> ToolchainError {
+    let named: Vec<&str> = enabled.iter().take(QUOTED_RULES).map(|m| m.id).collect();
+    let hidden = enabled.len().saturating_sub(named.len());
+    let rest = if hidden > 0 { format!(", and {hidden} more") } else { String::new() };
+    ToolchainError::Unusable {
+        what: format!(
+            "type-aware analysis found no tsconfig.json above the linted files, so the {} \
+             rule(s) that need a resolved TypeScript program did not run ({}{rest}) — add a \
+             tsconfig.json, or disable those rules in comply.toml",
+            enabled.len(),
+            named.join(", ")
+        ),
+    }
 }
 
 /// Whether `node` is on PATH. Cached for the process lifetime.
@@ -168,9 +185,9 @@ fn find_tsconfig(files: &[&SourceFile]) -> Option<PathBuf> {
 }
 
 /// Write the sidecar to a temp file, run it with the request on stdin, and
-/// parse its JSON response. Returns `None` (with a stderr notice) on spawn
-/// failure or timeout.
-fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarResponse>> {
+/// parse its JSON response. A sidecar that never answers is an error, not an
+/// empty result: the rules it was asked to run did not run.
+fn run_sidecar(project_dir: &Path, request: &str) -> Result<SidecarResponse> {
     let sidecar_path =
         std::env::temp_dir().join(format!("comply-typeaware-{}.mjs", std::process::id()));
     std::fs::write(&sidecar_path, SIDECAR_SRC)
@@ -199,11 +216,15 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
     else {
         let _ = child.kill();
         let _ = child.wait();
-        eprintln!(
-            "comply: type-aware sidecar timed out after {}s — skipping type-aware rules.",
-            SIDECAR_TIMEOUT.as_secs()
-        );
-        return Ok(None);
+        return Err(ToolchainError::Unusable {
+            what: format!(
+                "the type-aware sidecar did not answer within {}s and was killed, so no \
+                 type-aware rule ran — give the machine room, or disable those rules in \
+                 comply.toml",
+                SIDECAR_TIMEOUT.as_secs()
+            ),
+        }
+        .into());
     };
 
     let mut stdout = String::new();
@@ -219,7 +240,7 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
         }
         format!("failed to parse type-aware sidecar output. sidecar stderr: {stderr}")
     })?;
-    Ok(Some(response))
+    Ok(response)
 }
 
 /// Build the hard error for a sidecar-reported environment-config failure. The
