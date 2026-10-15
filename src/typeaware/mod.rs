@@ -87,6 +87,13 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     }
 
     let Some(tsconfig) = find_tsconfig(files) else {
+        // JavaScript carries no type annotations.
+        // So these rules have no program to build.
+        // Nothing of their kind to analyze.
+        // The TS-family grouping only brought it here.
+        if files.iter().all(|f| crate::files::is_javascript_source(&f.path)) {
+            return Ok(vec![]);
+        }
         return Err(no_tsconfig(&enabled).into());
     };
     let project_dir = tsconfig
