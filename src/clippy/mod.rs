@@ -241,17 +241,9 @@ fn invoke_clippy(
         .output()
         .with_context(|| format!("failed to invoke `cargo clippy` for {}", manifest.display()))?;
 
-    // Clippy exits non-zero when lints fire as warnings — that is normal,
-    // not an error condition. We only bail on actual cargo failures
-    // (compilation errors will already be in the JSON stream).
-    if !output.status.success()
-        && output.status.code() != Some(0)
-        && output.status.code() != Some(101)
-        && output.status.code().is_some()
-    {
-        // 101 is the exit code clippy uses for "lints found"; we accept it.
-        // Genuine cargo crashes have other codes.
-    }
+    // The exit code is not read here: clippy exits non-zero both when lints
+    // fired and when the build failed, which tells the two apart only in the
+    // JSON stream. `ensure_analyzed` reads that stream and owns the judgement.
     Ok(output)
 }
 
