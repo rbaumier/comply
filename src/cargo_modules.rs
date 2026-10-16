@@ -12,11 +12,16 @@
 //! 2. `lint_files()` finds the unique workspace roots (the nearest
 //!    `Cargo.toml` ancestor) and runs:
 //!
-//!        cargo modules orphans --manifest-path <root>/Cargo.toml
+//!        cargo modules orphans --package <name> [--lib | --bin <name>] \
+//!            --manifest-path <root>/Cargo.toml
 //!
-//!    cargo-modules walks one target and refuses a package with several, so
-//!    such a package is walked once per lib or bin target `cargo metadata`
-//!    lists (`--lib`, `--bin <name>`) and the scans are merged.
+//!    cargo-modules resolves the workspace from the manifest.
+//!    `--manifest-path` alone leaves the member unnamed.
+//!    It then refuses to guess which one to walk.
+//!    So every scan names its package.
+//!    It walks one target and refuses a package with several.
+//!    Such a package is walked target by target.
+//!    `cargo metadata` lists them, and the scans are merged.
 //!    cargo-modules outputs colored text (no JSON reporter as of v0.25),
 //!    so we strip ANSI escapes and parse the `warning: orphaned module
 //!    'X' at <path>` lines via a small regex.
@@ -60,8 +65,12 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
 
 fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
     let targets = targets_of(workspace)?;
-    if targets.len() <= 1 {
+    // A virtual manifest declares no package to name.
+    if targets.is_empty() {
         return scan_target(workspace, &[]);
+    }
+    if let [only] = targets.as_slice() {
+        return scan_target(workspace, &only.selector);
     }
     // Parallel: each scan loads the whole crate graph. About 17 s on Qualneo.
     let scans = targets
@@ -73,7 +82,9 @@ fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
 
 /// One lib or bin target of a package.
 struct Target {
-    /// The flags that make `cargo modules` walk this target alone.
+    /// The flags that walk this target of this package.
+    /// The package is named because the manifest cannot.
+    /// A member's manifest resolves to its whole workspace.
     selector: Vec<String>,
     /// The target's crate root file.
     root: PathBuf,
@@ -89,6 +100,7 @@ struct Metadata {
 // comply-ignore: rust-serde-deny-unknown-fields — same contract as `Metadata`.
 struct Package {
     manifest_path: PathBuf,
+    name: String,
     targets: Vec<RawTarget>,
 }
 
@@ -125,17 +137,20 @@ fn targets_of(workspace: &Path) -> Result<Vec<Target>> {
     let Some(package) = metadata.packages.into_iter().find(|p| p.manifest_path == manifest) else {
         return Ok(vec![]);
     };
-    Ok(package
-        .targets
+    let Package { name, targets, .. } = package;
+    let selected = ["--package".to_owned(), name];
+    Ok(targets
         .into_iter()
         .filter_map(|raw| {
-            let selector = if raw.kind.iter().any(|k| k == "bin") {
+            let target = if raw.kind.iter().any(|k| k == "bin") {
                 vec!["--bin".to_owned(), raw.name]
             } else if raw.kind.iter().any(|k| k.ends_with("lib") || k == "proc-macro") {
                 vec!["--lib".to_owned()]
             } else {
                 return None;
             };
+            let mut selector = selected.to_vec();
+            selector.extend(target);
             Some(Target { selector, root: raw.src_path })
         })
         .collect())
@@ -186,7 +201,8 @@ fn module_dir(file: &Path) -> Option<PathBuf> {
 }
 
 /// One `cargo modules orphans` run.
-/// `selector` picks the target; empty when the package has one.
+/// `selector` names the package and its target.
+/// Empty only for a virtual manifest.
 fn scan_target(workspace: &Path, selector: &[String]) -> Result<Vec<Diagnostic>> {
     let output = Command::new("cargo")
         .args(["modules", "orphans"])
@@ -403,6 +419,51 @@ mod tests {
             paths,
             Ok(vec![Some("src/bin/tool/lost.rs".into()), Some("src/stray.rs".into())])
         );
+    }
+
+    /// A workspace of two members, `alpha` carrying a lib alone.
+    const WORKSPACE: &[(&str, &str)] = &[
+        ("Cargo.toml", "[workspace]\nmembers = [\"alpha\", \"beta\"]\nresolver = \"2\"\n"),
+        (
+            "alpha/Cargo.toml",
+            "[package]\nname = \"alpha\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("alpha/src/lib.rs", "pub mod used;\n"),
+        ("alpha/src/used.rs", "pub fn f() {}\n"),
+        (
+            "beta/Cargo.toml",
+            "[package]\nname = \"beta\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("beta/src/lib.rs", "pub fn g() {}\n"),
+    ];
+
+    /// cargo-modules resolves the workspace from the manifest it is handed.
+    /// It then refuses to guess which member to walk.
+    /// A scan must name the member, single target or not.
+    #[test]
+    fn a_single_target_member_of_a_workspace_is_walked_not_refused() {
+        let (_dir, root) = package(WORKSPACE);
+        let found = scan_workspace(&root.join("alpha")).map_err(|err| format!("{err:#}"));
+        assert_eq!(found.map(|d| d.len()), Ok(0));
+    }
+
+    /// Same workspace, with a lib and a bin.
+    /// Naming the target alone does not name the member.
+    #[test]
+    fn an_orphan_in_a_multi_target_member_of_a_workspace_is_reported() {
+        let mut files = WORKSPACE.to_vec();
+        files.push(("alpha/src/main.rs", "fn main() {}\n"));
+        files.push(("alpha/src/stray.rs", "pub fn y() {}\n"));
+        let (_dir, root) = package(&files);
+        let member = root.join("alpha");
+        let found = scan_workspace(&member).map_err(|err| format!("{err:#}"));
+        let paths = found.map(|d| {
+            let mut paths: Vec<_> =
+                d.iter().map(|d| d.path.strip_prefix(&member).ok().map(Path::to_path_buf)).collect();
+            paths.sort();
+            paths
+        });
+        assert_eq!(paths, Ok(vec![Some("src/stray.rs".into())]));
     }
 
     #[test]
