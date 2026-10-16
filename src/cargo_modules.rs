@@ -27,7 +27,11 @@
 //!    'X' at <path>` lines via a small regex.
 //! 3. Each parsed orphan becomes one Comply diagnostic on the offending
 //!    file path.
-//! 4. cargo-modules 0.27 skips a module name carrying an underscore.
+//! 4. A `cfg` gate hides a declaration from the module tree.
+//!    cargo-modules then counts that module an orphan.
+//!    So every run asks for all features.
+//!    It asks for the test config too.
+//! 5. cargo-modules 0.27 skips a module name carrying an underscore.
 //!    Such a file's orphan status is unknown, not clean.
 //!    Rust modules are snake_case, so every multi-word name is skipped.
 //!    One real workspace: 97 of 203 modules, 47 percent.
@@ -265,9 +269,13 @@ fn module_dir(file: &Path) -> Option<PathBuf> {
 /// One `cargo modules orphans` run.
 /// `selector` names the package and its target.
 /// Empty only for a virtual manifest.
+///
+/// `--all-features` and `--cfg-test` widen the module tree.
+/// cargo-modules sees only the configuration it is given.
+/// Without them a `cfg` module reads as an orphan.
 fn scan_target(workspace: &Path, selector: &[String]) -> Result<Vec<Diagnostic>> {
     let output = Command::new("cargo")
-        .args(["modules", "orphans"])
+        .args(["modules", "orphans", "--all-features", "--cfg-test"])
         .args(selector)
         .arg("--manifest-path")
         .arg(workspace.join("Cargo.toml"))
@@ -542,6 +550,40 @@ mod tests {
         for root in ["src/lib.rs", "src/main.rs"] {
             assert!(is_judgeable(Path::new(root)), "{root} is no module of its own");
         }
+    }
+
+    /// A package whose modules hide behind a `cfg`.
+    /// Only `src/stray.rs` is truly loaded by nobody.
+    const CONDITIONAL_MODULES: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"conditional\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [features]\nmock = []\n",
+        ),
+        (
+            "src/lib.rs",
+            "pub mod used;\n\n#[cfg(feature = \"mock\")]\npub mod mock;\n\n#[cfg(test)]\nmod tests;\n",
+        ),
+        ("src/used.rs", "pub fn u() {}\n"),
+        ("src/mock.rs", "pub fn m() {}\n"),
+        ("src/tests.rs", "#[test]\nfn t() {}\n"),
+        ("src/stray.rs", "pub fn s() {}\n"),
+    ];
+
+    /// A module behind a `cfg` is declared, not orphan.
+    /// cargo-modules sees only the configuration it is given.
+    /// Unasked, it counts both of them as orphans.
+    #[test]
+    fn a_module_behind_a_cfg_is_not_an_orphan() {
+        let (_dir, root) = package(CONDITIONAL_MODULES);
+        let found = scan_workspace(&root).map_err(|err| format!("{err:#}"));
+        let paths = found.map(|d| {
+            let mut paths: Vec<_> =
+                d.iter().map(|d| d.path.strip_prefix(&root).ok().map(Path::to_path_buf)).collect();
+            paths.sort();
+            paths
+        });
+        assert_eq!(paths, Ok(vec![Some("src/stray.rs".into())]));
     }
 
     #[test]
