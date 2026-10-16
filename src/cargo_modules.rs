@@ -27,6 +27,12 @@
 //!    'X' at <path>` lines via a small regex.
 //! 3. Each parsed orphan becomes one Comply diagnostic on the offending
 //!    file path.
+//! 4. cargo-modules 0.27 skips a module name carrying an underscore.
+//!    Such a file's orphan status is unknown, not clean.
+//!    Rust modules are snake_case, so every multi-word name is skipped.
+//!    One real workspace: 97 of 203 modules, 47 percent.
+//!    So the run says how many files it left unjudged.
+//!    A clean report over half a crate is false assurance.
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -60,7 +66,63 @@ pub fn lint_files(files: &[&SourceFile]) -> Result<Vec<Diagnostic>> {
     for workspace in runner_helpers::collect_unique_roots(files, "Cargo.toml") {
         diagnostics.extend(scan_workspace(&workspace)?);
     }
+    let unjudged: Vec<&Path> =
+        files.iter().map(|f| f.path.as_path()).filter(|path| !is_judgeable(path)).collect();
+    warn_unjudged(&unjudged, files.len());
     Ok(diagnostics)
+}
+
+/// How many unjudged files a notice names.
+const LISTED_UNJUDGED: usize = 5;
+
+/// The module name cargo-modules would give `file`.
+/// A `dir/mod.rs` is the module named after `dir`.
+/// A crate root declares no module of its own.
+fn module_name(file: &Path) -> Option<&str> {
+    let stem = file.file_stem()?.to_str()?;
+    if stem == "lib" || stem == "main" {
+        return None;
+    }
+    if stem == "mod" {
+        return file.parent()?.file_name()?.to_str();
+    }
+    Some(stem)
+}
+
+/// Whether cargo-modules can judge `file` at all.
+/// It never names a module whose name carries an underscore.
+fn is_judgeable(file: &Path) -> bool {
+    match module_name(file) {
+        Some(name) => !name.contains('_'),
+        None => true,
+    }
+}
+
+/// Say what the rule could not judge.
+///
+/// Silence would let a clean report cover those files.
+/// Unknown is not the same as clean.
+fn warn_unjudged(unjudged: &[&Path], total: usize) {
+    if unjudged.is_empty() {
+        return;
+    }
+    let named = unjudged
+        .iter()
+        .take(LISTED_UNJUDGED)
+        .map(|path| match path.file_name() {
+            Some(name) => name.to_string_lossy().into_owned(),
+            None => path.display().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hidden = unjudged.len().saturating_sub(LISTED_UNJUDGED);
+    let more = if hidden > 0 { format!(", and {hidden} more") } else { String::new() };
+    eprintln!(
+        "comply: {RULE_ID} cannot judge {} of {total} Rust file(s) \u{2014} cargo-modules \
+         never names a module whose name carries an underscore ({named}{more}). \
+         Unknown is not clean.",
+        unjudged.len()
+    );
 }
 
 fn scan_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
@@ -464,6 +526,22 @@ mod tests {
             paths
         });
         assert_eq!(paths, Ok(vec![Some("src/stray.rs".into())]));
+    }
+
+    /// cargo-modules names a module of one word.
+    /// It never names one carrying an underscore.
+    /// A crate root is no module of its own.
+    #[test]
+    fn judgeable_files_are_the_ones_cargo_modules_can_name() {
+        for judgeable in ["src/stray.rs", "src/managed/catalog.rs", "src/managed/mod.rs"] {
+            assert!(is_judgeable(Path::new(judgeable)), "{judgeable}");
+        }
+        for unjudgeable in ["src/zz_stray.rs", "src/my_helper.rs", "src/managed_api/mod.rs"] {
+            assert!(!is_judgeable(Path::new(unjudgeable)), "{unjudgeable}");
+        }
+        for root in ["src/lib.rs", "src/main.rs"] {
+            assert!(is_judgeable(Path::new(root)), "{root} is no module of its own");
+        }
     }
 
     #[test]

@@ -401,6 +401,30 @@ fn ansi_fixture_does_not_cost_its_batch_its_diagnostics_issue_8402() {
 }
 
 #[test]
+fn the_orphan_rule_declares_the_modules_it_cannot_judge() {
+    // cargo-modules never names a module carrying an underscore.
+    // Half the modules of a snake_case crate go unjudged.
+    // A clean report would cover them in silence.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"declared\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/lib.rs"), "pub mod used;\n").unwrap();
+    fs::write(dir.path().join("src/used.rs"), "pub fn used() {}\n").unwrap();
+    fs::write(dir.path().join("src/zz_stray.rs"), "pub fn stray() {}\n").unwrap();
+
+    common::comply()
+        .arg(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .assert()
+        .stderr(predicate::str::contains("rust-orphan-module cannot judge"))
+        .stderr(predicate::str::contains("zz_stray.rs"));
+}
+
+#[test]
 fn a_javascript_only_set_is_not_refused_for_a_missing_tsconfig() {
     // JavaScript carries no type annotations.
     // A missing tsconfig.json is then nothing to analyze.
