@@ -553,9 +553,10 @@ fn fix_leaves_raw_literal_invisible_reported_issue_8610() {
 fn fix_still_runs_oxlint_fixers_issue_8610() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
+    // `no-useless-rename` carries a safe fix, which `oxlint --fix` applies.
     fs::write(
         root.join("a.ts"),
-        "export function f() { debugger; return 1; }\n",
+        "export function f(o: { a: number }) { const { a: a } = o; return a; }\n",
     )
     .unwrap();
 
@@ -565,7 +566,7 @@ fn fix_still_runs_oxlint_fixers_issue_8610() {
         .assert()
         .stderr(predicate::str::contains("comply: ran 1 fixer(s)"));
     let ts = fs::read_to_string(root.join("a.ts")).unwrap();
-    assert!(!ts.contains("debugger"), "{ts}");
+    assert!(ts.contains("const { a } = o"), "{ts}");
 }
 
 #[test]
