@@ -232,6 +232,8 @@ fn invoke_clippy_fix(workspace: &Path, packages: &[String], config: &Config) -> 
     cmd.arg("clippy").args(packages);
     cmd.args([
         "--fix",
+        // The lint pass's features, so a feature-gated test compiles.
+        "--all-features",
         // clippy refuses dirty or staged trees without these.
         "--all-targets",
         "--allow-dirty",

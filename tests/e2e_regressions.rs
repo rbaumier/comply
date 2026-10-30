@@ -847,3 +847,50 @@ fn fix_reads_the_clippy_table_of_comply_toml_issue_8614() {
     assert!(fixed.contains("is_empty()"), "{fixed}");
     assert!(fixed.contains("x >= 1 && x < 10"), "{fixed}");
 }
+
+/// A crate whose integration test needs the `extra` feature.
+/// That test compares a length to zero.
+fn feature_gated_crate() -> TempDir {
+    let dir = rust_crate(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [features]\nextra = []\n\n[workspace]\n",
+        ),
+        (
+            "src/lib.rs",
+            "#[cfg(feature = \"extra\")]\npub fn extra() -> Vec<u8> {\n    Vec::new()\n}\n",
+        ),
+        (
+            "tests/it.rs",
+            "#[test]\nfn empty() {\n    assert!(fixture::extra().len() == 0);\n}\n",
+        ),
+    ]);
+    git(dir.path(), &["init", "-q"]);
+    dir
+}
+
+#[test]
+fn clippy_lints_a_test_that_requires_a_feature() {
+    let dir = feature_gated_crate();
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .stdout(predicate::str::contains("clippy::len_zero"));
+}
+
+#[test]
+fn fix_rewrites_a_test_that_requires_a_feature() {
+    let dir = feature_gated_crate();
+
+    common::comply()
+        .current_dir(dir.path())
+        .args(["--fix", "."])
+        .assert()
+        .stderr(predicate::str::contains("clippy --fix failed").not());
+
+    let fixed = fs::read_to_string(dir.path().join("tests/it.rs")).unwrap();
+    assert!(fixed.contains("is_empty()"), "{fixed}");
+}
