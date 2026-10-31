@@ -148,6 +148,7 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
     // The framework's own DDL builders must not be flagged for a missing
     // `SET lock_timeout`; a real file under `migrations/` still is.
     let dir = TempDir::new().expect("failed to create temp dir");
+    common::without_type_aware_rules(dir.path());
     fs::create_dir_all(dir.path().join("node-pg-migrate/src/operations/tables"))
         .unwrap();
     fs::write(
@@ -187,6 +188,7 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
 #[test]
 fn sql_migration_rules_skip_test_dirs_and_host_code() {
     let dir = TempDir::new().expect("failed to create temp dir");
+    common::without_type_aware_rules(dir.path());
     let both_defects = "ALTER TABLE t ADD CONSTRAINT t_a_chk CHECK (a > 0) NOT VALID;\n\
                         ALTER TABLE t VALIDATE CONSTRAINT t_a_chk;\n\
                         UPDATE t SET a = replace(a, 'x', 'y') WHERE id = 1;\n";
@@ -356,6 +358,7 @@ fn diff_only_survives_a_non_utf8_file_in_the_diff_issue_8502() {
     // violation on the staged `.ts` line instead of linting nothing.
     let dir = TempDir::new().unwrap();
     let root = dir.path();
+    common::without_type_aware_rules(root);
     git(root, &["init", "-q"]);
     git(root, &["config", "user.email", "t@example.com"]);
     git(root, &["config", "user.name", "t"]);
@@ -421,7 +424,7 @@ const COPY_RULES_TOML: &str = "[rules.french-nbsp-before-punctuation]\ndisabled 
 fn fix_rewrites_each_copy_finding_in_its_context_issue_8610() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    fs::write(root.join("comply.toml"), COPY_RULES_TOML).unwrap();
+    common::config_without_type_aware_rules(root, COPY_RULES_TOML);
     fs::write(
         root.join("Page.tsx"),
         "export function Page() { return <p aria-label=\"Quoi ?\">\
@@ -469,7 +472,7 @@ fn fix_rewrites_each_copy_finding_in_its_context_issue_8610() {
 fn fix_rewrites_copy_in_ts_strings_issue_1478() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    fs::write(root.join("comply.toml"), COPY_RULES_TOML).unwrap();
+    common::config_without_type_aware_rules(root, COPY_RULES_TOML);
     fs::write(
         root.join("lib.ts"),
         "export const m = \"Attention : l'agent répond\";\n",
@@ -503,7 +506,7 @@ fn staged_diff_only_fix_leaves_unchanged_lines_issue_8610() {
     git(root, &["config", "user.email", "t@example.com"]);
     git(root, &["config", "user.name", "t"]);
     fs::create_dir(root.join("web")).unwrap();
-    fs::write(root.join("comply.toml"), COPY_RULES_TOML).unwrap();
+    common::config_without_type_aware_rules(root, COPY_RULES_TOML);
     fs::write(
         root.join("web/Page.tsx"),
         "export const A = <p>Avant : ok</p>;\n",
@@ -535,6 +538,7 @@ fn staged_diff_only_fix_leaves_unchanged_lines_issue_8610() {
 fn fix_leaves_raw_literal_invisible_reported_issue_8610() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
+    common::without_type_aware_rules(root);
     let rs = "pub const S: &str = r\"a\u{200b}b\";\n";
     let ts = "export const t = String.raw`a\u{200b}b`;\n";
     fs::write(root.join("lib.rs"), rs).unwrap();
@@ -553,6 +557,7 @@ fn fix_leaves_raw_literal_invisible_reported_issue_8610() {
 fn fix_still_runs_oxlint_fixers_issue_8610() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
+    common::without_type_aware_rules(root);
     fs::write(
         root.join("a.ts"),
         "export function f() { debugger; return 1; }\n",
@@ -572,11 +577,10 @@ fn fix_still_runs_oxlint_fixers_issue_8610() {
 fn fix_leaves_file_whose_fix_breaks_parse_issue_8610() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
-    fs::write(
-        root.join("comply.toml"),
+    common::config_without_type_aware_rules(
+        root,
         "[rules.copy-apostrophe-style]\ndisabled = false\nstyle = \"straight\"\n",
-    )
-    .unwrap();
+    );
     let tsx = "export const P = () => <i title='l’agent' />;\n";
     fs::write(root.join("Page.tsx"), tsx).unwrap();
 
@@ -597,6 +601,7 @@ fn ansi_fixture_does_not_cost_its_batch_its_diagnostics_issue_8402() {
     // to 500, so the sibling's oxlint diagnostic is what proves the batch — and
     // with it the run — survived. "Completes" alone would pass on zero output.
     let dir = TempDir::new().unwrap();
+    common::without_type_aware_rules(dir.path());
     fs::write(dir.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
     fs::write(
         dir.path().join("ansi.ts"),
@@ -636,6 +641,7 @@ fn repo_with_committed_original_8611() -> TempDir {
     git(root, &["init", "-q"]);
     git(root, &["config", "user.email", "t@example.com"]);
     git(root, &["config", "user.name", "t"]);
+    common::without_type_aware_rules(root);
     fs::write(root.join("a.ts"), duplicated_module_8611()).unwrap();
     git(root, &["add", "-A"]);
     git(root, &["commit", "-qm", "init"]);
@@ -686,6 +692,7 @@ fn two_staged_copies_are_reported_once_on_the_last_path_issue_8611() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
+    common::without_type_aware_rules(root);
     fs::write(root.join("a.ts"), duplicated_module_8611()).unwrap();
     fs::write(root.join("b.ts"), duplicated_module_8611()).unwrap();
     git(root, &["add", "a.ts", "b.ts"]);
@@ -846,4 +853,73 @@ fn fix_reads_the_clippy_table_of_comply_toml_issue_8614() {
     let fixed = fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
     assert!(fixed.contains("is_empty()"), "{fixed}");
     assert!(fixed.contains("x >= 1 && x < 10"), "{fixed}");
+}
+
+#[test]
+fn a_javascript_only_set_is_not_refused_for_a_missing_tsconfig() {
+    // JavaScript carries no type annotations.
+    // A missing tsconfig.json is then nothing to analyze.
+    // Refusing would block every commit on plain `.js`.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("app.js"),
+        "var total = 1;\nif (total == 2) { console.log(total); }\n",
+    )
+    .unwrap();
+
+    common::comply()
+        .arg(dir.path())
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("app.js"))
+        .stderr(predicate::str::contains("tsconfig").not());
+}
+
+#[test]
+fn type_aware_rules_that_could_not_run_are_an_error_not_all_clear() {
+    // The phase needs a tsconfig.json for its program.
+    // Without one it skipped every rule on a notice.
+    // The run still ended on "all clear", exit 0.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
+    fs::write(
+        dir.path().join("a.ts"),
+        "export function addNumbers(left: number, right: number): number {\n  return left + right;\n}\n",
+    )
+    .unwrap();
+
+    common::comply()
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("tsconfig.json"));
+}
+
+#[test]
+fn clippy_that_cannot_compile_is_an_error_not_all_clear() {
+    // rustc's own errors carry no `clippy::` code.
+    // comply dropped them and printed "all clear".
+    // It must fail and say why.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"broken\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "/// Returns one.\npub fn one() -> u32 {\n    \"one\"\n}\n",
+    )
+    .unwrap();
+
+    common::comply()
+        .arg(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("cargo clippy could not compile"))
+        .stderr(predicate::str::contains("mismatched types"));
 }

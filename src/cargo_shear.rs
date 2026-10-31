@@ -75,16 +75,54 @@ fn lint_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
         .current_dir(workspace)
         .output()
         .with_context(|| format!("failed to invoke `cargo shear` in {}", workspace.display()))?;
-    // Empty stdout = nothing to parse. Either shear truly found nothing
-    // or it errored before producing output; either way, return cleanly
-    // rather than crashing on empty JSON.
-    if output.stdout.is_empty() {
-        return Ok(vec![]);
-    }
-    let Ok(report) = serde_json::from_slice::<ShearReport>(&output.stdout) else {
-        return Ok(vec![]);
-    };
+    let report = read_report(&output.stdout, &output.stderr, workspace)?;
     convert_findings(report.findings, workspace)
+}
+
+/// How many lines of the tool's own words a refusal quotes.
+const QUOTED_LINES: usize = 5;
+
+/// The shear report, or the refusal of a run comply can draw nothing from.
+///
+/// Two silences used to read as a clean workspace. `cargo shear --format=json`
+/// prints `{"findings":[]}` when it finds nothing, so an empty stdout is never a
+/// result: it is a run that stopped before reporting (unreadable manifest, broken
+/// workspace) and examined no dependency. Output serde refuses is just as blind —
+/// the findings it carried, if any, never reached comply.
+fn read_report(stdout: &[u8], stderr: &[u8], workspace: &Path) -> Result<ShearReport> {
+    if stdout.is_empty() {
+        return Err(unusable(workspace, "reported nothing", &first_lines(stderr)));
+    }
+    serde_json::from_slice::<ShearReport>(stdout).map_err(|cause| {
+        unusable(
+            workspace,
+            "emitted a report comply cannot read",
+            &format!("{cause}\n{}", first_lines(stdout)),
+        )
+    })
+}
+
+/// A `cargo shear` run comply cannot trust, with the tool's own words.
+fn unusable(workspace: &Path, what_failed: &str, detail: &str) -> anyhow::Error {
+    crate::toolchain::ToolchainError::Unusable {
+        what: format!(
+            "cargo shear {what_failed} in {}; no dependency was examined. \
+             Repair the workspace, then re-run comply.\n{detail}",
+            workspace.display()
+        ),
+    }
+    .into()
+}
+
+/// The opening lines of a tool's output, bounded for a refusal message.
+fn first_lines(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw)
+        .lines()
+        .take(QUOTED_LINES)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned()
 }
 
 /// Check whether the dep named in a shear message is declared as
@@ -223,6 +261,25 @@ mod tests {
         let raw = br#"{"summary":{"errors":0,"warnings":0,"fixed":0},"findings":[]}"#;
         let report: ShearReport = serde_json::from_slice(raw).unwrap();
         assert!(report.findings.is_empty());
+    }
+
+    /// A `cargo shear` that stopped before reporting prints nothing on
+    /// stdout: the clean run prints `{"findings":[]}`. Silence, and output
+    /// comply cannot read, both used to yield zero findings — so an
+    /// unreadable manifest read as "no unused dependency".
+    #[test]
+    fn a_shear_run_that_reported_nothing_is_refused() {
+        let ws = Path::new("/ws");
+        let clean = br#"{"summary":{"errors":0,"warnings":0,"fixed":0},"findings":[]}"#;
+        assert!(read_report(clean, b"", ws).is_ok(), "a clean report stays a clean report");
+        assert!(
+            read_report(b"", b"error: failed to parse manifest", ws).is_err(),
+            "empty stdout is a run that examined no dependency"
+        );
+        assert!(
+            read_report(b"<html>502</html>", b"", ws).is_err(),
+            "output comply cannot read is a run it cannot trust"
+        );
     }
 
     #[test]

@@ -117,11 +117,10 @@ const FRENCH_PAGE: &str =
 #[test]
 fn french_copy_rules_are_off_by_default() {
     let (dir, path) = write_ts_file("Page.tsx", FRENCH_PAGE);
-    std::fs::write(
-        dir.path().join("comply.toml"),
+    common::config_without_type_aware_rules(
+        dir.path(),
         "[rules.banned-copy-words]\nbanned = [\"d\u{e9}sol\u{e9}\"]\n",
-    )
-    .expect("write comply.toml");
+    );
     common::comply()
         .current_dir(dir.path())
         .arg(&path)
@@ -135,13 +134,12 @@ fn french_copy_rules_are_off_by_default() {
 #[test]
 fn french_copy_rules_report_once_enabled() {
     let (dir, path) = write_ts_file("Page.tsx", FRENCH_PAGE);
-    std::fs::write(
-        dir.path().join("comply.toml"),
+    common::config_without_type_aware_rules(
+        dir.path(),
         "[rules.french-nbsp-before-punctuation]\ndisabled = false\n\
          [rules.banned-copy-words]\ndisabled = false\nbanned = [\"d\u{e9}sol\u{e9}\"]\n\
          [rules.copy-apostrophe-style]\ndisabled = false\n",
-    )
-    .expect("write comply.toml");
+    );
     common::comply()
         .current_dir(dir.path())
         .arg(&path)
@@ -192,6 +190,7 @@ include_packages = true
 #[test]
 fn runtime_idiom_rules_are_opt_in_and_configurable() {
     let dir = tempfile::TempDir::new().unwrap();
+    common::without_type_aware_rules(dir.path());
     let write = |name: &str, content: &str| std::fs::write(dir.path().join(name), content).unwrap();
     write(
         "package.json",
@@ -216,7 +215,7 @@ fn runtime_idiom_rules_are_opt_in_and_configurable() {
         assert!(!stock.contains(id), "{id} fired without opt-in:\n{stock}");
     }
 
-    write("comply.toml", RUNTIME_IDIOM_CONFIG);
+    common::config_without_type_aware_rules(dir.path(), RUNTIME_IDIOM_CONFIG);
     let configured = lint();
     for id in RUNTIME_IDIOM_RULES {
         assert!(

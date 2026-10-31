@@ -14,15 +14,19 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
-/// Top-level cargo message envelope. We only deserialize the `reason`
-/// discriminator and the `message` payload — every other field of the
-/// envelope (target, package_id, manifest_path, etc.) is ignored.
+/// Top-level cargo message envelope.
+/// We read `reason`, `message` and `manifest_path`.
+/// Cargo's other envelope fields are ignored.
 #[derive(Debug, Deserialize)]
 pub struct CargoMessage {
     #[serde(default)]
     pub reason: String,
     #[serde(default)]
     pub message: Option<RustcDiagnostic>,
+    /// Absolute `Cargo.toml` of the crate cargo built.
+    /// Only a `compiler-artifact` carries it.
+    #[serde(default)]
+    pub manifest_path: Option<String>,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }
@@ -34,6 +38,15 @@ pub struct CargoMessage {
 pub struct RustcDiagnostic {
     #[serde(default)]
     pub message: String,
+    /// `error`, `warning`, `note`, `help`.
+    /// An `error` without a `clippy::` code stopped the build.
+    /// Clippy linted nothing past it.
+    /// A `children` entry carries `note`, `help` or `warning`.
+    #[serde(default)]
+    pub level: String,
+    /// rustc's own rendering, file and line included.
+    #[serde(default)]
+    pub rendered: Option<String>,
     /// `code.code` is the lint name, e.g. `clippy::unwrap_used`.
     /// rustc messages without a code (build errors, parse errors)
     /// have `code: null`.
@@ -41,9 +54,6 @@ pub struct RustcDiagnostic {
     pub code: Option<RustcCode>,
     #[serde(default)]
     pub spans: Vec<RustcSpan>,
-    /// `note`, `help`, `warning`… on the sub-diagnostics in `children`.
-    #[serde(default)]
-    pub level: String,
     /// A `disallowed-*` entry's `reason` arrives as a `note` child.
     #[serde(default)]
     pub children: Vec<RustcDiagnostic>,

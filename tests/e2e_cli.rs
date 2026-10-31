@@ -100,12 +100,19 @@ fn empty_directory_returns_clean() {
 // stderr message keeps the test robust to node-absence while still surfacing a
 // real regression (a no-tsconfig run failing for some *other* reason).
 #[test]
-fn no_tsconfig_does_not_fail_type_aware() {
-    let (_dir, path) = write_ts_file(
-        "no_tsconfig.ts",
+fn no_tsconfig_is_refused_not_silently_skipped() {
+    // The type-aware rules need a tsconfig.json.
+    // Without one, the run used to end on "all clear".
+    // It is now a refusal.
+    // `write_ts_file` would turn those rules off.
+    let dir = TempDir::new().expect("failed to create temp dir");
+    let path = dir.path().join("no_tsconfig.ts");
+    std::fs::write(
+        &path,
         "// comply-ignore: dead-export — isolated test file\n\
          export const GREETING = \"hello\";\n",
-    );
+    )
+    .unwrap();
     std::fs::write(
         path.with_file_name("no_tsconfig.test.ts"),
         "test('ok', () => {});\n",
@@ -114,8 +121,10 @@ fn no_tsconfig_does_not_fail_type_aware() {
     common::comply()
         .arg(&path)
         .assert()
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
         .stderr(
-            predicate::str::contains("no tsconfig.json found")
+            predicate::str::contains("no tsconfig.json")
                 .or(predicate::str::contains("needs Node.js on PATH")),
         );
 }
