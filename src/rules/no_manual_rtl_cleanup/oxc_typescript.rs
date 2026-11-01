@@ -1,7 +1,9 @@
 //! OxcCheck backend for no-manual-rtl-cleanup.
 //!
 //! Detects manual `cleanup` imports from `@testing-library` in test files.
+//! It stays silent when the spec must clean up itself.
 
+use super::vitest_config::{AutoCleanup, auto_cleanup};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
@@ -61,15 +63,31 @@ impl OxcCheck for Check {
             return;
         }
 
+        // Vitest reads the config of the package it runs in.
+        let package_dir = ctx.project.nearest_package_json_dir(ctx.path);
+        let stop_at = package_dir
+            .as_deref()
+            .or(ctx.project.project_root.as_deref());
+        let message = match auto_cleanup(ctx.path, stop_at, package_dir.as_deref()) {
+            // RTL registers no `afterEach`, so the spec's `cleanup` is required.
+            AutoCleanup::Absent => return,
+            AutoCleanup::Registered(by) => format!(
+                "Manual `cleanup` import from `@testing-library` — \
+                 {by} already runs cleanup after each test."
+            ),
+            AutoCleanup::Unknown(why) => format!(
+                "Manual `cleanup` import from `@testing-library` — \
+                 Vitest runs cleanup automatically when `test.globals` is true; \
+                 comply could not confirm it: {why}."
+            ),
+        };
         let (line, column) = byte_offset_to_line_col(ctx.source, import.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "Manual `cleanup` import from `@testing-library` — \
-                      Vitest runs cleanup automatically after each test."
-                .into(),
+            message,
             severity: Severity::Error,
             span: None,
         });
@@ -148,16 +166,28 @@ mod tests {
         assert_eq!(d.len(), 1);
     }
 
-    #[test]
-    fn flags_cleanup_when_only_vitest_config_present() {
-        let d = run_in_project(
+    /// Seeds a bare manifest and a `vitest.config.ts` with `config`.
+    fn run_with_config(config: &'static str) -> Vec<Diagnostic> {
+        run_in_project(
             |dir| {
                 fs::write(dir.join("package.json"), r#"{"name":"app"}"#).unwrap();
-                fs::write(dir.join("vitest.config.ts"), "export default {}").unwrap();
+                fs::write(dir.join("vitest.config.ts"), config).unwrap();
             },
             "import { cleanup } from '@testing-library/react';",
-        );
+        )
+    }
+
+    #[test]
+    fn flags_cleanup_when_only_vitest_config_sets_globals() {
+        let d = run_with_config("export default { test: { globals: true } }");
         assert_eq!(d.len(), 1);
+    }
+
+    // Without `globals`, RTL registers no `afterEach`: the spec needs `cleanup`.
+    #[test]
+    fn allows_cleanup_when_vitest_config_leaves_globals_off() {
+        assert!(run_with_config("export default {}").is_empty());
+        assert!(run_with_config("export default { test: { globals: false } }").is_empty());
     }
 
     #[test]

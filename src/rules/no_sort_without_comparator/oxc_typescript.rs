@@ -10,12 +10,14 @@ use std::sync::Arc;
 /// snapshot matchers make no such use of an ordering.
 const DEEP_EQUALITY_MATCHERS: &[&str] = &["toEqual", "toStrictEqual", "toMatchObject"];
 
-/// Whether `call` is a `.sort()` invoked with no comparator.
+/// Whether `call` sorts with no comparator.
+/// `.toSorted()` sorts the same way as `.sort()`.
 fn is_comparator_less_sort(call: &CallExpression) -> bool {
     call.arguments.is_empty()
         && matches!(
             &call.callee,
-            Expression::StaticMemberExpression(member) if member.property.name.as_str() == "sort"
+            Expression::StaticMemberExpression(member)
+                if matches!(member.property.name.as_str(), "sort" | "toSorted")
         )
 }
 
@@ -124,7 +126,7 @@ impl OxcCheck for Check {
     }
 
     fn prefilter(&self) -> Option<&'static [&'static str]> {
-        Some(&["sort"])
+        Some(&["sort", "toSorted"])
     }
 
     fn run<'a>(
@@ -169,7 +171,7 @@ impl OxcCheck for Check {
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "`.sort()` without comparator sorts lexicographically — pass an explicit compare function.".into(),
+            message: "`.sort()` / `.toSorted()` without comparator sorts lexicographically — pass an explicit compare function.".into(),
             severity: super::META.severity,
             span: None,
         });

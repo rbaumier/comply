@@ -1,4 +1,5 @@
 //! react-no-sort-for-extrema — `.sort(...)[0]` / `sorted[length - 1]` for min/max.
+//! `toSorted` and `.at(0)` / `.at(-1)` count too.
 
 mod oxc_typescript;
 #[cfg(test)]

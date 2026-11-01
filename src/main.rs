@@ -1039,7 +1039,8 @@ fn lint_rust(
     // can feed phase durations back into `Timings` after the join.
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
-    let clippy_phase = || -> PhaseOut {
+    // clippy also returns rustc's extern usage, for the shear findings.
+    let clippy_phase = || {
         let t = Instant::now();
         (clippy::lint_files(rs_files, config, is_partial), t.elapsed())
     };
@@ -1065,11 +1066,12 @@ fn lint_rust(
 
     let (clippy_res, clippy_dur) = clippy_out;
     timings.clippy = clippy_dur;
-    diagnostics.extend(clippy_res?);
+    let (clippy_diagnostics, extern_usage) = clippy_res?;
+    diagnostics.extend(clippy_diagnostics);
 
     let (shear_res, shear_dur) = shear_out;
     timings.cargo_shear = shear_dur;
-    diagnostics.extend(shear_res?);
+    diagnostics.extend(cargo_shear::drop_proven_used(shear_res?, &extern_usage));
 
     let (engine_res, engine_dur) = engine_out;
     timings.engine_rs = engine_dur;

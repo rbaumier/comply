@@ -1,7 +1,7 @@
 //! vue-no-filter-sort-in-template AST backend.
 //!
 //! Inside a `v-for="x in EXPR"`, flag EXPR when it contains `.filter(`,
-//! `.sort(`, `.map(`, or a function call expression returning an array.
+//! `.sort(`, `.toSorted(`, `.map(`, or a function call expression returning an array.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -28,12 +28,19 @@ fn flagged_call(expr: &str) -> Option<&'static str> {
     };
     let rhs = rhs.trim();
     for method in [
-        ".filter(", ".sort(", ".map(", ".reduce(", ".slice(", ".concat(",
+        ".filter(",
+        ".sort(",
+        ".toSorted(",
+        ".map(",
+        ".reduce(",
+        ".slice(",
+        ".concat(",
     ] {
         if rhs.contains(method) {
             return Some(match method {
                 ".filter(" => "filter",
                 ".sort(" => "sort",
+                ".toSorted(" => "toSorted",
                 ".map(" => "map",
                 ".reduce(" => "reduce",
                 ".slice(" => "slice",

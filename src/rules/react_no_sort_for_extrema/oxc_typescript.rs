@@ -4,6 +4,8 @@
 //! array just to pick its first or last element is O(n log n) work for an O(n)
 //! result. Both the inline form (`[...].sort(...)[0]`) and an aliased form
 //! (`const sorted = a.sort(...); sorted[0]`) fire.
+//! `toSorted` counts as a sort.
+//! `.at(0)` and `.at(-1)` count as end reads.
 //!
 //! The aliased form is suppressed when the sorted binding is used somewhere
 //! beyond extremum extraction — passed to a function, indexed at a non-extremum
@@ -11,11 +13,13 @@
 //! percentile accesses), so the `Math.min` / `Math.max` suggestion would break
 //! them. A binding read only via `[0]`, `[length - 1]`, and the `.length` inside
 //! such a last-index access still fires.
+//! `.at(0)` and `.at(-1)` reads fire too.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
-use oxc_ast::ast::{Expression, IdentifierReference};
+use oxc_ast::ast::{CallExpression, Expression, IdentifierReference, UnaryOperator};
+use oxc_semantic::{AstNodes, NodeId};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
@@ -28,7 +32,7 @@ fn is_sort_call(expr: &Expression) -> bool {
     let Expression::StaticMemberExpression(member) = &call.callee else {
         return false;
     };
-    member.property.name.as_str() == "sort"
+    matches!(member.property.name.as_str(), "sort" | "toSorted")
 }
 
 fn is_zero(expr: &Expression) -> bool {
@@ -36,6 +40,29 @@ fn is_zero(expr: &Expression) -> bool {
         Expression::NumericLiteral(n) => n.value == 0.0 && n.raw.as_ref().is_some_and(|r| r == "0"),
         _ => false,
     }
+}
+
+/// The literal `-1`, as `.at(-1)` takes it.
+fn is_minus_one(expr: &Expression) -> bool {
+    let Expression::UnaryExpression(unary) = expr else {
+        return false;
+    };
+    unary.operator == UnaryOperator::UnaryNegation
+        && matches!(&unary.argument, Expression::NumericLiteral(n) if n.value == 1.0)
+}
+
+/// The array that `.at(0)` or `.at(-1)` reads.
+fn at_end_object<'c, 'a>(call: &'c CallExpression<'a>) -> Option<&'c Expression<'a>> {
+    let Expression::StaticMemberExpression(member) = &call.callee else {
+        return None;
+    };
+    let [argument] = call.arguments.as_slice() else {
+        return None;
+    };
+    let argument = argument.as_expression()?;
+    let at_end =
+        member.property.name.as_str() == "at" && (is_zero(argument) || is_minus_one(argument));
+    at_end.then_some(&member.object)
 }
 
 fn is_length_minus_one(expr: &Expression) -> bool {
@@ -134,26 +161,33 @@ fn binding_used_beyond_extrema(
         return false;
     };
     let nodes = semantic.nodes();
-    scoping.get_resolved_references(symbol_id).any(|reference| {
-        let ref_span = nodes.get_node(reference.node_id()).kind().span();
-        let parent_kind = nodes.kind(nodes.parent_id(reference.node_id()));
-        !is_extremum_use(parent_kind, ref_span)
-    })
+    scoping
+        .get_resolved_references(symbol_id)
+        .any(|reference| !is_extremum_use(nodes, reference.node_id()))
 }
 
-/// True when a reference (spanning `ref_span`) feeding `parent` extracts an
-/// extremum: it is the object of a `[0]` / `[length - 1]` index, or the object of
-/// a `.length` read. The `ref_span` check pins the reference to the member
-/// *object* so the index of `sorted[index]` is never mistaken for an extremum
-/// use.
-fn is_extremum_use(parent: AstKind<'_>, ref_span: oxc_span::Span) -> bool {
-    match parent {
+/// Whether `reference` reads an end of its array.
+/// That is `[0]`, `[length - 1]`, `.at(0)`, `.at(-1)` or `.length`.
+/// The reference must be the member's object, never its index.
+fn is_extremum_use(nodes: &AstNodes<'_>, reference: NodeId) -> bool {
+    let ref_span = nodes.get_node(reference).kind().span();
+    let parent = nodes.parent_id(reference);
+    match nodes.kind(parent) {
         AstKind::ComputedMemberExpression(member) => {
             member.object.span() == ref_span
                 && (is_zero(&member.expression) || is_length_minus_one(&member.expression))
         }
-        AstKind::StaticMemberExpression(member) => {
-            member.object.span() == ref_span && member.property.name.as_str() == "length"
+        AstKind::StaticMemberExpression(member) if member.object.span() == ref_span => {
+            match member.property.name.as_str() {
+                "length" => true,
+                // `sorted.at(0)`: the call is the member's parent.
+                "at" => matches!(
+                    nodes.parent_kind(parent),
+                    AstKind::CallExpression(call)
+                        if at_end_object(call).is_some_and(|object| object.span() == ref_span)
+                ),
+                _ => false,
+            }
         }
         _ => false,
     }
@@ -161,7 +195,7 @@ fn is_extremum_use(parent: AstKind<'_>, ref_span: oxc_span::Span) -> bool {
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::ComputedMemberExpression]
+        &[AstType::ComputedMemberExpression, AstType::CallExpression]
     }
 
     fn run<'a>(
@@ -171,16 +205,26 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        let AstKind::ComputedMemberExpression(subscript) = node.kind() else {
-            return;
+        // The array read at one end, and the read itself.
+        let (object, read_span) = match node.kind() {
+            AstKind::ComputedMemberExpression(subscript) => {
+                let expr = &subscript.expression;
+                if !is_zero(expr) && !is_length_minus_one(expr) {
+                    return;
+                }
+                (&subscript.object, subscript.span())
+            }
+            AstKind::CallExpression(call) => {
+                let Some(object) = at_end_object(call) else {
+                    return;
+                };
+                (object, call.span())
+            }
+            _ => return,
         };
-        let expr = &subscript.expression;
-        if !is_zero(expr) && !is_length_minus_one(expr) {
-            return;
-        }
 
-        let direct_sort = is_sort_call(&subscript.object);
-        let aliased_sort = if let Expression::Identifier(ident) = &subscript.object {
+        let direct_sort = is_sort_call(object);
+        let aliased_sort = if let Expression::Identifier(ident) = object {
             if identifier_bound_to_sort(node, ident.name.as_str(), semantic) {
                 // The sorted binding is also used beyond extremum extraction
                 // (rank / percentile accesses, passed to a function, …): the full
@@ -201,13 +245,14 @@ impl OxcCheck for Check {
             return;
         }
 
-        let (line, column) = byte_offset_to_line_col(ctx.source, subscript.span().start as usize);
+        let (line, column) = byte_offset_to_line_col(ctx.source, read_span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "`.sort(...)[0]` / `.sort(...)[length-1]` picks an extremum via O(n log n) work — \
+            message: "`.sort(...)` / `.toSorted(...)` read at `[0]`, `[length-1]`, `.at(0)` or \
+                      `.at(-1)` picks an extremum via O(n log n) work — \
                       use `Math.min` / `Math.max` or a single-pass fold."
                 .into(),
             severity: Severity::Error,
@@ -260,6 +305,27 @@ const min = sorted[0];
 const max = sorted[sorted.length - 1];";
         let diags = run_on(src);
         assert_eq!(diags.len(), 2, "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn flags_aliased_to_sorted_read_at_both_ends() {
+        // `.at(-1)` is an end read, so it must not suppress `[0]`.
+        let src = "\
+const sorted = a.toSorted((x, y) => x - y);
+const min = sorted[0];
+const max = sorted.at(-1);";
+        let diags = run_on(src);
+        assert_eq!(diags.len(), 2, "unexpected: {diags:?}");
+    }
+
+    #[test]
+    fn allows_aliased_to_sorted_read_in_the_middle() {
+        let src = "\
+const sorted = a.toSorted((x, y) => x - y);
+const min = sorted.at(0);
+const runnerUp = sorted.at(-2);";
+        let diags = run_on(src);
+        assert!(diags.is_empty(), "unexpected: {diags:?}");
     }
 
     // ── Non-extremum uses suppress the aliased form (#4410) ────────────────

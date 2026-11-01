@@ -14,15 +14,34 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
-/// Top-level cargo message envelope. We only deserialize the `reason`
-/// discriminator and the `message` payload — every other field of the
-/// envelope (target, package_id, manifest_path, etc.) is ignored.
+/// Top-level cargo message envelope.
+/// We read `reason`, `message`, `manifest_path` and `target`.
+/// Cargo's other envelope fields are ignored.
 #[derive(Debug, Deserialize)]
 pub struct CargoMessage {
     #[serde(default)]
     pub reason: String,
     #[serde(default)]
     pub message: Option<RustcDiagnostic>,
+    /// Absolute `Cargo.toml` of the crate cargo built.
+    /// A `compiler-artifact` and a `compiler-message` carry it.
+    #[serde(default)]
+    pub manifest_path: Option<String>,
+    /// The target that artifact or message belongs to.
+    #[serde(default)]
+    pub target: Option<CargoTarget>,
+    #[serde(default, flatten)]
+    pub _extra: IgnoredAny,
+}
+
+/// One target of a package, as cargo names it.
+#[derive(Debug, Deserialize)]
+pub struct CargoTarget {
+    #[serde(default)]
+    pub name: String,
+    /// `lib`, `bin`, `test`, `proc-macro`, `custom-build`…
+    #[serde(default)]
+    pub kind: Vec<String>,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }

@@ -847,3 +847,356 @@ fn fix_reads_the_clippy_table_of_comply_toml_issue_8614() {
     assert!(fixed.contains("is_empty()"), "{fixed}");
     assert!(fixed.contains("x >= 1 && x < 10"), "{fixed}");
 }
+
+/// `include!` loads code using `codec` from `OUT_DIR`, like `include_proto!`.
+/// The `mac` derive emits `::rt::Thing`, like strum.
+/// `idle` is used nowhere.
+/// `wire` builds the library `wire_codec`, like `async-stripe-billing`.
+/// The `smoke` test target leaves every extern unused.
+fn macro_workspace() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let crates: &[(&str, &str)] = &[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"app\", \"codec\", \"rt\", \"mac\", \"idle\", \"wire\"]\nresolver = \"2\"\n",
+        ),
+        ("codec/src/lib.rs", "pub struct Codec;\n"),
+        ("rt/src/lib.rs", "pub struct Thing;\n"),
+        ("idle/src/lib.rs", "pub struct Idle;\n"),
+        (
+            "wire/Cargo.toml",
+            "[package]\nname = \"wire\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"wire_codec\"\n",
+        ),
+        ("wire/src/lib.rs", "pub struct Wire;\n"),
+        ("app/tests/smoke.rs", "#[test]\nfn smoke() {}\n"),
+        (
+            "mac/Cargo.toml",
+            "[package]\nname = \"mac\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nproc-macro = true\n",
+        ),
+        (
+            "mac/src/lib.rs",
+            "use proc_macro::TokenStream;\n\n\
+             #[proc_macro_derive(Make)]\n\
+             pub fn make(input: TokenStream) -> TokenStream {\n    \
+                 let text = input.to_string();\n    \
+                 let name = text.split_whitespace().skip_while(|w| *w != \"struct\").nth(1).unwrap();\n    \
+                 let name = name.trim_end_matches(';');\n    \
+                 format!(\"impl {name} {{ pub fn thing() -> ::rt::Thing {{ ::rt::Thing }} }}\").parse().unwrap()\n\
+             }\n",
+        ),
+        (
+            "app/Cargo.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n\
+             codec = { path = \"../codec\" }\nrt = { path = \"../rt\" }\n\
+             mac = { path = \"../mac\" }\nidle = { path = \"../idle\" }\n\
+             wire = { path = \"../wire\" }\n",
+        ),
+        (
+            "app/build.rs",
+            "fn main() {\n    \
+                 let out = std::env::var(\"OUT_DIR\").unwrap();\n    \
+                 let code = \"pub fn codec() -> ::codec::Codec { ::codec::Codec }\\n\";\n    \
+                 std::fs::write(format!(\"{out}/gen.rs\"), code).unwrap();\n\
+             }\n",
+        ),
+        (
+            "app/src/lib.rs",
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\n\n#[derive(mac::Make)]\npub struct Widget;\n\npub use wire_codec::Wire;\n",
+        ),
+    ];
+    for name in ["codec", "rt", "idle"] {
+        let manifest = dir.path().join(name).join("Cargo.toml");
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(
+            manifest,
+            format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        )
+        .unwrap();
+    }
+    for (path, content) in crates {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    dir
+}
+
+/// The `rust-unused-dep` findings of a comply run on `dir`.
+fn unused_dep_findings(dir: &TempDir) -> Vec<String> {
+    let output = common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("[rust-unused-dep]"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn rust_unused_dep_spares_a_dependency_of_code_generated_in_out_dir() {
+    // cargo-shear never reads `OUT_DIR`, so it flags `codec`.
+    // Removing it would break `include!`'s generated code.
+    let findings = unused_dep_findings(&macro_workspace());
+    assert!(
+        !findings.iter().any(|f| f.contains("`codec`")),
+        "{findings:#?}"
+    );
+}
+
+#[test]
+fn rust_unused_dep_spares_the_runtime_crate_of_a_derive() {
+    // cargo-shear never expands the derive, so it flags `rt`.
+    // The emitted `::rt::Thing` needs it.
+    let findings = unused_dep_findings(&macro_workspace());
+    assert!(
+        !findings.iter().any(|f| f.contains("`rt`")),
+        "{findings:#?}"
+    );
+}
+
+#[test]
+fn rust_unused_dep_still_reports_a_dependency_nothing_uses() {
+    let findings = unused_dep_findings(&macro_workspace());
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(findings[0].contains("app/Cargo.toml"), "{findings:#?}");
+    assert!(findings[0].contains("`idle`"), "{findings:#?}");
+}
+
+/// The `react-no-sort-for-extrema` findings on a file holding `source`.
+fn sort_for_extrema_findings(source: &str) -> Vec<String> {
+    let (dir, _path) = write_ts_file("extrema.ts", source);
+    let output = common::comply()
+        .arg("rules")
+        .arg("react-no-sort-for-extrema")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("[react-no-sort-for-extrema]"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `body` sorts `a` only to read one end of it.
+fn assert_extremum_flagged(body: &str) {
+    let source = format!("export const pick = (a: number[]) => {body};\n");
+    let findings = sort_for_extrema_findings(&source);
+    assert_eq!(findings.len(), 1, "{body}: {findings:#?}");
+}
+
+#[test]
+fn sort_for_extrema_flags_to_sorted_at_index_zero() {
+    assert_extremum_flagged("a.toSorted((x, y) => x - y)[0]");
+}
+
+#[test]
+fn sort_for_extrema_flags_to_sorted_at_the_last_index() {
+    assert_extremum_flagged("a.toSorted((x, y) => x - y)[a.length - 1]");
+}
+
+#[test]
+fn sort_for_extrema_flags_to_sorted_then_at_zero() {
+    assert_extremum_flagged("a.toSorted((x, y) => x - y).at(0)");
+}
+
+#[test]
+fn sort_for_extrema_flags_to_sorted_then_at_minus_one() {
+    assert_extremum_flagged("a.toSorted((x, y) => x - y).at(-1)");
+}
+
+#[test]
+fn sort_for_extrema_flags_sort_then_at_zero() {
+    assert_extremum_flagged("[...a].sort((x, y) => x - y).at(0)");
+}
+
+#[test]
+fn sort_for_extrema_flags_sort_then_at_minus_one() {
+    assert_extremum_flagged("[...a].sort((x, y) => x - y).at(-1)");
+}
+
+#[test]
+fn sort_for_extrema_flags_a_to_sorted_binding_read_at_one_end() {
+    assert_extremum_flagged(
+        "{ const sorted = a.toSorted((x, y) => x - y); return sorted.at(-1); }",
+    );
+}
+
+#[test]
+fn sort_for_extrema_spares_a_to_sorted_array_kept_whole() {
+    // The code reads the whole sorted order.
+    // A single pass cannot replace it.
+    let source = "\
+export const ranked = (a: number[]) => a.toSorted((x, y) => x - y);
+export function report(a: number[]) {
+  const sorted = a.toSorted((x, y) => x - y);
+  return { min: sorted.at(0), all: sorted };
+}
+";
+    let findings = sort_for_extrema_findings(source);
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+#[test]
+fn sort_for_extrema_spares_a_to_sorted_read_in_the_middle() {
+    // A median or a rank needs the sort.
+    let source = "\
+export const second = (a: number[]) => a.toSorted((x, y) => x - y)[1];
+export const median = (a: number[]) => a.toSorted((x, y) => x - y).at(a.length >> 1);
+export const runnerUp = (a: number[]) => a.toSorted((x, y) => x - y).at(-2);
+export const nth = (a: number[], i: number) => a.toSorted((x, y) => x - y).at(i);
+";
+    let findings = sort_for_extrema_findings(source);
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+/// The findings of `rule` on a file `name` holding `source`.
+fn rule_findings(rule: &str, name: &str, source: &str) -> Vec<String> {
+    let (dir, _path) = write_ts_file(name, source);
+    let output = common::comply()
+        .arg("rules")
+        .arg(rule)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let tag = format!("[{rule}]");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(&tag))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn sort_without_comparator_also_covers_to_sorted() {
+    // `toSorted()` sorts by string too: `[10, 2, 1]` gives `[1, 10, 2]`.
+    let source = "\
+export const bad = (a: number[]) => a.toSorted();
+export const good = (a: number[]) => a.toSorted((x, y) => x - y);
+";
+    let findings = rule_findings("no-sort-without-comparator", "sorted.ts", source);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(findings[0].contains("sorted.ts:1:"), "{findings:#?}");
+}
+
+#[test]
+fn for_in_iterable_also_covers_the_copying_array_methods() {
+    let source = "\
+export function keys(a: number[]) {
+  for (const k in a.toSorted((x, y) => x - y)) console.log(k);
+  for (const k in a.toReversed()) console.log(k);
+  for (const k in a.toSpliced(0, 1)) console.log(k);
+}
+";
+    let findings = rule_findings("no-for-in-iterable", "keys.ts", source);
+    assert_eq!(findings.len(), 3, "{findings:#?}");
+}
+
+#[test]
+fn vue_filter_sort_in_template_also_covers_to_sorted() {
+    let source = "\
+<template>
+  <ul>
+    <li v-for=\"item in items.toSorted(byName)\" :key=\"item.id\">{{ item.name }}</li>
+  </ul>
+</template>
+";
+    let findings = rule_findings("vue-no-filter-sort-in-template", "List.vue", source);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+}
+
+/// The `no-manual-rtl-cleanup` findings on a Vitest project.
+/// `files` seeds it beside a spec that imports `cleanup`.
+fn rtl_cleanup_findings(files: &[(&str, &str)]) -> Vec<String> {
+    let dir = TempDir::new().unwrap();
+    let seeded = [
+        (
+            "package.json",
+            r#"{"name":"console","devDependencies":{"vitest":"^3","@testing-library/react":"^16"}}"#,
+        ),
+        (
+            "src/App.test.tsx",
+            "import { cleanup, render } from '@testing-library/react';\n\
+             import { afterEach, it } from 'vitest';\n\n\
+             afterEach(cleanup);\n\n\
+             it('renders', () => {\n  render(null);\n});\n",
+        ),
+    ];
+    for (path, content) in seeded.iter().chain(files) {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    let output = common::comply()
+        .arg("rules")
+        .arg("no-manual-rtl-cleanup")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("[no-manual-rtl-cleanup]"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A `vitest.config.ts` whose `test` block holds `test_options`.
+fn vitest_config(test_options: &str) -> String {
+    format!(
+        "import {{ defineConfig }} from 'vitest/config';\n\n\
+         export default defineConfig({{\n  test: {{\n    environment: 'node',\n{test_options}  }},\n}});\n"
+    )
+}
+
+#[test]
+fn rtl_cleanup_spares_a_manual_cleanup_under_globals_false() {
+    // The console's shape: RTL sees no global `afterEach`.
+    // It registers no cleanup, so the spec must.
+    let config = vitest_config("    globals: false,\n    setupFiles: ['./vitest.setup.ts'],\n");
+    let findings = rtl_cleanup_findings(&[
+        ("vitest.config.ts", &config),
+        ("vitest.setup.ts", "globalThis.window = {};\n"),
+    ]);
+    assert!(findings.is_empty(), "{findings:#?}");
+}
+
+#[test]
+fn rtl_cleanup_flags_a_manual_cleanup_under_globals_true() {
+    let config = vitest_config("    globals: true,\n");
+    let findings = rtl_cleanup_findings(&[("vitest.config.ts", &config)]);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(
+        findings[0].contains("`test.globals: true` in `vitest.config.ts`"),
+        "{findings:#?}"
+    );
+}
+
+#[test]
+fn rtl_cleanup_flags_a_cleanup_a_setup_file_already_runs() {
+    let config = vitest_config("    setupFiles: './vitest.setup.ts',\n");
+    let setup = "import { cleanup } from '@testing-library/react';\n\
+                 import { afterEach } from 'vitest';\n\n\
+                 afterEach(cleanup);\n";
+    let findings =
+        rtl_cleanup_findings(&[("vitest.config.ts", &config), ("vitest.setup.ts", setup)]);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(findings[0].contains("`vitest.setup.ts`"), "{findings:#?}");
+}
+
+#[test]
+fn rtl_cleanup_keeps_flagging_without_a_config_and_says_so() {
+    let findings = rtl_cleanup_findings(&[]);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(findings[0].contains("no Vitest config"), "{findings:#?}");
+}
+
+#[test]
+fn rtl_cleanup_keeps_flagging_an_unreadable_config_and_says_so() {
+    let config = "import { shared } from './shared';\n\nexport default shared('node');\n";
+    let findings = rtl_cleanup_findings(&[("vitest.config.ts", config)]);
+    assert_eq!(findings.len(), 1, "{findings:#?}");
+    assert!(findings[0].contains("could not confirm"), "{findings:#?}");
+}

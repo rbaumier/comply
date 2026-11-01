@@ -13,6 +13,9 @@
 //!            --manifest-path <workspace>/Cargo.toml \
 //!            -- -W clippy::lint1 -W clippy::lint2 ...
 //!
+//!    rustc's `unused_crate_dependencies` lint is forced on as well.
+//!    Its verdicts become an [`ExternUsage`] for `rust-unused-dep`.
+//!
 //!    Cargo emits one JSON object per line. We parse the stream,
 //!    keep only `compiler-message` rows, filter to spans inside the
 //!    requested files, and remap each lint code to its comply RuleMeta.
@@ -58,6 +61,7 @@ pub fn is_available() -> bool {
 
 /// Run clippy on every workspace touched by `files` and return the
 /// remapped diagnostics. Files outside any workspace are skipped.
+/// The [`ExternUsage`] of every crate clippy compiled comes along.
 ///
 /// `config` is the resolved per-project comply.toml. We use it to:
 ///   - add `-W clippy::xxx` for any lint flagged `enabled = true`
@@ -75,9 +79,10 @@ pub fn lint_files(
     files: &[&SourceFile],
     config: &Config,
     is_partial: bool,
-) -> Result<Vec<Diagnostic>> {
+) -> Result<(Vec<Diagnostic>, ExternUsage)> {
+    let mut usage = ExternUsage::default();
     if files.is_empty() {
-        return Ok(vec![]);
+        return Ok((vec![], usage));
     }
     let bindings = crate::rules::collect_clippy_bindings();
     let remap = remap::build_table(&bindings);
@@ -105,6 +110,7 @@ pub fn lint_files(
                     vec!["--workspace".to_owned()]
                 };
                 let output = invoke_clippy(&root, &packages, &lint_args, &clippy_conf_dir)?;
+                usage.record(&output.stdout, &root);
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -129,8 +135,13 @@ pub fn lint_files(
         );
     }
 
-    Ok(diagnostics)
+    Ok((diagnostics, usage))
 }
+
+/// Forces rustc to name each dependency a crate target leaves unused.
+/// Forced, so a crate's own `allow` or `deny` cannot change it.
+/// The lint carries no fix, so `--fix` never edits code for it.
+const UNUSED_EXTERNS_LINT: &str = "--force-warn=unused_crate_dependencies";
 
 /// The `-W`/`-A` flags passed after `--`, shared by lint and `--fix`:
 /// clippy records them in each crate's fingerprint, so any difference
@@ -140,6 +151,7 @@ pub(crate) fn lint_args(
     config: &Config,
 ) -> Vec<String> {
     let mut args = build_lint_args(bindings);
+    args.push(UNUSED_EXTERNS_LINT.to_owned());
     extend_with_user_enabled(&mut args, config);
     extend_with_user_disabled(&mut args, config);
     args
@@ -402,16 +414,148 @@ fn is_lint_level_note(message: &str) -> bool {
     .any(|prefix| message.starts_with(prefix))
 }
 
+/// Which dependencies rustc left unused, per compiled workspace target.
+///
+/// rustc judges after macro expansion.
+/// It sees what a derive emits and what `include!` loads from `OUT_DIR`.
+/// cargo-shear reads the sources only, so it misses both.
+#[derive(Debug, Default)]
+pub struct ExternUsage {
+    packages: FxHashMap<PathBuf, PackageExterns>,
+}
+
+/// rustc's verdicts on the targets of one package.
+#[derive(Debug, Default)]
+pub struct PackageExterns {
+    /// Targets cargo reported built, build scripts excluded.
+    pub compiled: FxHashSet<(Vec<String>, String)>,
+    /// Externs rustc reported unused, per target.
+    pub unused: FxHashMap<(Vec<String>, String), FxHashSet<String>>,
+    /// rustc reported an unused extern without naming it readably.
+    pub unreadable: bool,
+}
+
+impl ExternUsage {
+    /// rustc's verdicts on the package of `manifest`, if clippy built it.
+    pub fn package(&self, manifest: &Path) -> Option<&PackageExterns> {
+        self.packages.get(&canonicalize_or_self(manifest))
+    }
+
+    /// Read the artifacts and unused-extern warnings of one clippy run.
+    /// Crates outside `workspace` are dependencies, so they are left out.
+    fn record(&mut self, stdout: &[u8], workspace: &Path) {
+        let root = canonicalize_or_self(workspace);
+        for envelope in envelopes(stdout) {
+            let (Some(manifest), Some(target)) = (envelope.manifest_path, envelope.target) else {
+                continue;
+            };
+            if target.kind.iter().any(|kind| kind == "custom-build") {
+                continue;
+            }
+            let manifest = canonicalize_or_self(Path::new(&manifest));
+            if !manifest.starts_with(&root) {
+                continue;
+            }
+            let package = self.packages.entry(manifest).or_default();
+            let key = (target.kind, target.name);
+            match (envelope.reason.as_str(), envelope.message) {
+                ("compiler-artifact", _) => {
+                    package.compiled.insert(key);
+                }
+                ("compiler-message", Some(diag)) if is_unused_extern(&diag) => {
+                    match diag.message.split('`').nth(1) {
+                        Some(name) if !name.is_empty() => {
+                            package
+                                .unused
+                                .entry(key)
+                                .or_default()
+                                .insert(name.to_owned());
+                        }
+                        _ => package.unreadable = true,
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// An `unused_crate_dependencies` warning.
+/// rustc words it ``extern crate `name` is unused in crate `krate` ``.
+fn is_unused_extern(diag: &RustcDiagnostic) -> bool {
+    diag.code
+        .as_ref()
+        .is_some_and(|code| code.code == "unused_crate_dependencies")
+}
+
+/// Every cargo message of a `--message-format=json` stream.
+/// Lines that are not one are skipped.
+fn envelopes(stdout: &[u8]) -> impl Iterator<Item = CargoMessage> + '_ {
+    BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<CargoMessage>(&line).ok())
+}
+
 /// Canonicalize the path if possible, otherwise return it as-is.
 /// We need canonical paths so that filter matches work even when the
 /// user passed a relative path on the CLI but cargo emits absolute.
-fn canonicalize_or_self(path: &Path) -> PathBuf {
+pub(crate) fn canonicalize_or_self(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extern_usage_reads_artifacts_and_unused_extern_warnings() {
+        let ws = std::env::temp_dir().join("comply-extern-usage");
+        let app = ws.join("app/Cargo.toml");
+        let line = |reason: &str, kind: &str, message: &str| {
+            format!(
+                r#"{{"reason":"{reason}","manifest_path":"{}","target":{{"name":"app","kind":["{kind}"]}}{message}}}"#,
+                app.display()
+            )
+        };
+        let unused = |text: &str| {
+            format!(
+                r#","message":{{"message":"{text}","level":"warning","code":{{"code":"unused_crate_dependencies"}}}}"#
+            )
+        };
+        let stream = [
+            line("compiler-message", "lib", &unused("extern crate `idle` is unused in crate `app`")),
+            line("compiler-artifact", "lib", ""),
+            line("compiler-artifact", "custom-build", ""),
+            r#"{"reason":"compiler-artifact","manifest_path":"/registry/dep/Cargo.toml","target":{"name":"dep","kind":["lib"]}}"#.to_owned(),
+        ]
+        .join("\n");
+        let mut usage = ExternUsage::default();
+        usage.record(stream.as_bytes(), &ws);
+
+        let package = usage.package(&app).expect("app is a workspace crate");
+        let lib = (vec!["lib".to_owned()], "app".to_owned());
+        assert_eq!(
+            package.compiled.len(),
+            1,
+            "a build script is no target to prove with"
+        );
+        assert!(package.compiled.contains(&lib));
+        assert!(package.unused[&lib].contains("idle"));
+        assert!(!package.unreadable);
+        assert!(
+            usage
+                .package(Path::new("/registry/dep/Cargo.toml"))
+                .is_none()
+        );
+
+        let mut garbled = ExternUsage::default();
+        garbled.record(
+            line("compiler-message", "lib", &unused("unused crate")).as_bytes(),
+            &ws,
+        );
+        assert!(garbled.package(&app).unwrap().unreadable);
+    }
 
     #[test]
     fn parse_clippy_jsonl_extracts_diagnostics_for_filtered_files() {
