@@ -44,16 +44,118 @@ const MIN_DISTINCT_PREFIX_WORDS: usize = 4;
 /// `value`, …). Only used by the entropy gate, never to alter the prefix
 /// itself, so two comments must still share the verbatim opener to collide.
 const STOPWORDS: &[&str] = &[
-    "the", "a", "an", "of", "to", "for", "in", "on", "and", "or", "so", "as", "is", "are", "be",
-    "was", "were", "this", "that", "these", "those", "it", "its", "with", "from", "by", "at",
-    "into", "but", "if", "then", "than", "when", "which", "we", "you", "i", "our", "your", "their",
-    "they", "not", "no", "can", "will", "should", "must", "may", "do", "does", "has", "have", "had",
-    "been", "being", "there", "here", "about", "per", "via", "up", "out", "all", "any", "each",
-    "some", "such", "only", "also", "more", "most", "other", "one", "new", "function", "functions",
-    "returns", "return", "value", "values", "creates", "create", "instance", "helper", "method",
-    "methods", "gets", "get", "sets", "set", "true", "false", "given", "used", "use", "uses",
-    "using", "call", "called", "calls", "check", "checks", "handle", "handles", "handler", "note",
-    "param", "params", "parameter", "argument", "arg", "args",
+    "the",
+    "a",
+    "an",
+    "of",
+    "to",
+    "for",
+    "in",
+    "on",
+    "and",
+    "or",
+    "so",
+    "as",
+    "is",
+    "are",
+    "be",
+    "was",
+    "were",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "with",
+    "from",
+    "by",
+    "at",
+    "into",
+    "but",
+    "if",
+    "then",
+    "than",
+    "when",
+    "which",
+    "we",
+    "you",
+    "i",
+    "our",
+    "your",
+    "their",
+    "they",
+    "not",
+    "no",
+    "can",
+    "will",
+    "should",
+    "must",
+    "may",
+    "do",
+    "does",
+    "has",
+    "have",
+    "had",
+    "been",
+    "being",
+    "there",
+    "here",
+    "about",
+    "per",
+    "via",
+    "up",
+    "out",
+    "all",
+    "any",
+    "each",
+    "some",
+    "such",
+    "only",
+    "also",
+    "more",
+    "most",
+    "other",
+    "one",
+    "new",
+    "function",
+    "functions",
+    "returns",
+    "return",
+    "value",
+    "values",
+    "creates",
+    "create",
+    "instance",
+    "helper",
+    "method",
+    "methods",
+    "gets",
+    "get",
+    "sets",
+    "set",
+    "true",
+    "false",
+    "given",
+    "used",
+    "use",
+    "uses",
+    "using",
+    "call",
+    "called",
+    "calls",
+    "check",
+    "checks",
+    "handle",
+    "handles",
+    "handler",
+    "note",
+    "param",
+    "params",
+    "parameter",
+    "argument",
+    "arg",
+    "args",
 ];
 
 fn is_stopword(word: &str) -> bool {
@@ -73,7 +175,10 @@ fn is_target_language(lang: Language) -> bool {
 fn is_locale_path(path: &Path) -> bool {
     path.components().any(|c| {
         c.as_os_str().to_str().is_some_and(|s| {
-            matches!(s, "locale" | "locales" | "i18n" | "translations" | "translation")
+            matches!(
+                s,
+                "locale" | "locales" | "i18n" | "translations" | "translation"
+            )
         })
     })
 }
@@ -116,8 +221,18 @@ const BANNER_MARKERS: &[&str] = &[
 /// word `license`/`licence` is a license header (`MIT-style license`,
 /// `BSD-3-Clause license`) even when it carries none of the `BANNER_MARKERS`
 /// phrases — the IDux MIT header is exactly this prose shape.
-const LICENSE_NAMES: &[&str] =
-    &["mit", "apache", "bsd", "isc", "gpl", "lgpl", "agpl", "mpl", "mozilla", "unlicense"];
+const LICENSE_NAMES: &[&str] = &[
+    "mit",
+    "apache",
+    "bsd",
+    "isc",
+    "gpl",
+    "lgpl",
+    "agpl",
+    "mpl",
+    "mozilla",
+    "unlicense",
+];
 
 /// A merged comment block is excluded when it carries any directive or banner
 /// marker, is a license header named in prose, or carries a safety marker.
@@ -132,7 +247,10 @@ const LICENSE_NAMES: &[&str] =
 /// practice (the same marker `rust-undocumented-unsafe` requires), so the
 /// repetition is local safety documentation, not a copy-paste smell.
 fn is_excluded_comment(lower: &str) -> bool {
-    DIRECTIVE_MARKERS.iter().chain(BANNER_MARKERS).any(|m| lower.contains(m))
+    DIRECTIVE_MARKERS
+        .iter()
+        .chain(BANNER_MARKERS)
+        .any(|m| lower.contains(m))
         || is_named_license_banner(lower)
         || crate::rules::rust_helpers::is_safety_marker(lower)
 }
@@ -150,7 +268,10 @@ fn is_excluded_comment(lower: &str) -> bool {
 fn is_named_license_banner(lower: &str) -> bool {
     let mut has_license_name = false;
     let mut has_license_word = false;
-    for token in lower.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()) {
+    for token in lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+    {
         if LICENSE_NAMES.contains(&token) {
             has_license_name = true;
         } else if matches!(token, "license" | "licence" | "licensed" | "licensing") {
@@ -214,7 +335,11 @@ fn is_pragma_literal_statement(before: &str) -> bool {
     let inner = trimmed
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
-        .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')));
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+        });
     inner.is_some_and(|lit| PRAGMA_LITERALS.contains(&lit))
 }
 
@@ -225,15 +350,30 @@ const SOURCE_EXTS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".r
 /// `rationale in X`, `convention in X`. These words rarely appear except to
 /// point at a canonical source, so they exempt a pointer to a doc or to a
 /// sibling source file alike (the latter is what `rationale in head.ts` needs).
-const STRONG_CUES: &[&str] =
-    &["see", "cf", "voir", "ref", "reference", "referenced", "rationale", "convention"];
+const STRONG_CUES: &[&str] = &[
+    "see",
+    "cf",
+    "voir",
+    "ref",
+    "reference",
+    "referenced",
+    "rationale",
+    "convention",
+];
 
 /// Verb cues that mark a citation only when the reference is a *documentation*
 /// target. `documented in docs/x.md` is a pointer; `defined in app.ts` /
 /// `described in cache.ts` is ordinary prose naming where code lives — so those
 /// must not exempt a duplicated rationale that merely names a source file.
-const WEAK_CUES: &[&str] =
-    &["documented", "described", "explained", "defined", "detailed", "noted", "specified"];
+const WEAK_CUES: &[&str] = &[
+    "documented",
+    "described",
+    "explained",
+    "defined",
+    "detailed",
+    "noted",
+    "specified",
+];
 
 /// Connectors allowed between a cue and its reference (`convention in X`,
 /// `documented at X`, `convention dans X`). Kept tiny on purpose: a wider window
@@ -301,9 +441,8 @@ fn preceding_cue(tokens: &[&str], j: usize) -> Option<CueKind> {
 /// Classify a whitespace token that names a canonical source: a URL or a
 /// `docs/…` / `*.md` doc, versus a relative source path (`dir/file.ts`).
 fn reference_kind(raw: &str) -> Option<RefKind> {
-    let core = raw.trim_matches(|c: char| {
-        !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':')
-    });
+    let core = raw
+        .trim_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':'));
     if core.starts_with("http://") || core.starts_with("https://") {
         return Some(RefKind::Doc);
     }
@@ -596,7 +735,10 @@ pub fn lint_files(
 
     let mut buckets: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     for (i, entry) in entries.iter().enumerate() {
-        buckets.entry(entry.prefix_key.as_str()).or_default().push(i);
+        buckets
+            .entry(entry.prefix_key.as_str())
+            .or_default()
+            .push(i);
     }
 
     let mut diags = Vec::new();
@@ -753,7 +895,15 @@ const MIN_VARIANT_ROOT_SEGMENTS: usize = 3;
 /// doc because they implement the same steps, so the repetition is intentional,
 /// not a copy-paste smell.
 const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
-    "safe", "unsafe", "checked", "unchecked", "ptr", "slice", "simd", "scalar", "generic",
+    "safe",
+    "unsafe",
+    "checked",
+    "unchecked",
+    "ptr",
+    "slice",
+    "simd",
+    "scalar",
+    "generic",
     // Streaming/complete-mode direction qualifier: byte-parser crates (nom,
     // winnow, …) ship the same operation twice, the `_complete` variant treating
     // end-of-input as success rather than `Incomplete` (`parse` / `parse_complete`).
@@ -762,7 +912,8 @@ const IMPL_QUALIFIER_SEGMENTS: &[&str] = &[
     // byteorder, bytes) ship the same byte parser twice as `be_`/`le_` variants;
     // for a 1-byte integer both directions read identically, so their docs match
     // by design (`be_u8` / `le_u8`, `be_i8` / `le_i8`).
-    "be", "le",
+    "be",
+    "le",
 ];
 
 /// Two doc-comments document parallel API surfaces when both name a declaration
@@ -999,7 +1150,8 @@ fn is_variant_suffix_of(root: &str, name: &str) -> bool {
 /// (`captures_iter` ⊂ `captures_iter_at`), with no requirement on the root's
 /// length.
 fn is_suffixed_variant(root: &str, name: &str) -> bool {
-    name.strip_prefix(root).is_some_and(|rest| rest.starts_with('_'))
+    name.strip_prefix(root)
+        .is_some_and(|rest| rest.starts_with('_'))
 }
 
 fn extract_entries(
@@ -1161,7 +1313,10 @@ fn member_name(member: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let key = member
         .child_by_field_name("key")
         .or_else(|| member.child_by_field_name("name"))?;
-    if !matches!(key.kind(), "property_identifier" | "string" | "identifier" | "field_identifier") {
+    if !matches!(
+        key.kind(),
+        "property_identifier" | "string" | "identifier" | "field_identifier"
+    ) {
         return None;
     }
     key.utf8_text(source).ok().map(str::to_owned)
@@ -1179,7 +1334,11 @@ struct DocumentedDecl {
 
 impl DocumentedDecl {
     /// The comment documents nothing the rule can attribute.
-    const NOTHING: Self = Self { name: None, owner: None, surface: None };
+    const NOTHING: Self = Self {
+        name: None,
+        owner: None,
+        surface: None,
+    };
 }
 
 /// The name of the declaration or member a comment immediately documents, plus
@@ -1279,7 +1438,8 @@ fn unwrap_declaration(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
         "export_statement" => node.child_by_field_name("declaration")?,
         "ambient_declaration" => {
             let mut cursor = node.walk();
-            node.named_children(&mut cursor).find(|c| is_named_declaration(c.kind()))?
+            node.named_children(&mut cursor)
+                .find(|c| is_named_declaration(c.kind()))?
         }
         _ => return None,
     };
@@ -1335,7 +1495,10 @@ fn api_surface(decl: tree_sitter::Node, source: &[u8]) -> Option<ApiSurface> {
 /// `Summary<NoColor<W>>`, by descending the leftmost `type` field until a plain
 /// identifier is reached.
 fn base_type_name(mut node: tree_sitter::Node) -> Option<tree_sitter::Node> {
-    while !matches!(node.kind(), "type_identifier" | "identifier" | "scoped_type_identifier") {
+    while !matches!(
+        node.kind(),
+        "type_identifier" | "identifier" | "scoped_type_identifier"
+    ) {
         node = node.child_by_field_name("type")?;
     }
     Some(node)
@@ -1402,7 +1565,10 @@ fn enclosing_named_type(member: tree_sitter::Node, source: &[u8]) -> Option<Stri
 fn enclosing_decl_name(comment: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut ancestor = comment.parent();
     while let Some(n) = ancestor {
-        if matches!(n.kind(), "function_item" | "function_declaration" | "method_definition") {
+        if matches!(
+            n.kind(),
+            "function_item" | "function_declaration" | "method_definition"
+        ) {
             return n
                 .child_by_field_name("name")
                 .and_then(|name| name.utf8_text(source).ok())
@@ -1589,9 +1755,8 @@ fn normalize_words(stripped: &str) -> Vec<String> {
 /// reference. Shares `reference_kind`'s classification so "what is one word" and
 /// "what is a citation target" cannot drift apart.
 fn reference_token(raw: &str) -> Option<&str> {
-    let core = raw.trim_matches(|c: char| {
-        !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':')
-    });
+    let core = raw
+        .trim_matches(|c: char| !c.is_alphanumeric() && !matches!(c, '/' | '.' | '-' | '_' | ':'));
     reference_kind(raw).map(|_| core.trim_end_matches('.'))
 }
 
@@ -1605,7 +1770,9 @@ fn reference_token(raw: &str) -> Option<&str> {
 /// dropped as numeric.
 fn is_all_numeric_label(words: &[String]) -> bool {
     !words.is_empty()
-        && words.iter().all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
+        && words
+            .iter()
+            .all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn prefix_passes_entropy(prefix: &[String]) -> bool {
@@ -1679,7 +1846,11 @@ export const labSection = 2;
         let a = write(&dir, "a.ts", &content);
         let b = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "two similar comments in one file are flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "two similar comments in one file are flagged"
+        );
         assert!(diags[0].path.ends_with("a.ts"));
         // Intra-file remediation collapses to a single comment.
         assert!(diags[0].message.contains("Keep one comment"));
@@ -1700,13 +1871,20 @@ export const labSection = 2;
         // is dropped from the corpus, so the src-side comment — whose only partner
         // is the fuzz copy — is not flagged.
         let dir = tempfile::tempdir().unwrap();
-        let src = write(&dir, "src/codecs/openexr.rs", &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"));
+        let src = write(
+            &dir,
+            "src/codecs/openexr.rs",
+            &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"),
+        );
         let fuzz = write(
             &dir,
             "fuzz/fuzzers/fuzzer_script_exr.rs",
             &format!("{RGBA_DOC}fn fuzz_harness_entry() {{}}\n"),
         );
-        assert!(run(&[&src, &fuzz]).is_empty(), "fuzz-harness doc copies are exempt");
+        assert!(
+            run(&[&src, &fuzz]).is_empty(),
+            "fuzz-harness doc copies are exempt"
+        );
     }
 
     #[test]
@@ -1714,10 +1892,22 @@ export const labSection = 2;
         // Control: the same copy between two real source files stays a smell. The
         // two functions carry unrelated names so no parallel-decl exemption applies.
         let dir = tempfile::tempdir().unwrap();
-        let a = write(&dir, "src/codecs/a.rs", &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"));
-        let b = write(&dir, "src/codecs/b.rs", &format!("{RGBA_DOC}fn store_pixel_atlas() {{}}\n"));
+        let a = write(
+            &dir,
+            "src/codecs/a.rs",
+            &format!("{RGBA_DOC}fn write_exr_frame() {{}}\n"),
+        );
+        let b = write(
+            &dir,
+            "src/codecs/b.rs",
+            &format!("{RGBA_DOC}fn store_pixel_atlas() {{}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicate docs across real source files are still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicate docs across real source files are still flagged"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -1773,8 +1963,16 @@ export const labSection = 2;
     #[test]
     fn ignores_short_comments() {
         let dir = tempfile::tempdir().unwrap();
-        let a = write(&dir, "a.ts", "// fetch the user record\nexport const a = 1;\n");
-        let b = write(&dir, "b.ts", "// fetch the user record\nexport const b = 2;\n");
+        let a = write(
+            &dir,
+            "a.ts",
+            "// fetch the user record\nexport const a = 1;\n",
+        );
+        let b = write(
+            &dir,
+            "b.ts",
+            "// fetch the user record\nexport const b = 2;\n",
+        );
         assert!(run(&[&a, &b]).is_empty());
     }
 
@@ -1805,9 +2003,20 @@ export const labSection = 2;
         // files. The `@license` tag and the `MIT-style license` prose are both
         // license-header markers, so the banner must be excluded across files.
         let dir = tempfile::tempdir().unwrap();
-        let a = write(&dir, "popper.ts", &format!("{IDUX_MIT_HEADER}export const a = 1;\n"));
-        let b = write(&dir, "a11y.ts", &format!("{IDUX_MIT_HEADER}export const b = 2;\n"));
-        assert!(run(&[&a, &b]).is_empty(), "@license / MIT-style banner must be excluded");
+        let a = write(
+            &dir,
+            "popper.ts",
+            &format!("{IDUX_MIT_HEADER}export const a = 1;\n"),
+        );
+        let b = write(
+            &dir,
+            "a11y.ts",
+            &format!("{IDUX_MIT_HEADER}export const b = 2;\n"),
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "@license / MIT-style banner must be excluded"
+        );
     }
 
     #[test]
@@ -1819,7 +2028,10 @@ export const labSection = 2;
         let banner = "// This source code is released under the BSD license and may be freely redistributed and modified under those documented terms.\n";
         let a = write(&dir, "a.ts", &format!("{banner}export const a = 1;\n"));
         let b = write(&dir, "b.ts", &format!("{banner}export const b = 2;\n"));
-        assert!(run(&[&a, &b]).is_empty(), "prose-named license banner must be excluded");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "prose-named license banner must be excluded"
+        );
     }
 
     #[test]
@@ -1836,7 +2048,11 @@ let x = 1;
         let a = write(&dir, "a.ts", note);
         let b = write(&dir, "b.ts", note);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "comment merely mentioning a license word still flags");
+        assert_eq!(
+            diags.len(),
+            1,
+            "comment merely mentioning a license word still flags"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -1870,7 +2086,10 @@ let x = 1;
         let dir = tempfile::tempdir().unwrap();
         let a = write(&dir, "a.rs", &format!("{APACHE_HEADER}pub fn f() {{}}\n"));
         let b = write(&dir, "b.rs", &format!("{APACHE_HEADER}pub fn g() {{}}\n"));
-        assert!(run(&[&a, &b]).is_empty(), "multi-line license banner must be excluded whole");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "multi-line license banner must be excluded whole"
+        );
     }
 
     #[test]
@@ -1888,7 +2107,11 @@ pub fn run() {}
         let a = write(&dir, "a.rs", prose);
         let b = write(&dir, "b.rs", prose);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicated multi-line prose is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicated multi-line prose is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -1909,8 +2132,16 @@ pub fn run() {}
         // functions is genuine drift-prone duplication and must still flag.
         let dir = tempfile::tempdir().unwrap();
         let head = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.\n";
-        let a = write(&dir, "a.rs", &format!("{head}pub fn build_admin_list() {{}}\n"));
-        let b = write(&dir, "b.rs", &format!("{head}pub fn build_lab_section() {{}}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("{head}pub fn build_admin_list() {{}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("{head}pub fn build_lab_section() {{}}\n"),
+        );
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1);
     }
@@ -1930,7 +2161,10 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
 ";
         let a = write(&dir, "fixslice64.rs", doc);
         let b = write(&dir, "fixslice32.rs", doc);
-        assert!(run(&[&a, &b]).is_empty(), "same-named parallel-impl docs must not flag");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named parallel-impl docs must not flag"
+        );
     }
 
     #[test]
@@ -1955,7 +2189,10 @@ pub(crate) fn aes128_decrypt(rkeys: u8, blocks: u8) -> u8 { rkeys ^ blocks }
         );
         let a = write(&dir, "server.rs", &server);
         let b = write(&dir, "client.rs", &client);
-        assert!(run(&[&a, &b]).is_empty(), "parallel builder variant docs must not flag");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "parallel builder variant docs must not flag"
+        );
     }
 
     #[test]
@@ -2126,14 +2363,22 @@ pub trait Input {
  * validations reuse the memoized dataset instead of recomputing everything.
  */
 ";
-        let a = write(&dir, "a.ts", &format!("{doc}function buildAdminList() {{}}\n"));
+        let a = write(
+            &dir,
+            "a.ts",
+            &format!("{doc}function buildAdminList() {{}}\n"),
+        );
         let b = write(
             &dir,
             "b.ts",
             &format!("{doc}// @ts-expect-error\nfunction buildLabSection() {{}}\n"),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicate doc on unrelated decls still flags through a directive");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicate doc on unrelated decls still flags through a directive"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2150,7 +2395,11 @@ pub trait Input {
         let a = write(&dir, "a.rs", &format!("{doc}pub fn init() {{}}\n"));
         let b = write(&dir, "b.rs", &format!("{doc}pub fn init_db() {{}}\n"));
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a non-qualifier suffix is not a parallel-impl signal");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a non-qualifier suffix is not a parallel-impl signal"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2161,7 +2410,10 @@ pub trait Input {
         // shared root itself ends in a qualifier segment (`copy_to_slice`).
         assert!(are_impl_qualifier_twins("get_u8", "try_get_u8"));
         assert!(are_impl_qualifier_twins("try_get_u8", "get_u8"));
-        assert!(are_impl_qualifier_twins("copy_to_slice", "try_copy_to_slice"));
+        assert!(are_impl_qualifier_twins(
+            "copy_to_slice",
+            "try_copy_to_slice"
+        ));
         // The `_` boundary keeps a bare `tryout` from collapsing onto `out`, and
         // two genuinely unrelated names are never twins.
         assert!(!are_impl_qualifier_twins("out", "tryout"));
@@ -2284,7 +2536,11 @@ pub fn decode() {}
         // A second file keeps the run active (a single-file run is a noop).
         let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "intra-file copy-paste on non-twin decls is real duplication");
+        assert_eq!(
+            diags.len(),
+            1,
+            "intra-file copy-paste on non-twin decls is real duplication"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2334,7 +2590,11 @@ pub fn ledger() {}
         // A second file keeps the run active (a single-file run is a noop).
         let filler = write(&dir, "filler.rs", "pub fn z() {}\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "be/le are not qualifiers unless a full leading segment");
+        assert_eq!(
+            diags.len(),
+            1,
+            "be/le are not qualifiers unless a full leading segment"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2353,7 +2613,11 @@ let x = 1;
         let a = write(&dir, "server.rs", note);
         let b = write(&dir, "client.rs", note);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicated free-floating note is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicated free-floating note is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2370,7 +2634,11 @@ let x = 1;
         let a = write(&dir, "a.rs", &format!("{doc}pub fn init() {{}}\n"));
         let b = write(&dir, "b.rs", &format!("{doc}pub fn init_db() {{}}\n"));
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "short shared root is not a parallel-API signal");
+        assert_eq!(
+            diags.len(),
+            1,
+            "short shared root is not a parallel-API signal"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2385,10 +2653,22 @@ let x = 1;
 ///
 /// Decrypts four blocks in-place and in parallel.
 ";
-        let a = write(&dir, "a.rs", &format!("{doc}pub fn decode_alpha(x: u8) -> u8 {{ x }}\n"));
-        let b = write(&dir, "b.rs", &format!("{doc}pub fn decode_beta(x: u8) -> u8 {{ x }}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("{doc}pub fn decode_alpha(x: u8) -> u8 {{ x }}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("{doc}pub fn decode_beta(x: u8) -> u8 {{ x }}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical doc on differently-named decls is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical doc on differently-named decls is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2407,13 +2687,21 @@ let x = 1;
 /**
  * Safely parses an unknown input based on the schema and returns a typed result without throwing here.
  */\n";
-        let parse = write(&dir, "parse.ts", &format!("{parse_doc}export function parse() {{}}\n"));
+        let parse = write(
+            &dir,
+            "parse.ts",
+            &format!("{parse_doc}export function parse() {{}}\n"),
+        );
         let parse_async = write(
             &dir,
             "parseAsync.ts",
             &format!("{parse_doc}export async function parseAsync() {{}}\n"),
         );
-        let safe = write(&dir, "safeParse.ts", &format!("{safe_doc}export function safeParse() {{}}\n"));
+        let safe = write(
+            &dir,
+            "safeParse.ts",
+            &format!("{safe_doc}export function safeParse() {{}}\n"),
+        );
         let safe_async = write(
             &dir,
             "safeParseAsync.ts",
@@ -2440,17 +2728,37 @@ let x = 1;
 /**
  * Rebuilds the shared pagination defaults derived from the canonical schema so every listing view stays consistent.
  */\n";
-        let render = write(&dir, "render.ts", &format!("{render_doc}export function render() {{}}\n"));
+        let render = write(
+            &dir,
+            "render.ts",
+            &format!("{render_doc}export function render() {{}}\n"),
+        );
         let parse_async = write(
             &dir,
             "parse-async.ts",
             &format!("{render_doc}export async function parseAsync() {{}}\n"),
         );
-        let resync = write(&dir, "resync.ts", &format!("{sync_doc}export function resync() {{}}\n"));
-        let re = write(&dir, "re.ts", &format!("{sync_doc}export function re() {{}}\n"));
+        let resync = write(
+            &dir,
+            "resync.ts",
+            &format!("{sync_doc}export function resync() {{}}\n"),
+        );
+        let re = write(
+            &dir,
+            "re.ts",
+            &format!("{sync_doc}export function re() {{}}\n"),
+        );
         let diags = run(&[&render, &parse_async, &resync, &re]);
-        assert_eq!(diags.len(), 2, "non-twin decls sharing identical docs are real duplication");
-        assert!(diags.iter().all(|d| d.message.contains("Near-duplicate comment")));
+        assert_eq!(
+            diags.len(),
+            2,
+            "non-twin decls sharing identical docs are real duplication"
+        );
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.message.contains("Near-duplicate comment"))
+        );
     }
 
     #[test]
@@ -2492,10 +2800,22 @@ export type VueCalProps = {
         let head = "\
   // The array of events to display in Vue Cal. Can hold just the view events and
   // be updated, or the full array of all events available to the calendar here.\n";
-        let a = write(&dir, "a.ts", &format!("export type A = {{\n{head}  events?: number[],\n}};\n"));
-        let b = write(&dir, "b.ts", &format!("export type B = {{\n{head}  sessions?: number[],\n}};\n"));
+        let a = write(
+            &dir,
+            "a.ts",
+            &format!("export type A = {{\n{head}  events?: number[],\n}};\n"),
+        );
+        let b = write(
+            &dir,
+            "b.ts",
+            &format!("export type B = {{\n{head}  sessions?: number[],\n}};\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical doc on differently-named props is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical doc on differently-named props is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2544,7 +2864,11 @@ export type VueCalProps = {
         let a = write(&dir, "PromotionCodes.ts", &content);
         let b = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "copy-pasted JSDoc on two fields of one interface is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "copy-pasted JSDoc on two fields of one interface is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2584,7 +2908,11 @@ export type VueCalProps = {
         let a = write(&dir, "map.rs", &content);
         let b = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "copy-pasted comment on two fields of one struct is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "copy-pasted comment on two fields of one struct is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2603,7 +2931,11 @@ export type VueCalProps = {
         let a = write(&dir, "map.rs", &content);
         let b = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical comment on differently-named fields is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical comment on differently-named fields is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2620,7 +2952,10 @@ export type VueCalProps = {
         };
         let a = write(&dir, "backend-wasm.ts", &doc("aes128Encrypt"));
         let b = write(&dir, "backend-node.ts", &doc("aes128Encrypt"));
-        assert!(run(&[&a, &b]).is_empty(), "same-named TS parallel-impl JSDoc must not flag");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "same-named TS parallel-impl JSDoc must not flag"
+        );
         // The name is what earns the exemption, and the block is long enough to
         // reach it: the same JSDoc over an unrelated export still flags.
         let c = write(&dir, "backend-deno.ts", &doc("hashPassword"));
@@ -2643,7 +2978,10 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
 ";
         let a = write(&dir, "a.rs", &format!("{doc}\n{doc}"));
         let b = write(&dir, "filler.rs", "pub fn z() {}\n");
-        assert!(run(&[&a, &b]).is_empty(), "one name in one scope is one documented item");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "one name in one scope is one documented item"
+        );
     }
 
     #[test]
@@ -2702,10 +3040,22 @@ pub trait ErrorType {
     ///
     /// The locking mechanism is implementation-defined and must keep two such
     /// transactions from ever executing concurrently against one shared bus here.\n";
-        let a = write(&dir, "a.rs", &format!("pub trait A {{\n{head}    fn read(&mut self) -> u8;\n}}\n"));
-        let b = write(&dir, "b.rs", &format!("pub trait B {{\n{head}    fn write(&mut self) -> u8;\n}}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("pub trait A {{\n{head}    fn read(&mut self) -> u8;\n}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("pub trait B {{\n{head}    fn write(&mut self) -> u8;\n}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical doc on differently-named trait methods is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical doc on differently-named trait methods is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2763,7 +3113,11 @@ pub trait ErrorType {
         let a = write(&dir, "traits.rs", &content);
         let b = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "copy-pasted doc on two associated types of one trait is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "copy-pasted doc on two associated types of one trait is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2784,7 +3138,11 @@ pub trait ErrorType {
         let a = write(&dir, "impls.rs", &content);
         let b = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicate doc on impl associated types has no named owner and still flags");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicate doc on impl associated types has no named owner and still flags"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -2880,8 +3238,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             "manifest.node.ts",
             &format!("{head}    return readFileSync(raw, 'utf8').split(EOL)\n}}\n"),
         );
-        let browser =
-            write(&dir, "manifest.browser.ts", &format!("{head}    return raw.split('\\n')\n}}\n"));
+        let browser = write(
+            &dir,
+            "manifest.browser.ts",
+            &format!("{head}    return raw.split('\\n')\n}}\n"),
+        );
         assert!(
             run(&[&node, &browser]).is_empty(),
             "an overload signature's JSDoc mirrored by the other platform module must not flag"
@@ -2935,7 +3296,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             ),
         );
         let diags = run(&[&abstract_pair, &filler]);
-        assert_eq!(diags.len(), 1, "a class body grants no owner, so the copies still flag");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a class body grants no owner, so the copies still flag"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
         // An overload signature needs an implementation signature to be valid
         // TypeScript. The implementation carries no doc-comment, so it is not a
@@ -2958,7 +3323,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             "a class overload signature inherits no owner either"
         );
         let split_a = write(&dir, "a.ts", &class("class", "BaseRunner", overload_member));
-        let split_b = write(&dir, "b.ts", &class("class", "BaseBuilder", overload_member));
+        let split_b = write(
+            &dir,
+            "b.ts",
+            &class("class", "BaseBuilder", overload_member),
+        );
         assert!(
             run(&[&split_a, &split_b]).is_empty(),
             "the same signature is name-attributed; only the owner is missing"
@@ -2980,7 +3349,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let a = write(&dir, "Runner.ts", &iface("run", "Runner"));
         let b = write(&dir, "Encoder.ts", &iface("encode", "Encoder"));
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a computed key must not be read as a declaration name");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a computed key must not be read as a declaration name"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3002,15 +3375,24 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             ),
         );
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
-        assert!(run(&[&iface, &filler]).is_empty(), "an overload run documents one item");
+        assert!(
+            run(&[&iface, &filler]).is_empty(),
+            "an overload run documents one item"
+        );
         let implementation = format!(
             "export class Implementation {{\n{CLEAR_DATABASE_DOC}\
              clearDatabase(a: string): this {{\n    return this\n}}\n}}\n"
         );
         let early = write(&dir, "Early.ts", &implementation);
-        assert!(run(&[&iface, &early]).is_empty(), "an earlier same-named partner changes nothing");
+        assert!(
+            run(&[&iface, &early]).is_empty(),
+            "an earlier same-named partner changes nothing"
+        );
         let late = write(&dir, "ZLate.ts", &implementation);
-        assert!(run(&[&iface, &late]).is_empty(), "nor does a later-sorting one");
+        assert!(
+            run(&[&iface, &late]).is_empty(),
+            "nor does a later-sorting one"
+        );
     }
 
     #[test]
@@ -3030,7 +3412,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         );
         let b = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "copy-pasted JSDoc on two methods of one interface is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "copy-pasted JSDoc on two methods of one interface is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3057,7 +3443,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             ),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "the same JSDoc on unrelated methods is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "the same JSDoc on unrelated methods is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3078,7 +3468,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
             &format!("// eslint-disable-next-line no-shadow\n{C2}"),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "docblock below a directive line is still compared");
+        assert_eq!(
+            diags.len(),
+            1,
+            "docblock below a directive line is still compared"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3125,7 +3519,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicate prose naming a path is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicate prose naming a path is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3140,7 +3538,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a doc named without a cue does not exempt a rationale");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a doc named without a cue does not exempt a rationale"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3175,13 +3577,21 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let defined = "// Default theme values defined in config/app.ts are then merged with the user overrides before the very first paint.\nexport const t = 1;\n";
         let a = write(&dir, "a.ts", defined);
         let b = write(&dir, "b.ts", defined);
-        assert_eq!(run(&[&a, &b]).len(), 1, "`defined in <src>` is prose, not a citation");
+        assert_eq!(
+            run(&[&a, &b]).len(),
+            1,
+            "`defined in <src>` is prose, not a citation"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let described = "// The eviction policy described in lib/cache.ts drops the oldest entry once the lease window has fully closed.\nexport const c = 1;\n";
         let a = write(&dir, "a.ts", described);
         let b = write(&dir, "b.ts", described);
-        assert_eq!(run(&[&a, &b]).len(), 1, "`described in <src>` is prose, not a citation");
+        assert_eq!(
+            run(&[&a, &b]).len(),
+            1,
+            "`described in <src>` is prose, not a citation"
+        );
     }
 
     #[test]
@@ -3206,7 +3616,10 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let line = "/* oxlint-disable ban-types, no-empty-object-type -- the TaggedError public API intentionally requires an empty object literal here so subclasses stay structurally compatible */\nexport const e = 1;\n";
         let a = write(&dir, "forbidden.ts", line);
         let b = write(&dir, "index.ts", line);
-        assert!(run(&[&a, &b]).is_empty(), "lint-disable directives must not be flagged");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "lint-disable directives must not be flagged"
+        );
     }
 
     #[test]
@@ -3216,7 +3629,10 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let line = "// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the upstream third-party callback signature is typed as any and we cannot widen it from here\nexport const f = 1;\n";
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
-        assert!(run(&[&a, &b]).is_empty(), "eslint-disable-next-line must not be flagged");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "eslint-disable-next-line must not be flagged"
+        );
     }
 
     #[test]
@@ -3229,7 +3645,10 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let line = "\"use no memo\"; // RHF register and the formState proxy break under the React Compiler so this whole module opts out of memoization to keep the form bindings stable\nexport const g = 1;\n";
         let a = write(&dir, "team-form.tsx", line);
         let b = write(&dir, "lab-form.tsx", line);
-        assert!(run(&[&a, &b]).is_empty(), "comment trailing a pragma literal must not be flagged");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "comment trailing a pragma literal must not be flagged"
+        );
     }
 
     #[test]
@@ -3242,7 +3661,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a mid-sentence directive mention is prose, not a directive");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a mid-sentence directive mention is prose, not a directive"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3255,7 +3678,11 @@ export function parseManifest(raw: string, strict?: boolean): string[] {
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a comment trailing real code is not a pragma trailer");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a comment trailing real code is not a pragma trailer"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3329,10 +3756,22 @@ type Clock = MacClock;
         // exemption (same `decl_name`) does not apply — this isolates the cfg signal.
         let dir = tempfile::tempdir().unwrap();
         let doc = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent.\n";
-        let a = write(&dir, "a.rs", &format!("{doc}#[inline]\npub fn one() {{}}\n"));
-        let b = write(&dir, "b.rs", &format!("{doc}#[inline]\npub fn two() {{}}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("{doc}#[inline]\npub fn one() {{}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("{doc}#[inline]\npub fn two() {{}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicated docs on non-cfg items are still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicated docs on non-cfg items are still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3376,10 +3815,22 @@ macro_rules! ints {
         let dir = tempfile::tempdir().unwrap();
         let doc = "/// Builds the canonical pagination defaults derived from the shared schema so every list stays consistent everywhere.\n";
         let macro_def = "macro_rules! noop { () => {}; }\n";
-        let a = write(&dir, "a.rs", &format!("{macro_def}{doc}pub fn build_admin_list() {{}}\n"));
-        let b = write(&dir, "b.rs", &format!("{macro_def}{doc}pub fn build_lab_section() {{}}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("{macro_def}{doc}pub fn build_admin_list() {{}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("{macro_def}{doc}pub fn build_lab_section() {{}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a duplicate doc outside the macro must still flag");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a duplicate doc outside the macro must still flag"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3417,10 +3868,22 @@ macro_rules! ints {
     /// A typical parameter for passing to compression and decompression functions,
     /// this indicates that the underlying stream decides how much data to accumulate
     /// before producing output in order to maximize the resulting compression ratio.\n";
-        let a = write(&dir, "a.rs", &format!("pub enum A {{\n{doc}    Alpha = 0,\n}}\n"));
-        let b = write(&dir, "b.rs", &format!("pub enum B {{\n{doc}    Beta = 0,\n}}\n"));
+        let a = write(
+            &dir,
+            "a.rs",
+            &format!("pub enum A {{\n{doc}    Alpha = 0,\n}}\n"),
+        );
+        let b = write(
+            &dir,
+            "b.rs",
+            &format!("pub enum B {{\n{doc}    Beta = 0,\n}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical doc on differently-named variants is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical doc on differently-named variants is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3499,7 +3962,11 @@ fn split_to(&mut self, at: usize) {
 ",
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicated plain prose without a SAFETY marker is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicated plain prose without a SAFETY marker is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3516,13 +3983,19 @@ fn split_to(&mut self, at: usize) {
         let header = "// 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15\nconst TABLE: [u8; 16] = [];\n";
         let a = write(&dir, "method.rs", header);
         let b = write(&dir, "name.rs", header);
-        assert!(run(&[&a, &b]).is_empty(), "numeric column-index labels must not flag");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "numeric column-index labels must not flag"
+        );
 
         // Multi-digit constant rows (`// 100 200 300 …`) are equally all-numeric.
         let magic = "// 100 200 300 400 500 600 700 800 900 1000 1100 1200 1300 1400 1500\nconst ROW: u32 = 0;\n";
         let c = write(&dir, "c.rs", magic);
         let d = write(&dir, "d.rs", magic);
-        assert!(run(&[&c, &d]).is_empty(), "all-numeric constant rows must not flag");
+        assert!(
+            run(&[&c, &d]).is_empty(),
+            "all-numeric constant rows must not flag"
+        );
     }
 
     #[test]
@@ -3535,7 +4008,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "a.rs", mixed);
         let b = write(&dir, "b.rs", mixed);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a label mixing a word with numbers is still checked");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a label mixing a word with numbers is still checked"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3547,9 +4024,15 @@ fn split_to(&mut self, at: usize) {
         let nums = |xs: &[&str]| -> Vec<String> { xs.iter().map(|s| s.to_string()).collect() };
         assert!(is_all_numeric_label(&nums(&["0", "1", "15"])));
         assert!(is_all_numeric_label(&nums(&["100", "200", "300"])));
-        assert!(!is_all_numeric_label(&[]), "an empty word list is not all-numeric");
+        assert!(
+            !is_all_numeric_label(&[]),
+            "an empty word list is not all-numeric"
+        );
         assert!(!is_all_numeric_label(&nums(&["row", "0", "1"])));
-        assert!(!is_all_numeric_label(&nums(&["0x1f"])), "hex is not a decimal token");
+        assert!(
+            !is_all_numeric_label(&nums(&["0x1f"])),
+            "hex is not a decimal token"
+        );
     }
 
     /// The drizzle inline body comment: a plain `//` describing the cache-mutate
@@ -3587,15 +4070,23 @@ fn split_to(&mut self, at: usize) {
         let a = write(
             &dir,
             "a.ts",
-            &format!("class PgSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 1;\n  }}\n}}\n"),
+            &format!(
+                "class PgSession {{\n  queryWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 1;\n  }}\n}}\n"
+            ),
         );
         let b = write(
             &dir,
             "b.ts",
-            &format!("class GelSession {{\n  runWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 2;\n  }}\n}}\n"),
+            &format!(
+                "class GelSession {{\n  runWithCache() {{\n{CACHE_MUTATE_NOTE}\n    return 2;\n  }}\n}}\n"
+            ),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical inline comment in differently-named methods is a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical inline comment in differently-named methods is a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3612,7 +4103,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "sessions.ts", &content);
         let filler = write(&dir, "filler.ts", "export const z = 1;\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "intra-file duplicate inline comment is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "intra-file duplicate inline comment is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3626,7 +4121,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "a.ts", line);
         let b = write(&dir, "b.ts", line);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "free-floating duplicate inline comment is still a smell");
+        assert_eq!(
+            diags.len(),
+            1,
+            "free-floating duplicate inline comment is still a smell"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3652,12 +4151,19 @@ fn split_to(&mut self, at: usize) {
         let ambient = format!("{MIN_VALUE_DOC}export declare function maxValue<T>(r: T): T;\n");
         let a = write(&dir, "one.ts", &ambient);
         let b = write(&dir, "two.ts", &ambient);
-        assert!(run(&[&a, &b]).is_empty(), "an ambient declaration is a named declaration");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "an ambient declaration is a named declaration"
+        );
 
-        let implemented = format!("{MIN_VALUE_DOC}export function maxValue<T>(r: T): T {{ return r }}\n");
+        let implemented =
+            format!("{MIN_VALUE_DOC}export function maxValue<T>(r: T): T {{ return r }}\n");
         let c = write(&dir, "three.ts", &implemented);
         let d = write(&dir, "four.ts", &implemented);
-        assert!(run(&[&c, &d]).is_empty(), "control: the implemented spelling was already clean");
+        assert!(
+            run(&[&c, &d]).is_empty(),
+            "control: the implemented spelling was already clean"
+        );
     }
 
     #[test]
@@ -3674,7 +4180,10 @@ fn split_to(&mut self, at: usize) {
         };
         let a = write(&dir, "one.ts", &twin("maxValue"));
         let b = write(&dir, "two.ts", &twin("maxValueAsync"));
-        assert!(run(&[&a, &b]).is_empty(), "overloads of sync/async twins must not flag");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "overloads of sync/async twins must not flag"
+        );
     }
 
     #[test]
@@ -3690,7 +4199,10 @@ fn split_to(&mut self, at: usize) {
         );
         let a = write(&dir, "minValue.ts", &overloads);
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
-        assert!(run(&[&a, &filler]).is_empty(), "an overload run documents one function");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "an overload run documents one function"
+        );
     }
 
     #[test]
@@ -3706,7 +4218,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "actions.ts", &content);
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "one JSDoc on two unrelated functions is a copy-paste");
+        assert_eq!(
+            diags.len(),
+            1,
+            "one JSDoc on two unrelated functions is a copy-paste"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3725,7 +4241,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "minValue.ts", &content);
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "a plain `//` earns no declaration attribution");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a plain `//` earns no declaration attribution"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3755,7 +4275,10 @@ fn split_to(&mut self, at: usize) {
         );
         let a = write(&dir, "omit.ts", &content);
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
-        assert!(run(&[&a, &filler]).is_empty(), "two type literals are two owners");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "two type literals are two owners"
+        );
     }
 
     #[test]
@@ -3771,12 +4294,17 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "omit.ts", &content);
         let filler = write(&dir, "filler.ts", "export const x = 1;\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "two members of one literal are a copy-paste");
+        assert_eq!(
+            diags.len(),
+            1,
+            "two members of one literal are a copy-paste"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
     // arrow-rs's `Date32Type` temporal API doc, repeated per `add_*` entry point.
-    const ADD_YEAR_MONTHS_DOC: &str = "    /// Adds the given IntervalYearMonthType to an arrow Date32Type value.
+    const ADD_YEAR_MONTHS_DOC: &str =
+        "    /// Adds the given IntervalYearMonthType to an arrow Date32Type value.
     ///
     /// # Arguments
     ///
@@ -3798,18 +4326,26 @@ fn split_to(&mut self, at: usize) {
         );
         let a = write(&dir, "types.rs", &content);
         let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
-        assert!(run(&[&a, &filler]).is_empty(), "an `_opt` twin in one impl must not flag");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "an `_opt` twin in one impl must not flag"
+        );
 
         // The same doc over an unrelated sibling is a copy-paste, which is what
         // shows the emptiness above comes from the name relation and not from the
         // fixture falling short of the word gate.
         let unrelated = content.replace("add_year_months_opt", "format_iso_week");
         let b = write(&dir, "unrelated.rs", &unrelated);
-        assert_eq!(run(&[&b, &filler]).len(), 1, "an unrelated sibling still flags");
+        assert_eq!(
+            run(&[&b, &filler]).len(),
+            1,
+            "an unrelated sibling still flags"
+        );
     }
 
     // ripgrep's `Matcher` trait doc, repeated across its iteration entry points.
-    const CAPTURES_ITER_DOC: &str = "    /// Executes the given function over successive non-overlapping matches
+    const CAPTURES_ITER_DOC: &str =
+        "    /// Executes the given function over successive non-overlapping matches
     /// in `haystack` with capture groups extracted from each single match. If no
     /// match exists, then the given function is never called anywhere.
 ";
@@ -3830,11 +4366,18 @@ fn split_to(&mut self, at: usize) {
         );
         let a = write(&dir, "lib.rs", &content);
         let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
-        assert!(run(&[&a, &filler]).is_empty(), "variant-named trait siblings must not flag");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "variant-named trait siblings must not flag"
+        );
 
         let unrelated = content.replace("captures_iter_at", "shutdown_pool");
         let b = write(&dir, "unrelated.rs", &unrelated);
-        assert_eq!(run(&[&b, &filler]).len(), 2, "an unrelated sibling still flags");
+        assert_eq!(
+            run(&[&b, &filler]).len(),
+            2,
+            "an unrelated sibling still flags"
+        );
     }
 
     #[test]
@@ -3853,10 +4396,16 @@ fn split_to(&mut self, at: usize) {
         );
         let a = write(&dir, "summary.rs", &content);
         let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
-        assert!(run(&[&a, &filler]).is_empty(), "two impl blocks of one type are one surface");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "two impl blocks of one type are one surface"
+        );
 
         // Two *different* types are two surfaces, so the same pair of docs flags.
-        let split = content.replace("impl<W: io::Write> Summary<NoColor<W>>", "impl<W: io::Write> Standard<NoColor<W>>");
+        let split = content.replace(
+            "impl<W: io::Write> Summary<NoColor<W>>",
+            "impl<W: io::Write> Standard<NoColor<W>>",
+        );
         let b = write(&dir, "printers.rs", &split);
         assert_eq!(run(&[&b, &filler]).len(), 1, "two types are two surfaces");
     }
@@ -3867,7 +4416,8 @@ fn split_to(&mut self, at: usize) {
         // unrelated methods of one type carrying one rationale is the copy-paste
         // the rule exists to report.
         let dir = tempfile::tempdir().unwrap();
-        let doc = "    /// Reads the configuration file from disk and returns its parsed contents to
+        let doc =
+            "    /// Reads the configuration file from disk and returns its parsed contents to
     /// the caller, or an error describing precisely why the file could not be read.
 ";
         let content = format!(
@@ -3877,7 +4427,11 @@ fn split_to(&mut self, at: usize) {
         let a = write(&dir, "runner.rs", &content);
         let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "unrelated sibling names are still a copy-paste");
+        assert_eq!(
+            diags.len(),
+            1,
+            "unrelated sibling names are still a copy-paste"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3892,11 +4446,17 @@ fn split_to(&mut self, at: usize) {
 /// Locates the leftmost match this matcher accepts inside the haystack given to
 /// it, or nothing at all when that haystack holds no match for the pattern.
 ";
-        let free = format!("{doc}pub fn find(h: &[u8]) -> bool {{ true }}\n{doc}pub fn find_at(h: &[u8], at: usize) -> bool {{ true }}\n");
+        let free = format!(
+            "{doc}pub fn find(h: &[u8]) -> bool {{ true }}\n{doc}pub fn find_at(h: &[u8], at: usize) -> bool {{ true }}\n"
+        );
         let a = write(&dir, "free.rs", &free);
         let filler = write(&dir, "filler.rs", "pub fn x() {}\n");
         let diags = run(&[&a, &filler]);
-        assert_eq!(diags.len(), 1, "a one-segment root is too generic outside a surface");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a one-segment root is too generic outside a surface"
+        );
 
         let indented = doc.replace("///", "    ///");
         let owned = format!(
@@ -3904,7 +4464,10 @@ fn split_to(&mut self, at: usize) {
              {indented}    fn find_at(&self, h: &[u8], at: usize) -> bool;\n}}\n"
         );
         let b = write(&dir, "trait.rs", &owned);
-        assert!(run(&[&b, &filler]).is_empty(), "the same pair inside one trait is exempt");
+        assert!(
+            run(&[&b, &filler]).is_empty(),
+            "the same pair inside one trait is exempt"
+        );
     }
 
     // typeorm's `QueryRunner.isReleased` contract, stated on the interface and
@@ -3925,14 +4488,21 @@ fn split_to(&mut self, at: usize) {
         let iface = write(
             &dir,
             "QueryRunner.ts",
-            &format!("export interface QueryRunner {{\n{IS_RELEASED_DOC}  readonly isReleased: boolean\n}}\n"),
+            &format!(
+                "export interface QueryRunner {{\n{IS_RELEASED_DOC}  readonly isReleased: boolean\n}}\n"
+            ),
         );
         let class = write(
             &dir,
             "MongoQueryRunner.ts",
-            &format!("export class MongoQueryRunner implements QueryRunner {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n"),
+            &format!(
+                "export class MongoQueryRunner implements QueryRunner {{\n{IS_RELEASED_DOC}  isReleased = false\n}}\n"
+            ),
         );
-        assert!(run(&[&iface, &class]).is_empty(), "a class field mirroring its interface must not flag");
+        assert!(
+            run(&[&iface, &class]).is_empty(),
+            "a class field mirroring its interface must not flag"
+        );
     }
 
     #[test]
@@ -3951,7 +4521,11 @@ fn split_to(&mut self, at: usize) {
             &format!("export class B {{\n{IS_RELEASED_DOC}  isDetached = false\n}}\n"),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "one JSDoc on two unrelated fields is a copy-paste");
+        assert_eq!(
+            diags.len(),
+            1,
+            "one JSDoc on two unrelated fields is a copy-paste"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3979,10 +4553,22 @@ fn split_to(&mut self, at: usize) {
         // doc-comment gate: a plain `//` above it earns no attribution.
         let dir = tempfile::tempdir().unwrap();
         let note = "  // Kept false until the pool hands the connection back, because the caller may still hold a cursor open.\n";
-        let a = write(&dir, "A.ts", &format!("export class A {{\n{note}  isReleased = false\n}}\n"));
-        let b = write(&dir, "B.ts", &format!("export class B {{\n{note}  isReleased = false\n}}\n"));
+        let a = write(
+            &dir,
+            "A.ts",
+            &format!("export class A {{\n{note}  isReleased = false\n}}\n"),
+        );
+        let b = write(
+            &dir,
+            "B.ts",
+            &format!("export class B {{\n{note}  isReleased = false\n}}\n"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a plain `//` above a field earns no attribution");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a plain `//` above a field earns no attribution"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -3995,7 +4581,10 @@ fn split_to(&mut self, at: usize) {
             Some("cache")
         );
         assert_eq!(
-            first_comment_decl_name("/**\n * Caches the resolved schema output for later.\n */\nexport class Cache {}\n").as_deref(),
+            first_comment_decl_name(
+                "/**\n * Caches the resolved schema output for later.\n */\nexport class Cache {}\n"
+            )
+            .as_deref(),
             Some("Cache")
         );
     }
@@ -4016,13 +4605,28 @@ fn split_to(&mut self, at: usize) {
  * @returns The cached schema.
  */
 ";
-        let a = write(&dir, "cache.ts", &format!("{doc}export function cache(schema: number) {{ return schema }}\n"));
-        let b = write(&dir, "cacheAsync.ts", &format!("{doc}export function cacheAsync(schema: number) {{ return schema }}\n"));
-        assert!(run(&[&a, &b]).is_empty(), "exported sync/async twins must not flag");
+        let a = write(
+            &dir,
+            "cache.ts",
+            &format!("{doc}export function cache(schema: number) {{ return schema }}\n"),
+        );
+        let b = write(
+            &dir,
+            "cacheAsync.ts",
+            &format!("{doc}export function cacheAsync(schema: number) {{ return schema }}\n"),
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "exported sync/async twins must not flag"
+        );
 
         // The same doc on an unrelated export flags, so the block does clear the
         // word gate and the exemption is what produced the emptiness above.
-        let c = write(&dir, "purge.ts", &format!("{doc}export function purgeEntries(schema: number) {{ return schema }}\n"));
+        let c = write(
+            &dir,
+            "purge.ts",
+            &format!("{doc}export function purgeEntries(schema: number) {{ return schema }}\n"),
+        );
         assert_eq!(run(&[&a, &c]).len(), 1, "an unrelated export still flags");
     }
 
@@ -4039,13 +4643,27 @@ fn split_to(&mut self, at: usize) {
 /// omitted so the four blocks are decrypted in place and in parallel across the
 /// whole fixsliced state.
 ";
-        let mirror = write(&dir, "src/a_mirror.rs", &format!("{doc}pub fn aes128_decrypt(x: u8) -> u8 {{ x }}\n"));
-        let unrelated = write(&dir, "src/b_unrelated.rs", &format!("{doc}pub fn totally_unrelated_helper(x: u8) -> u8 {{ x }}\n"));
-        let z = write(&dir, "src/z.rs", &format!("{doc}pub fn aes128_decrypt(y: u8) -> u8 {{ y }}\n"));
+        let mirror = write(
+            &dir,
+            "src/a_mirror.rs",
+            &format!("{doc}pub fn aes128_decrypt(x: u8) -> u8 {{ x }}\n"),
+        );
+        let unrelated = write(
+            &dir,
+            "src/b_unrelated.rs",
+            &format!("{doc}pub fn totally_unrelated_helper(x: u8) -> u8 {{ x }}\n"),
+        );
+        let z = write(
+            &dir,
+            "src/z.rs",
+            &format!("{doc}pub fn aes128_decrypt(y: u8) -> u8 {{ y }}\n"),
+        );
 
         let with_mirror = run(&[&mirror, &unrelated, &z]);
         assert!(
-            with_mirror.iter().any(|d| d.path.ends_with("b_unrelated.rs")),
+            with_mirror
+                .iter()
+                .any(|d| d.path.ends_with("b_unrelated.rs")),
             "the unrelated copy is reported against the mirror it duplicates"
         );
         assert!(
@@ -4054,7 +4672,11 @@ fn split_to(&mut self, at: usize) {
         );
 
         let without_mirror = run(&[&unrelated, &z]);
-        assert_eq!(without_mirror.len(), 1, "removing an unrelated file does not silence the pair");
+        assert_eq!(
+            without_mirror.len(),
+            1,
+            "removing an unrelated file does not silence the pair"
+        );
         assert!(without_mirror[0].path.ends_with("z.rs"));
     }
 
@@ -4100,7 +4722,10 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         );
         let a = write(&dir, "src/lib.rs", &content);
         let filler = write(&dir, "src/filler.rs", "pub fn x() {}\n");
-        assert!(run(&[&a, &filler]).is_empty(), "distinct provenance pointers are not copies");
+        assert!(
+            run(&[&a, &filler]).is_empty(),
+            "distinct provenance pointers are not copies"
+        );
     }
 
     #[test]
@@ -4121,13 +4746,20 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         };
         let a = write(&dir, "a.rs", &rationale("balance-negative-result"));
         let b = write(&dir, "b.rs", &rationale("balance-subseconds"));
-        assert!(run(&[&a, &b]).is_empty(), "different targets are different pointers");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "different targets are different pointers"
+        );
 
         let same = rationale("balance-subseconds");
         let c = write(&dir, "c.rs", &same);
         let d = write(&dir, "d.rs", &same);
         let diags = run(&[&c, &d]);
-        assert_eq!(diags.len(), 1, "the same rationale citing the same target is a copy");
+        assert_eq!(
+            diags.len(),
+            1,
+            "the same rationale citing the same target is a copy"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -4137,12 +4769,18 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         // prose that differs only in its final word is still a copy-paste.
         let dir = tempfile::tempdir().unwrap();
         let rationale = |last: &str| {
-            format!("// Ported verbatim from the upstream conformance suite so the rounding behaviour stays pinned to the specification text it came from {last}.\nexport const x = 1;\n")
+            format!(
+                "// Ported verbatim from the upstream conformance suite so the rounding behaviour stays pinned to the specification text it came from {last}.\nexport const x = 1;\n"
+            )
         };
         let a = write(&dir, "a.ts", &rationale("originally"));
         let b = write(&dir, "b.ts", &rationale("initially"));
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "prose differing in one word is still a copy");
+        assert_eq!(
+            diags.len(),
+            1,
+            "prose differing in one word is still a copy"
+        );
         assert!(diags[0].message.contains("Near-duplicate comment"));
     }
 
@@ -4168,9 +4806,20 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         // that then cleared `min_words`. No comment in either fixture is a
         // duplicate; the rule manufactured the length it flagged.
         let dir = tempfile::tempdir().unwrap();
-        let a = write(&dir, "lib.rs", &sbix_fixture(["0x0010", "0x0030", "0x003a"]));
-        let b = write(&dir, "other.rs", &sbix_fixture(["0x0010", "0x001a", "0x0024"]));
-        assert!(run(&[&a, &b]).is_empty(), "a column of field labels is not a paragraph");
+        let a = write(
+            &dir,
+            "lib.rs",
+            &sbix_fixture(["0x0010", "0x0030", "0x003a"]),
+        );
+        let b = write(
+            &dir,
+            "other.rs",
+            &sbix_fixture(["0x0010", "0x001a", "0x0024"]),
+        );
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a column of field labels is not a paragraph"
+        );
 
         // The same nine texts written as a standalone run still merge into one
         // block and still flag: only the trailing/standalone boundary changed, and
@@ -4191,7 +4840,11 @@ pub fn aes128_decrypt(x: u8) -> u8 { x }
         .collect();
         let c = write(&dir, "c.rs", &format!("pub fn c() {{\n{labels}}}\n"));
         let d = write(&dir, "d.rs", &format!("pub fn d() {{\n{labels}}}\n"));
-        assert_eq!(run(&[&c, &d]).len(), 1, "a standalone run of the same lines still flags");
+        assert_eq!(
+            run(&[&c, &d]).len(),
+            1,
+            "a standalone run of the same lines still flags"
+        );
     }
 
     #[test]

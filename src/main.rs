@@ -21,7 +21,6 @@ mod cli;
 mod clippy;
 mod clone_detection;
 mod comment_duplicate_detection;
-mod function_duplicate_detection;
 mod config;
 mod diagnostic;
 mod engine;
@@ -29,6 +28,7 @@ mod explain;
 mod files;
 mod fix;
 mod frameworks;
+mod function_duplicate_detection;
 mod icu;
 mod ignore_comments;
 mod list;
@@ -113,7 +113,10 @@ mod tests {
     fn write_ts(dir: &tempfile::TempDir, name: &str, content: &str) -> SourceFile {
         let path = dir.path().join(name);
         std::fs::write(&path, content).unwrap();
-        SourceFile { path, language: Language::TypeScript }
+        SourceFile {
+            path,
+            language: Language::TypeScript,
+        }
     }
 
     #[test]
@@ -136,7 +139,9 @@ mod tests {
         assert!(rule_requires_subprocess(cargo_shear::RULE_ID));
         // In-process cross-file detectors run on the fast path instead.
         assert!(!rule_requires_subprocess(clone_detection::RULE_ID));
-        assert!(!rule_requires_subprocess(comment_duplicate_detection::RULE_ID));
+        assert!(!rule_requires_subprocess(
+            comment_duplicate_detection::RULE_ID
+        ));
     }
 
     /// The full run drives the type-aware toolchain only for the rules that are
@@ -156,7 +161,10 @@ mod tests {
 
         let mut disable_all = String::new();
         let mut seen = FxHashSet::default();
-        for def in rules::all_rule_defs().iter().filter(|r| def_needs_type_aware(r)) {
+        for def in rules::all_rule_defs()
+            .iter()
+            .filter(|r| def_needs_type_aware(r))
+        {
             if seen.insert(def.meta.id) {
                 disable_all.push_str(&format!("[rules.\"{}\"]\ndisabled = true\n", def.meta.id));
             }
@@ -218,8 +226,14 @@ mod tests {
     #[test]
     fn an_unexpected_failure_still_asks_for_a_bug_report() {
         let msg = failure_message(&anyhow::anyhow!("boom"));
-        assert!(msg.starts_with("comply: crashed unexpectedly: boom"), "{msg}");
-        assert!(msg.contains("https://github.com/rbaumier/comply/issues"), "{msg}");
+        assert!(
+            msg.starts_with("comply: crashed unexpectedly: boom"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("https://github.com/rbaumier/comply/issues"),
+            "{msg}"
+        );
     }
 
     /// No TypeScript file means no program to resolve, whatever the config says.
@@ -228,7 +242,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lib.rs");
         std::fs::write(&path, "pub fn f() {}\n").unwrap();
-        let rs = vec![SourceFile { path, language: Language::Rust }];
+        let rs = vec![SourceFile {
+            path,
+            language: Language::Rust,
+        }];
         let config = Config::load_from(dir.path()).unwrap();
         assert!(!type_aware_rules_active(&rs, &config));
     }
@@ -283,7 +300,10 @@ mod tests {
         // re-export hub. The delegated oxlint diagnostic must be dropped.
         let project = crate::project::ProjectCtx::empty();
         let path = std::path::Path::new("packages/components/tabs/index.ts");
-        assert!(is_exempt_barrel_entry_point(&barrel_diagnostic(path), &project));
+        assert!(is_exempt_barrel_entry_point(
+            &barrel_diagnostic(path),
+            &project
+        ));
     }
 
     #[test]
@@ -292,7 +312,10 @@ mod tests {
         // entry remains an internal indirection and stays flagged.
         let project = crate::project::ProjectCtx::empty();
         let path = std::path::Path::new("src/utils/all.ts");
-        assert!(!is_exempt_barrel_entry_point(&barrel_diagnostic(path), &project));
+        assert!(!is_exempt_barrel_entry_point(
+            &barrel_diagnostic(path),
+            &project
+        ));
     }
 
     #[test]
@@ -307,7 +330,10 @@ mod tests {
         .unwrap();
         let project = crate::project::ProjectCtx::empty();
         let path = dir.path().join("src/components.ts");
-        assert!(is_exempt_barrel_entry_point(&barrel_diagnostic(&path), &project));
+        assert!(is_exempt_barrel_entry_point(
+            &barrel_diagnostic(&path),
+            &project
+        ));
     }
 
     #[test]
@@ -383,12 +409,9 @@ fn run() -> Result<bool> {
             ref location,
             ref reason,
             ref model,
-        }) => telemetry::report_false_positive(
-            rule_id,
-            location,
-            reason.as_deref(),
-            model.as_deref(),
-        ),
+        }) => {
+            telemetry::report_false_positive(rule_id, location, reason.as_deref(), model.as_deref())
+        }
         Some(Command::Stats { should_emit_json }) => {
             telemetry::run_stats(should_emit_json)?;
             Ok(false)
@@ -550,7 +573,10 @@ fn type_aware_rules_active(discovered: &[SourceFile], config: &Config) -> bool {
     rules::all_rule_defs()
         .iter()
         .filter(|r| def_needs_type_aware(r))
-        .any(|r| ts.iter().any(|f| config.is_rule_enabled(r.meta.id, &f.path)))
+        .any(|r| {
+            ts.iter()
+                .any(|f| config.is_rule_enabled(r.meta.id, &f.path))
+        })
 }
 
 /// Run the in-process cross-file detectors named in `filter`. They need the
@@ -864,60 +890,70 @@ fn collect_all_diagnostics(
     // clones' tree-sitter tokenize pass, and the engine overlaps the clones'
     // sequential tail as before. The engine arm owns the project and returns
     // it so it escapes for the post-filtering passes below.
-    let engine_work = || -> Result<(std::sync::Arc<crate::project::ProjectCtx>, Vec<Diagnostic>)> {
-        let project =
-            std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
+    let engine_work =
+        || -> Result<(std::sync::Arc<crate::project::ProjectCtx>, Vec<Diagnostic>)> {
+            let project =
+                std::sync::Arc::new(crate::project::ProjectCtx::load(&index_refs, config));
 
-        if is_partial {
-            project.set_linted_paths(linted.clone());
-        }
-
-        let mut diags = Vec::with_capacity(discovered.len());
-        if !by_lang.ts.is_empty() {
-            diags.extend(lint_typescript(
-                &by_lang.ts,
-                config,
-                &project,
-                timings,
-                type_aware,
-                &type_program_ts,
-            )?);
-        }
-        if !by_lang.rs.is_empty() {
-            diags.extend(lint_rust(&by_lang.rs, config, &project, timings, is_partial)?);
-        }
-        if !by_lang.vue.is_empty() {
-            let t = Instant::now();
-            let vue_diags = engine::lint_files_with_project(&by_lang.vue, config, &project, None)?;
-            timings.engine_vue = t.elapsed();
-            diags.extend(vue_diags);
-        }
-        if !by_lang.json.is_empty() {
-            diags.extend(engine::lint_files_with_project(
-                &by_lang.json,
-                config,
-                &project,
-                None,
-            )?);
-        }
-        // Text/tree-sitter-only languages share the same engine entry point as
-        // vue/json; the engine picks each rule by its declared `Language`. Each
-        // bucket stays behind `is_empty()` so a project without these file types
-        // pays nothing.
-        for bucket in [
-            &by_lang.toml,
-            &by_lang.css,
-            &by_lang.yaml,
-            &by_lang.dockerfile,
-            &by_lang.sql,
-            &by_lang.nginx,
-        ] {
-            if !bucket.is_empty() {
-                diags.extend(engine::lint_files_with_project(bucket, config, &project, None)?);
+            if is_partial {
+                project.set_linted_paths(linted.clone());
             }
-        }
-        Ok((project, diags))
-    };
+
+            let mut diags = Vec::with_capacity(discovered.len());
+            if !by_lang.ts.is_empty() {
+                diags.extend(lint_typescript(
+                    &by_lang.ts,
+                    config,
+                    &project,
+                    timings,
+                    type_aware,
+                    &type_program_ts,
+                )?);
+            }
+            if !by_lang.rs.is_empty() {
+                diags.extend(lint_rust(
+                    &by_lang.rs,
+                    config,
+                    &project,
+                    timings,
+                    is_partial,
+                )?);
+            }
+            if !by_lang.vue.is_empty() {
+                let t = Instant::now();
+                let vue_diags =
+                    engine::lint_files_with_project(&by_lang.vue, config, &project, None)?;
+                timings.engine_vue = t.elapsed();
+                diags.extend(vue_diags);
+            }
+            if !by_lang.json.is_empty() {
+                diags.extend(engine::lint_files_with_project(
+                    &by_lang.json,
+                    config,
+                    &project,
+                    None,
+                )?);
+            }
+            // Text/tree-sitter-only languages share the same engine entry point as
+            // vue/json; the engine picks each rule by its declared `Language`. Each
+            // bucket stays behind `is_empty()` so a project without these file types
+            // pays nothing.
+            for bucket in [
+                &by_lang.toml,
+                &by_lang.css,
+                &by_lang.yaml,
+                &by_lang.dockerfile,
+                &by_lang.sql,
+                &by_lang.nginx,
+            ] {
+                if !bucket.is_empty() {
+                    diags.extend(engine::lint_files_with_project(
+                        bucket, config, &project, None,
+                    )?);
+                }
+            }
+            Ok((project, diags))
+        };
     let clones_work = || -> (Vec<Diagnostic>, std::time::Duration) {
         if !clones_enabled {
             return (Vec::new(), std::time::Duration::ZERO);
@@ -945,7 +981,9 @@ fn collect_all_diagnostics(
 
     let (engine_res, ((clone_diags, clones_elapsed), (dup_diags, func_dup_diags))) =
         rayon::join(engine_work, || {
-            rayon::join(clones_work, || rayon::join(dup_comments_work, func_dups_work))
+            rayon::join(clones_work, || {
+                rayon::join(dup_comments_work, func_dups_work)
+            })
         });
     let (project, engine_diags) = engine_res?;
     diagnostics.extend(engine_diags);
@@ -1041,7 +1079,10 @@ fn lint_rust(
 
     let clippy_phase = || -> PhaseOut {
         let t = Instant::now();
-        (clippy::lint_files(rs_files, config, is_partial), t.elapsed())
+        (
+            clippy::lint_files(rs_files, config, is_partial),
+            t.elapsed(),
+        )
     };
     let shear_phase = || -> PhaseOut {
         let t = Instant::now();
@@ -1133,8 +1174,11 @@ fn lint_typescript(
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
-    let type_program_opt: Option<&[&SourceFile]> =
-        if type_program_ts.is_empty() { None } else { Some(type_program_ts) };
+    let type_program_opt: Option<&[&SourceFile]> = if type_program_ts.is_empty() {
+        None
+    } else {
+        Some(type_program_ts)
+    };
 
     let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {

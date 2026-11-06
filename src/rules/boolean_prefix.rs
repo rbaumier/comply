@@ -21,7 +21,9 @@ const BOOLEAN_PREFIXES: &[&str] = &[
 #[must_use]
 pub fn has_boolean_prefix(name: &str) -> bool {
     let first = first_word(name);
-    BOOLEAN_PREFIXES.iter().any(|p| first.eq_ignore_ascii_case(p))
+    BOOLEAN_PREFIXES
+        .iter()
+        .any(|p| first.eq_ignore_ascii_case(p))
 }
 
 /// The leading word of an identifier, i.e. the prefix ending at the first word

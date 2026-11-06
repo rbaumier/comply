@@ -59,12 +59,11 @@ fn parse_comply_marker(path: &Path, line: &str, line_num: usize) -> Option<LineP
     // per-line marker text (`// comply-ignore-file:` contains the
     // per-line `// comply-ignore:` as a substring with extra suffix),
     // so we'd misclassify otherwise.
-    let (marker_byte, is_file_scope, marker_len) =
-        if let Some(b) = line.find(FILE_MARKER) {
-            (b, true, FILE_MARKER.len())
-        } else {
-            (line.find(MARKER)?, false, MARKER.len())
-        };
+    let (marker_byte, is_file_scope, marker_len) = if let Some(b) = line.find(FILE_MARKER) {
+        (b, true, FILE_MARKER.len())
+    } else {
+        (line.find(MARKER)?, false, MARKER.len())
+    };
     let prefix = &line[..marker_byte];
 
     if is_inside_string_literal(prefix) {
@@ -132,7 +131,9 @@ fn parse_eslint_disable(line: &str, line_num: usize) -> Option<LineParse> {
         let body = comment.body.trim_start();
         match strip_directive(body, ESLINT_DISABLE_NEXT_LINE) {
             Some(rest) => Some((comment, rest, line_num + 1)),
-            None => strip_directive(body, ESLINT_DISABLE_LINE).map(|rest| (comment, rest, line_num)),
+            None => {
+                strip_directive(body, ESLINT_DISABLE_LINE).map(|rest| (comment, rest, line_num))
+            }
         }
     })?;
     let before_comment = &line[..comment.start];
@@ -165,7 +166,10 @@ fn parse_eslint_disable(line: &str, line_num: usize) -> Option<LineParse> {
 /// name has to end where the directive does.
 fn strip_directive<'a>(body: &'a str, directive: &str) -> Option<&'a str> {
     let rest = body.strip_prefix(directive)?;
-    rest.chars().next().is_none_or(char::is_whitespace).then_some(rest)
+    rest.chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+        .then_some(rest)
 }
 
 /// True when the only thing before a comment opener is the `*` padding a block
@@ -424,7 +428,12 @@ mod tests {
 
     #[test]
     fn eslint_disable_next_line_targets_next_line() {
-        let lp = parse(Path::new("t.ts"), "  // eslint-disable-next-line no-console", 5).unwrap();
+        let lp = parse(
+            Path::new("t.ts"),
+            "  // eslint-disable-next-line no-console",
+            5,
+        )
+        .unwrap();
         assert_eq!(lp.target_line, Some(6));
         assert_eq!(lp.rule_ids, vec!["no-console"]);
         assert!(lp.is_comment_only_line);
@@ -433,8 +442,12 @@ mod tests {
 
     #[test]
     fn eslint_disable_line_targets_current_line() {
-        let lp = parse(Path::new("t.ts"), "console.log(x); // eslint-disable-line no-console", 5)
-            .unwrap();
+        let lp = parse(
+            Path::new("t.ts"),
+            "console.log(x); // eslint-disable-line no-console",
+            5,
+        )
+        .unwrap();
         assert_eq!(lp.target_line, Some(5));
         assert!(!lp.is_comment_only_line);
     }
@@ -470,8 +483,12 @@ mod tests {
 
     #[test]
     fn eslint_disable_block_form_alone_on_its_line_carries_no_code() {
-        let lp = parse(Path::new("t.ts"), "  /* eslint-disable-next-line no-console */  ", 1)
-            .unwrap();
+        let lp = parse(
+            Path::new("t.ts"),
+            "  /* eslint-disable-next-line no-console */  ",
+            1,
+        )
+        .unwrap();
         assert!(lp.is_comment_only_line);
     }
 

@@ -18,8 +18,8 @@
 //! config at load time, so a user file with `[rules.max-function-lines]
 //! max = 60` only changes that one knob, not the rest.
 
-use serde::Deserialize;
 use rustc_hash::FxHashMap;
+use serde::Deserialize;
 
 /// Top-level shape of a `comply.toml` file. Both sections are optional;
 /// an empty file is equivalent to "use every default".
@@ -80,4 +80,3 @@ pub struct OverrideConfig {
     #[serde(default)]
     pub disable: Vec<String>,
 }
-

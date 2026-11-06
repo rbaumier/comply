@@ -604,7 +604,15 @@ fn entry_with_filter(
 
     let backends: Vec<(Language, Backend)> = [Language::TypeScript, Language::Tsx]
         .iter()
-        .map(|&lang| (lang, Backend::Tsgolint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) }))
+        .map(|&lang| {
+            (
+                lang,
+                Backend::Tsgolint {
+                    rule: oxlint_key,
+                    post_filter: post_filter.as_ref().map(Arc::clone),
+                },
+            )
+        })
         .collect();
 
     RuleDef {
@@ -719,10 +727,8 @@ fn message_reports_intrinsic_error_type(message: &str) -> bool {
         let end = start + "error".len();
         search_from = end;
 
-        let preceded_ok = start == 0
-            || matches!(bytes[start - 1], b' ' | b'`');
-        let followed_ok = end == bytes.len()
-            || matches!(bytes[end], b' ' | b'`' | b'.');
+        let preceded_ok = start == 0 || matches!(bytes[start - 1], b' ' | b'`');
+        let followed_ok = end == bytes.len() || matches!(bytes[end], b' ' | b'`' | b'.');
         if preceded_ok && followed_ok {
             return true;
         }
@@ -752,7 +758,9 @@ impl PostFilter for CompositeFilter {
         source: Option<&str>,
         project: &crate::project::ProjectCtx,
     ) -> bool {
-        self.0.iter().all(|f| f.keep_with_project(diag, source, project))
+        self.0
+            .iter()
+            .all(|f| f.keep_with_project(diag, source, project))
     }
 }
 
@@ -1733,11 +1741,7 @@ fn nrtc_error_type_name(message: &str) -> Option<&str> {
         .find(|c: char| !nrtc_is_ident_byte(c as u8))
         .unwrap_or(base.len());
     let ident = &base[..ident_end];
-    if ident.is_empty() {
-        None
-    } else {
-        Some(ident)
-    }
+    if ident.is_empty() { None } else { Some(ident) }
 }
 
 /// True when `name` appears as an imported binding in any `import` statement of
@@ -1793,9 +1797,8 @@ fn nrtc_find_from_keyword(s: &str) -> Option<usize> {
         if &bytes[i..i + needle.len()] == needle {
             let before_ok = i == 0 || bytes[i - 1].is_ascii_whitespace();
             let after = i + needle.len();
-            let after_ok = after >= bytes.len()
-                || bytes[after].is_ascii_whitespace()
-                || bytes[after] == b'\'';
+            let after_ok =
+                after >= bytes.len() || bytes[after].is_ascii_whitespace() || bytes[after] == b'\'';
             if before_ok && after_ok {
                 return Some(i);
             }
@@ -1975,17 +1978,16 @@ fn ep_has_unit_conditional_expr(line: &str) -> bool {
         if &bytes[i..i + 7] == b"extends"
             && (i == 0 || !ep_is_ident_byte(bytes[i - 1]))
             && (i + 7 == bytes.len() || !ep_is_ident_byte(bytes[i + 7]))
-            && let Some((q_pos, c_pos)) = ep_find_ternary_after(line, i + 7) {
-                let arm1 = line[q_pos + 1..c_pos].trim();
-                let rest = &line[c_pos + 1..];
-                let end = rest
-                    .find([')', ',', ';'])
-                    .unwrap_or(rest.len());
-                let arm2 = rest[..end].trim();
-                if ep_is_unit_literal(arm1) && ep_is_unit_literal(arm2) {
-                    return true;
-                }
+            && let Some((q_pos, c_pos)) = ep_find_ternary_after(line, i + 7)
+        {
+            let arm1 = line[q_pos + 1..c_pos].trim();
+            let rest = &line[c_pos + 1..];
+            let end = rest.find([')', ',', ';']).unwrap_or(rest.len());
+            let arm2 = rest[..end].trim();
+            if ep_is_unit_literal(arm1) && ep_is_unit_literal(arm2) {
+                return true;
             }
+        }
         i += 1;
     }
     false
@@ -2074,7 +2076,8 @@ fn ep_contains_word(line: &str, word: &str) -> bool {
         if &line_bytes[i..i + word_bytes.len()] == word_bytes {
             let before_ok = i == 0 || !ep_is_ident_byte(line_bytes[i - 1]);
             let after_pos = i + word_bytes.len();
-            let after_ok = after_pos >= line_bytes.len() || !ep_is_ident_byte(line_bytes[after_pos]);
+            let after_ok =
+                after_pos >= line_bytes.len() || !ep_is_ident_byte(line_bytes[after_pos]);
             if before_ok && after_ok {
                 return true;
             }
@@ -2143,10 +2146,16 @@ fn ep_is_numeric_literal(s: &str) -> bool {
     if bytes.is_empty() {
         return false;
     }
-    let start = if bytes[0] == b'-' || bytes[0] == b'+' { 1 } else { 0 };
+    let start = if bytes[0] == b'-' || bytes[0] == b'+' {
+        1
+    } else {
+        0
+    };
     let rest = &s[start..];
     !rest.is_empty()
-        && rest.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '_')
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '_')
 }
 
 fn ep_is_string_literal(s: &str) -> bool {
@@ -2193,9 +2202,8 @@ impl PostFilter for StrictVoidReturnFilter {
 
 /// Collection-mutation methods whose return value is incidental — the call is
 /// made for its side effect, the returned length / set / boolean is discarded.
-const SVR_MUTATOR_METHODS: &[&str] = &[
-    "push", "unshift", "splice", "add", "set", "delete", "clear",
-];
+const SVR_MUTATOR_METHODS: &[&str] =
+    &["push", "unshift", "splice", "add", "set", "delete", "clear"];
 
 /// True when the diagnostic sits on a concise-body arrow (`=>` not opening a
 /// block) whose body *is* a method call to a known collection mutator
@@ -2363,7 +2371,8 @@ fn svr_is_vi_fn_alias(src: &str, ident: &str) -> bool {
                 let rest = rest.trim_start();
                 if let Some(after_ident) = rest.strip_prefix(ident) {
                     let next = after_ident.as_bytes().first().copied();
-                    if next.is_none_or(|b| !svr_is_ident_byte(b)) && after_ident.contains("vi.fn(") {
+                    if next.is_none_or(|b| !svr_is_ident_byte(b)) && after_ident.contains("vi.fn(")
+                    {
                         return true;
                     }
                 }
@@ -2467,11 +2476,7 @@ fn nivt_byte_offset(src: &str, line: usize, column: usize) -> Option<usize> {
 /// type, or a generic type-argument list. Returns `false` when no
 /// `TSVoidKeyword` covers the offset, so an unresolved position keeps the
 /// diagnostic.
-fn nivt_void_at_offset_is_valid_position(
-    src: &str,
-    path: &std::path::Path,
-    offset: usize,
-) -> bool {
+fn nivt_void_at_offset_is_valid_position(src: &str, path: &std::path::Path, offset: usize) -> bool {
     use crate::oxc_helpers::with_oxc_parse;
     use oxc_ast::AstKind;
     use oxc_span::GetSpan;
@@ -2513,14 +2518,16 @@ fn nivt_is_return_type_context(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::Function(f) => {
-                return f.return_type.as_ref().is_some_and(|ret| {
-                    void_start >= ret.span.start && void_start < ret.span.end
-                });
+                return f
+                    .return_type
+                    .as_ref()
+                    .is_some_and(|ret| void_start >= ret.span.start && void_start < ret.span.end);
             }
             AstKind::ArrowFunctionExpression(f) => {
-                return f.return_type.as_ref().is_some_and(|ret| {
-                    void_start >= ret.span.start && void_start < ret.span.end
-                });
+                return f
+                    .return_type
+                    .as_ref()
+                    .is_some_and(|ret| void_start >= ret.span.start && void_start < ret.span.end);
             }
             AstKind::TSFunctionType(ft) => {
                 let ret = ft.return_type.span;
@@ -2531,14 +2538,16 @@ fn nivt_is_return_type_context(
                 return void_start >= ret.start && void_start < ret.end;
             }
             AstKind::TSMethodSignature(ms) => {
-                return ms.return_type.as_ref().is_some_and(|ret| {
-                    void_start >= ret.span.start && void_start < ret.span.end
-                });
+                return ms
+                    .return_type
+                    .as_ref()
+                    .is_some_and(|ret| void_start >= ret.span.start && void_start < ret.span.end);
             }
             AstKind::TSCallSignatureDeclaration(cs) => {
-                return cs.return_type.as_ref().is_some_and(|ret| {
-                    void_start >= ret.span.start && void_start < ret.span.end
-                });
+                return cs
+                    .return_type
+                    .as_ref()
+                    .is_some_and(|ret| void_start >= ret.span.start && void_start < ret.span.end);
             }
             AstKind::TSTypeAliasDeclaration(_) | AstKind::TSInterfaceDeclaration(_) => {
                 return false;
@@ -2561,9 +2570,9 @@ fn nivt_is_generic_type_arg(
     for ancestor in semantic.nodes().ancestors(node.id()) {
         match ancestor.kind() {
             AstKind::TSTypeParameterInstantiation(_) => return true,
-            AstKind::Function(_)
-            | AstKind::ArrowFunctionExpression(_)
-            | AstKind::Class(_) => return false,
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) | AstKind::Class(_) => {
+                return false;
+            }
             _ => continue,
         }
     }
@@ -2652,10 +2661,7 @@ fn nie_is_expression(kind: oxc_ast::AstKind) -> bool {
 /// Classify the flagged argument. String/template literals and `+` expressions
 /// are string-like; arrow/function expressions are function values; an
 /// identifier is resolved to its binding.
-fn nie_kind_is_string_like(
-    kind: oxc_ast::AstKind,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
+fn nie_kind_is_string_like(kind: oxc_ast::AstKind, semantic: &oxc_semantic::Semantic) -> bool {
     use oxc_ast::AstKind;
     match kind {
         AstKind::StringLiteral(_) | AstKind::TemplateLiteral(_) | AstKind::BinaryExpression(_) => {
@@ -2754,7 +2760,10 @@ mod tests {
     fn drops_await_thenable_in_test_file() {
         let f = AwaitThenableFilter;
         let d = diag("src/features/product/product-row-actions.test.tsx");
-        assert!(!f.keep(&d, None), "await-thenable in .test.tsx must be suppressed");
+        assert!(
+            !f.keep(&d, None),
+            "await-thenable in .test.tsx must be suppressed"
+        );
     }
 
     #[test]
@@ -3084,7 +3093,8 @@ export function loader() {
     // Regression for #273: Effect.Effect return type must be dropped.
     #[test]
     fn drops_effect_return_type() {
-        let src = "function getUser(id: string): Effect.Effect<User, Err> {\n  return program;\n}\n";
+        let src =
+            "function getUser(id: string): Effect.Effect<User, Err> {\n  return program;\n}\n";
         let path = write_temp("pfa_effect_fn.ts", src);
         let (line, col) = line_col_of(src, "function");
         let src_content = source_for(&path);
@@ -3209,7 +3219,8 @@ export function loader() {
 
     #[test]
     fn nuc_drops_chain_after_jest_assertion_with_whitespace() {
-        let src = "const hint = maybe();\nexpect( hint ).not.toBeNull();\nconst len = hint?.value;\n";
+        let src =
+            "const hint = maybe();\nexpect( hint ).not.toBeNull();\nconst len = hint?.value;\n";
         let path = write_temp("nuc_jest_ws.test.tsx", src);
         let src_content = source_for(&path);
         let line = line_of(src, "hint?.value");
@@ -3219,7 +3230,8 @@ export function loader() {
 
     #[test]
     fn nuc_drops_optional_chain_after_jest_not_to_be_falsy() {
-        let src = "const hint = maybe();\nexpect(hint).not.toBeFalsy();\nconst len = hint?.value;\n";
+        let src =
+            "const hint = maybe();\nexpect(hint).not.toBeFalsy();\nconst len = hint?.value;\n";
         let path = write_temp("nuc_jest_not_falsy.test.tsx", src);
         let src_content = source_for(&path);
         let line = line_of(src, "hint?.value");
@@ -3239,7 +3251,8 @@ export function loader() {
 
     #[test]
     fn nuc_keeps_chain_when_assertion_is_on_different_var() {
-        let src = "const hint = maybe();\nexpect(other).not.toBeNull();\nconst len = hint?.value;\n";
+        let src =
+            "const hint = maybe();\nexpect(other).not.toBeNull();\nconst len = hint?.value;\n";
         let path = write_temp("nuc_jest_other_var.test.tsx", src);
         let src_content = source_for(&path);
         let line = line_of(src, "hint?.value");
@@ -3249,7 +3262,8 @@ export function loader() {
 
     #[test]
     fn nuc_keeps_chain_when_assertion_var_is_a_prefix() {
-        let src = "const hint = maybe();\nexpect(hintFoo).not.toBeNull();\nconst len = hint?.value;\n";
+        let src =
+            "const hint = maybe();\nexpect(hintFoo).not.toBeNull();\nconst len = hint?.value;\n";
         let path = write_temp("nuc_jest_prefix_var.test.tsx", src);
         let src_content = source_for(&path);
         let line = line_of(src, "hint?.value");
@@ -3663,7 +3677,8 @@ test('a', () => {
 
     #[test]
     fn svr_drops_promise_executor_set_interval() {
-        let src = "const sleep = (ms: number) => new Promise(resolve => setInterval(resolve, ms))\n";
+        let src =
+            "const sleep = (ms: number) => new Promise(resolve => setInterval(resolve, ms))\n";
         let path = write_temp("svr_promise_set_interval.ts", src);
         let (line, _) = line_col_of(src, "new Promise(");
         let src_content = source_for(&path);
@@ -3840,8 +3855,7 @@ test('a', () => {
 
     #[test]
     fn nd_drops_multiline_named_reexport() {
-        let src =
-            "export {\n  Circle,\n  Line,\n  Rect,\n} from './src/shapes';\n";
+        let src = "export {\n  Circle,\n  Line,\n  Rect,\n} from './src/shapes';\n";
         let path = write_temp("nd_multiline_reexport.ts", src);
         let (line, col) = line_col_of(src, "  Line,");
         let src_content = source_for(&path);
@@ -3887,7 +3901,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "new Line(");
         let src_content = source_for(&path);
         let f = NoDeprecatedFilter;
-        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+        assert!(f.keep(
+            &nd_diag(&path, line, col + "new ".len()),
+            Some(&src_content)
+        ));
     }
 
     // Regression for the review's MAJOR: a genuine use sitting BELOW a re-export
@@ -3900,19 +3917,24 @@ test('a', () => {
         let (line, col) = line_col_of(src, "new Line(");
         let src_content = source_for(&path);
         let f = NoDeprecatedFilter;
-        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+        assert!(f.keep(
+            &nd_diag(&path, line, col + "new ".len()),
+            Some(&src_content)
+        ));
     }
 
     // A use several lines below a multi-line re-export must still fire.
     #[test]
     fn nd_keeps_use_after_multiline_reexport() {
-        let src =
-            "export {\n  Foo,\n  Bar,\n} from './a';\nconst l = new Line();\n";
+        let src = "export {\n  Foo,\n  Bar,\n} from './a';\nconst l = new Line();\n";
         let path = write_temp("nd_use_after_multiline_reexport.ts", src);
         let (line, col) = line_col_of(src, "new Line(");
         let src_content = source_for(&path);
         let f = NoDeprecatedFilter;
-        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+        assert!(f.keep(
+            &nd_diag(&path, line, col + "new ".len()),
+            Some(&src_content)
+        ));
     }
 
     // A local `export { X }` WITHOUT a `from` source is the deprecated
@@ -3924,7 +3946,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "export { Line }");
         let src_content = source_for(&path);
         let f = NoDeprecatedFilter;
-        assert!(f.keep(&nd_diag(&path, line, col + "export { ".len()), Some(&src_content)));
+        assert!(f.keep(
+            &nd_diag(&path, line, col + "export { ".len()),
+            Some(&src_content)
+        ));
     }
 
     // `from` appearing as an identifier in a real expression must not be
@@ -3936,7 +3961,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "new Line(");
         let src_content = source_for(&path);
         let f = NoDeprecatedFilter;
-        assert!(f.keep(&nd_diag(&path, line, col + "new ".len()), Some(&src_content)));
+        assert!(f.keep(
+            &nd_diag(&path, line, col + "new ".len()),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4094,7 +4122,11 @@ test('a', () => {
     #[test]
     fn drops_unsafe_family_in_tsd_test_d_file() {
         let f = TypeTestFileFilter;
-        for rule in ["no-unsafe-call", "no-unsafe-argument", "no-unsafe-member-access"] {
+        for rule in [
+            "no-unsafe-call",
+            "no-unsafe-argument",
+            "no-unsafe-member-access",
+        ] {
             assert!(
                 !f.keep(&unsafe_diag("index.test-d.ts", rule), None),
                 "{rule} in a .test-d.ts type-test file must be suppressed"
@@ -4107,7 +4139,10 @@ test('a', () => {
     fn drops_unsafe_call_in_test_d_dir_and_tsx() {
         let f = TypeTestFileFilter;
         assert!(!f.keep(&unsafe_diag("test-d/components.ts", "no-unsafe-call"), None));
-        assert!(!f.keep(&unsafe_diag("src/Component.test-d.tsx", "no-unsafe-call"), None));
+        assert!(!f.keep(
+            &unsafe_diag("src/Component.test-d.tsx", "no-unsafe-call"),
+            None
+        ));
     }
 
     // Negative space: a plain `.test.ts` runtime unit test can carry a genuine
@@ -4115,7 +4150,11 @@ test('a', () => {
     #[test]
     fn keeps_unsafe_family_in_runtime_test_file() {
         let f = TypeTestFileFilter;
-        for rule in ["no-unsafe-call", "no-unsafe-argument", "no-unsafe-member-access"] {
+        for rule in [
+            "no-unsafe-call",
+            "no-unsafe-argument",
+            "no-unsafe-member-access",
+        ] {
             assert!(
                 f.keep(&unsafe_diag("src/api.test.ts", rule), None),
                 "{rule} in a runtime .test.ts unit test must still flag"
@@ -4152,10 +4191,22 @@ test('a', () => {
     fn drops_no_unsafe_intrinsic_error_type() {
         let f = ErrorTypeFilter;
         let cases = [
-            ("no-unsafe-return", "Unsafe return of a value of type error."),
-            ("no-unsafe-member-access", "Unsafe member access .cabinetId on an `error` typed value."),
-            ("no-unsafe-call", "Unsafe call of a(n) `error` type typed value."),
-            ("no-unsafe-assignment", "Unsafe assignment of an error typed value."),
+            (
+                "no-unsafe-return",
+                "Unsafe return of a value of type error.",
+            ),
+            (
+                "no-unsafe-member-access",
+                "Unsafe member access .cabinetId on an `error` typed value.",
+            ),
+            (
+                "no-unsafe-call",
+                "Unsafe call of a(n) `error` type typed value.",
+            ),
+            (
+                "no-unsafe-assignment",
+                "Unsafe assignment of an error typed value.",
+            ),
             (
                 "no-unsafe-argument",
                 "Unsafe argument of type error typed assigned to a parameter of type Foo.",
@@ -4214,18 +4265,33 @@ test('a', () => {
     // path/source filter alone would keep the finding.
     #[test]
     fn composite_drops_intrinsic_error_in_production() {
-        let f = CompositeFilter(vec![Arc::new(ErrorTypeFilter), Arc::new(TypeTestFileFilter)]);
-        let d = unsafe_msg_diag("no-unsafe-call", "Unsafe call of a(n) `error` type typed value.");
-        assert!(!f.keep(&d, None), "composite must drop the intrinsic error-type finding");
+        let f = CompositeFilter(vec![
+            Arc::new(ErrorTypeFilter),
+            Arc::new(TypeTestFileFilter),
+        ]);
+        let d = unsafe_msg_diag(
+            "no-unsafe-call",
+            "Unsafe call of a(n) `error` type typed value.",
+        );
+        assert!(
+            !f.keep(&d, None),
+            "composite must drop the intrinsic error-type finding"
+        );
     }
 
     // The composite keeps a genuine `any` finding in production source (both
     // inner filters keep it).
     #[test]
     fn composite_keeps_any_in_production() {
-        let f = CompositeFilter(vec![Arc::new(ErrorTypeFilter), Arc::new(TypeTestFileFilter)]);
+        let f = CompositeFilter(vec![
+            Arc::new(ErrorTypeFilter),
+            Arc::new(TypeTestFileFilter),
+        ]);
         let d = unsafe_msg_diag("no-unsafe-call", "Unsafe call of a(n) `any` typed value.");
-        assert!(f.keep(&d, None), "composite must keep a genuine any-type finding");
+        assert!(
+            f.keep(&d, None),
+            "composite must keep a genuine any-type finding"
+        );
     }
 
     // ── no-implied-eval ─────────────────────────────────────────────────────
@@ -4258,7 +4324,10 @@ test('a', () => {
         let col = col + "setImmediate(".len();
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(!f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4268,7 +4337,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "() =>");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(!f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4278,7 +4350,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "tick, 0");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(!f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(!f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     // Positive space: a string first argument is still implied eval.
@@ -4289,7 +4364,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "\"doStuff()\"");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4299,7 +4377,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "\"code\"");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4309,7 +4390,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "codeStr, 0");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     #[test]
@@ -4319,7 +4403,10 @@ test('a', () => {
         let (line, col) = line_col_of(src, "`alert(1)`");
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
-        assert!(f.keep(&implied_eval_diag(&path, line, col, TIMER_MSG), Some(&src_content)));
+        assert!(f.keep(
+            &implied_eval_diag(&path, line, col, TIMER_MSG),
+            Some(&src_content)
+        ));
     }
 
     // Positive space: the Function-constructor variant is always a true positive.
@@ -4331,6 +4418,9 @@ test('a', () => {
         let src_content = source_for(&path);
         let f = NoImpliedEvalFilter;
         let msg = "Implied eval. Do not use the Function constructor to create functions.";
-        assert!(f.keep(&implied_eval_diag(&path, line, col, msg), Some(&src_content)));
+        assert!(f.keep(
+            &implied_eval_diag(&path, line, col, msg),
+            Some(&src_content)
+        ));
     }
 }

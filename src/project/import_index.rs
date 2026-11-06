@@ -428,7 +428,8 @@ impl ImportIndex {
             .par_iter()
             .filter(|f| is_indexable(f.language))
             .map_init(Parser::new, |parser, file| {
-                extract_for(parser, file).map(|(canon, extract)| (file.path.clone(), canon, extract))
+                extract_for(parser, file)
+                    .map(|(canon, extract)| (file.path.clone(), canon, extract))
             })
             .flatten()
             .collect();
@@ -448,8 +449,7 @@ impl ImportIndex {
         let mut exports: FxHashMap<PathBuf, Vec<ExportedSymbol>> = FxHashMap::default();
         let mut imports: FxHashMap<PathBuf, Vec<ImportedSymbol>> = FxHashMap::default();
         let mut file_calls: FxHashMap<PathBuf, Vec<LocalCall>> = FxHashMap::default();
-        let known_paths: FxHashSet<PathBuf> =
-            per_file.iter().map(|(p, _)| p.clone()).collect();
+        let known_paths: FxHashSet<PathBuf> = per_file.iter().map(|(p, _)| p.clone()).collect();
 
         // Rust resolution is more involved than TS: specifiers are not file
         // paths but module paths (`crate::a::b::Sym`) that need a module graph
@@ -473,7 +473,12 @@ impl ImportIndex {
         // the rayon pool. The resolvers it reads (`rust_graph`, `known_paths`,
         // `path_resolver`) are immutable and `Sync`. Map insertion below stays
         // sequential: it's pure in-memory work and would only contend on locks.
-        type Resolved = (PathBuf, FileExtract, Vec<PathBuf>, Vec<(PathBuf, Vec<String>)>);
+        type Resolved = (
+            PathBuf,
+            FileExtract,
+            Vec<PathBuf>,
+            Vec<(PathBuf, Vec<String>)>,
+        );
         let resolved: Vec<Resolved> = per_file
             .into_par_iter()
             .map(|(path, mut extract)| {
@@ -503,19 +508,24 @@ impl ImportIndex {
                         .glob_imports
                         .iter()
                         .flat_map(|glob| {
-                            resolve_glob_import_targets(&path, &glob.pattern, &known_paths, &path_resolver)
-                                .into_iter()
-                                .map(move |target| ImportedSymbol {
-                                    local_name: String::new(),
-                                    imported_name: "*".into(),
-                                    kind: ImportKind::Namespace,
-                                    specifier: glob.pattern.clone(),
-                                    source_path: Some(target),
-                                    line: glob.line,
-                                    is_type_only: false,
-                                    is_runtime_value: true,
-                                    is_dynamic: !glob.is_eager,
-                                })
+                            resolve_glob_import_targets(
+                                &path,
+                                &glob.pattern,
+                                &known_paths,
+                                &path_resolver,
+                            )
+                            .into_iter()
+                            .map(move |target| ImportedSymbol {
+                                local_name: String::new(),
+                                imported_name: "*".into(),
+                                kind: ImportKind::Namespace,
+                                specifier: glob.pattern.clone(),
+                                source_path: Some(target),
+                                line: glob.line,
+                                is_type_only: false,
+                                is_runtime_value: true,
+                                is_dynamic: !glob.is_eager,
+                            })
                         })
                         .collect();
                     extract.imports.extend(glob_edges);
@@ -691,14 +701,16 @@ impl ImportIndex {
         // from one file collapse to a single importer (matching the old
         // `get_importers` scan semantics).
         let mut importers: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
-        let mut namespace_imported: FxHashSet<PathBuf> =
-            FxHashSet::default();
+        let mut namespace_imported: FxHashSet<PathBuf> = FxHashSet::default();
         for (importer, imps) in &imports {
             let mut seen: FxHashSet<&Path> = FxHashSet::default();
             for imp in imps {
                 if let Some(src) = &imp.source_path {
                     if seen.insert(src.as_path()) {
-                        importers.entry(src.clone()).or_default().push(importer.clone());
+                        importers
+                            .entry(src.clone())
+                            .or_default()
+                            .push(importer.clone());
                     }
                     if imp.kind == ImportKind::Namespace {
                         namespace_imported.insert(src.clone());
@@ -720,14 +732,15 @@ impl ImportIndex {
         // lint engine, so a once-per-project rule anchored on one would never run.
         let min_indexed = exports
             .keys()
-            .filter(|p| !Language::from_path(p.as_path()).is_some_and(Language::is_import_index_only))
+            .filter(|p| {
+                !Language::from_path(p.as_path()).is_some_and(Language::is_import_index_only)
+            })
             .min()
             .cloned();
 
         // Grow the client graph from the `"use client"` seeds over the forward
         // import / re-export edges, once, before rule dispatch.
-        let client_reachable =
-            compute_client_reachable(&client_seeds, &imports, &reexport_edges);
+        let client_reachable = compute_client_reachable(&client_seeds, &imports, &reexport_edges);
 
         Self {
             exports,
@@ -765,7 +778,9 @@ impl ImportIndex {
     /// Exports declared in `path`, or empty slice if the file isn't indexed.
     #[must_use]
     pub fn get_exports(&self, path: &Path) -> &[ExportedSymbol] {
-        self.exports.get(self.canonical_key(path)).map_or(&[], Vec::as_slice)
+        self.exports
+            .get(self.canonical_key(path))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Member names added to `path`'s module namespace by every project
@@ -781,7 +796,9 @@ impl ImportIndex {
     /// Imports declared in `path`, or empty slice if the file isn't indexed.
     #[must_use]
     pub fn get_imports(&self, path: &Path) -> &[ImportedSymbol] {
-        self.imports.get(self.canonical_key(path)).map_or(&[], Vec::as_slice)
+        self.imports
+            .get(self.canonical_key(path))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Resolved origin files of `path`'s `export … from` declarations.
@@ -840,7 +857,9 @@ impl ImportIndex {
     /// precomputed reverse-edge map.
     #[must_use]
     pub fn importer_count(&self, path: &Path) -> usize {
-        self.importers.get(self.canonical_key(path)).map_or(0, Vec::len)
+        self.importers
+            .get(self.canonical_key(path))
+            .map_or(0, Vec::len)
     }
 
     /// Canonical absolute path for a discovered file path. Uses the raw →
@@ -986,9 +1005,7 @@ impl ImportIndex {
         seen.insert(target);
         while let Some(current) = frontier.pop() {
             for (barrel, origins) in &self.star_edges {
-                if origins.iter().any(|origin| origin == current)
-                    && seen.insert(barrel.as_path())
-                {
+                if origins.iter().any(|origin| origin == current) && seen.insert(barrel.as_path()) {
                     found.push(barrel.as_path());
                     frontier.push(barrel.as_path());
                 }
@@ -1223,7 +1240,9 @@ fn star_reexported_names(
             if matches!(exp.kind, ExportKind::StarReExport) {
                 continue;
             }
-            resolved.entry(exp.name.clone()).or_insert_with(|| module.clone());
+            resolved
+                .entry(exp.name.clone())
+                .or_insert_with(|| module.clone());
         }
         if let Some(next) = star_edges.get(&module) {
             for src in next {
@@ -1299,7 +1318,9 @@ fn collect_bare_specifiers(
             if pkg.is_empty() || is_builtin_module(&pkg) {
                 continue;
             }
-            let entry = result.entry(pkg).or_insert(BareSpecifierInfo { type_only: true });
+            let entry = result
+                .entry(pkg)
+                .or_insert(BareSpecifierInfo { type_only: true });
             if !imp.is_type_only {
                 entry.type_only = false;
             }
@@ -1678,9 +1699,10 @@ fn compute_client_reachable(
         if let Some(imps) = imports.get(&file) {
             for imp in imps {
                 if let Some(src) = &imp.source_path
-                    && reachable.insert(src.clone()) {
-                        stack.push(src.clone());
-                    }
+                    && reachable.insert(src.clone())
+                {
+                    stack.push(src.clone());
+                }
             }
         }
         if let Some(targets) = reexport_edges.get(&file) {
@@ -2047,7 +2069,11 @@ fn first_src_attr(tag: &str) -> Option<String> {
         let Some(value_end_rel) = after[value_start..].find(quote) else {
             continue;
         };
-        return Some(after[value_start..value_start + value_end_rel].trim().to_string());
+        return Some(
+            after[value_start..value_start + value_end_rel]
+                .trim()
+                .to_string(),
+        );
     }
     None
 }
@@ -2565,7 +2591,12 @@ fn extract_glob_import(node: Node, source: &[u8], out: &mut Vec<GlobImport>) {
     let line = node.start_position().row + 1;
     match pattern_arg.kind() {
         "string" => {
-            push_glob_pattern(&glob_string_literal(pattern_arg, source), line, is_eager, out);
+            push_glob_pattern(
+                &glob_string_literal(pattern_arg, source),
+                line,
+                is_eager,
+                out,
+            );
         }
         "array" => {
             let mut inner = pattern_arg.walk();
@@ -2745,9 +2776,7 @@ fn extract_export(node: Node, source: &[u8], out: &mut Vec<ExportedSymbol>) {
                 .collect();
             let (name, local_name) = match ids.as_slice() {
                 [single] => (text_of(*single, source), None),
-                [local, aliased, ..] => {
-                    (text_of(*aliased, source), Some(text_of(*local, source)))
-                }
+                [local, aliased, ..] => (text_of(*aliased, source), Some(text_of(*local, source))),
                 [] => continue,
             };
             out.push(ExportedSymbol {
@@ -2862,7 +2891,12 @@ fn is_in_ts_namespace_body(node: Node) -> bool {
 /// deliberately not matched, so an overloaded `export function` yields one
 /// export, not two; ambient `export declare function` is handled separately by
 /// the caller.
-fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut Vec<ExportedSymbol>) {
+fn extract_declaration_export(
+    child: Node,
+    source: &[u8],
+    line: usize,
+    out: &mut Vec<ExportedSymbol>,
+) {
     match child.kind() {
         "function_declaration" | "generator_function_declaration" => {
             if let Some(id) = child
@@ -2935,7 +2969,11 @@ fn extract_declaration_export(child: Node, source: &[u8], line: usize, out: &mut
                 let is_primitive_literal = name_node.kind() == "identifier"
                     && declarator_binds_primitive_literal(decl, source);
                 let is_vue_ref_factory = name_node.kind() == "identifier"
-                    && declarator_binds_call_to(decl, source, crate::oxc_helpers::VUE_REF_FACTORIES);
+                    && declarator_binds_call_to(
+                        decl,
+                        source,
+                        crate::oxc_helpers::VUE_REF_FACTORIES,
+                    );
                 let is_pinia_store_factory = name_node.kind() == "identifier"
                     && declarator_binds_call_to(
                         decl,
@@ -3280,7 +3318,9 @@ fn default_export_bound_positional_params(export_node: Node, source: &[u8]) -> O
     let mut cursor = export_node.walk();
     for child in export_node.named_children(&mut cursor) {
         match child.kind() {
-            "function_declaration" | "generator_function_declaration" | "arrow_function"
+            "function_declaration"
+            | "generator_function_declaration"
+            | "arrow_function"
             | "function_expression" => return fn_bound_positional_params(child),
             "identifier" => {
                 return default_export_identifier_bound_positional_params(
@@ -3355,9 +3395,8 @@ fn named_declaration_binding<'t>(decl: Node<'t>, name: &str, source: &[u8]) -> O
             let mut cursor = decl.walk();
             decl.named_children(&mut cursor).find(|d| {
                 d.kind() == "variable_declarator"
-                    && d.child_by_field_name("name").is_some_and(|nm| {
-                        nm.kind() == "identifier" && text_of(nm, source) == name
-                    })
+                    && d.child_by_field_name("name")
+                        .is_some_and(|nm| nm.kind() == "identifier" && text_of(nm, source) == name)
             })
         }
         _ => None,
@@ -3577,7 +3616,8 @@ fn extract_ts_oxc(source: &str, path: &Path) -> Option<FileExtract> {
         if !comment.is_block() {
             continue;
         }
-        let body = &source[comment.content_span().start as usize..comment.content_span().end as usize];
+        let body =
+            &source[comment.content_span().start as usize..comment.content_span().end as usize];
         if !body.starts_with('*') {
             continue;
         }
@@ -3983,7 +4023,10 @@ fn import_binding_is_runtime_value(
 /// reference; a static field initializer or static block runs at class-definition
 /// (module-evaluation) time, so it is NOT deferred. A reference reached at the
 /// program root with no intervening deferred boundary is a module-eval-time read.
-fn reference_is_deferred(nodes: &oxc_semantic::AstNodes, ref_node_id: oxc_semantic::NodeId) -> bool {
+fn reference_is_deferred(
+    nodes: &oxc_semantic::AstNodes,
+    ref_node_id: oxc_semantic::NodeId,
+) -> bool {
     use oxc_ast::AstKind;
     for ancestor_id in nodes.ancestor_ids(ref_node_id) {
         match nodes.kind(ancestor_id) {
@@ -4021,7 +4064,10 @@ fn oxc_extract_export_named(
             // tree-sitter positional logic: `{ a }` => one identifier (a);
             // `{ b as c }` => two identifiers, exported name = c. A string-literal
             // alias is not an identifier in tree-sitter, so it falls back to local.
-            let local = spec.local.identifier_name().map(|id| id.as_str().to_string());
+            let local = spec
+                .local
+                .identifier_name()
+                .map(|id| id.as_str().to_string());
             // `export { x }` (no alias) has matching local/exported names; only
             // record `local_name` for `export { local as exported }`, matching
             // tree-sitter which exposes a single identifier in the unaliased case.
@@ -4117,16 +4163,15 @@ fn oxc_extract_export_named(
                 // with a string/number/boolean literal is a primitive-literal
                 // export. A destructuring pattern, or a call/member/template/
                 // compound initializer, is not.
-                let is_primitive_literal =
-                    matches!(&decl.id, BindingPattern::BindingIdentifier(_))
-                        && decl.init.as_ref().is_some_and(|init| {
-                            matches!(
-                                init,
-                                Expression::StringLiteral(_)
-                                    | Expression::NumericLiteral(_)
-                                    | Expression::BooleanLiteral(_)
-                            )
-                        });
+                let is_primitive_literal = matches!(&decl.id, BindingPattern::BindingIdentifier(_))
+                    && decl.init.as_ref().is_some_and(|init| {
+                        matches!(
+                            init,
+                            Expression::StringLiteral(_)
+                                | Expression::NumericLiteral(_)
+                                | Expression::BooleanLiteral(_)
+                        )
+                    });
                 // Parity with the tree-sitter `declarator_binds_call_to`: only a
                 // single plain-identifier binding initialized directly with the
                 // factory call carries the flag (`export const x = ref()`,
@@ -4147,8 +4192,10 @@ fn oxc_extract_export_named(
                 // Parity with the tree-sitter `declarator_bound_positional_params`:
                 // the positional-parameter bound of a binding initialized with an
                 // arrow or function expression (`export const f = (x) => …`).
-                let bound_positional_params =
-                    decl.init.as_ref().and_then(oxc_init_bound_positional_params);
+                let bound_positional_params = decl
+                    .init
+                    .as_ref()
+                    .and_then(oxc_init_bound_positional_params);
                 // The members of a factory object (`export const Node = { create(x) {…} }`,
                 // or one whose declared type names them). Only a single-identifier
                 // binding owns them; a destructuring pattern spreads several names
@@ -4332,7 +4379,11 @@ fn oxc_extract_cjs_export(
 
     // `exports.foo = …` / `module.exports.foo = …` → `foo` is a named export.
     if is_cjs_exports_target(&member.object) {
-        push(out, member.property.name.as_str().to_string(), ExportKind::Named);
+        push(
+            out,
+            member.property.name.as_str().to_string(),
+            ExportKind::Named,
+        );
     }
 }
 
@@ -4384,8 +4435,11 @@ fn cjs_object_export_names(obj: &oxc_ast::ast::ObjectExpression) -> Vec<String> 
                 } else {
                     std::mem::replace(seen_set, true)
                 };
-                let complement_seen =
-                    if matches!(prop.kind, PropertyKind::Get) { *seen_set } else { *seen_get };
+                let complement_seen = if matches!(prop.kind, PropertyKind::Get) {
+                    *seen_set
+                } else {
+                    *seen_get
+                };
                 // Emit on the first accessor for this key (`complement_seen` is
                 // false), or on a repeat of the same kind (`same_kind_seen` is a
                 // genuine `get x` + `get x` / `set x` + `set x` redeclaration).
@@ -4511,9 +4565,7 @@ fn oxc_init_bound_positional_params(init: &oxc_ast::ast::Expression) -> Option<u
         Expression::ArrowFunctionExpression(f) => {
             crate::oxc_helpers::bound_positional_params(&f.params)
         }
-        Expression::FunctionExpression(f) => {
-            crate::oxc_helpers::bound_positional_params(&f.params)
-        }
+        Expression::FunctionExpression(f) => crate::oxc_helpers::bound_positional_params(&f.params),
         _ => None,
     }
 }
@@ -4570,9 +4622,10 @@ fn oxc_expr_bound_positional_params(
     let scoping = semantic.scoping();
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     match semantic.nodes().kind(scoping.symbol_declaration(sym_id)) {
-        AstKind::VariableDeclarator(decl) => {
-            decl.init.as_ref().and_then(oxc_init_bound_positional_params)
-        }
+        AstKind::VariableDeclarator(decl) => decl
+            .init
+            .as_ref()
+            .and_then(oxc_init_bound_positional_params),
         AstKind::Function(func) => crate::oxc_helpers::bound_positional_params(&func.params),
         _ => None,
     }
@@ -4785,8 +4838,11 @@ fn oxc_extract_glob_import(
         return;
     };
     // `globEager` is eager by definition; `glob` only when its options say so.
-    let is_eager =
-        prop == "globEager" || call.arguments.get(1).is_some_and(oxc_glob_options_are_eager);
+    let is_eager = prop == "globEager"
+        || call
+            .arguments
+            .get(1)
+            .is_some_and(oxc_glob_options_are_eager);
     let line = oxc_line_at(lines, call.span.start as usize);
     match first {
         Argument::StringLiteral(lit) => {
@@ -4830,8 +4886,7 @@ fn oxc_glob_options_are_eager(options: &oxc_ast::ast::Argument) -> bool {
             PropertyKey::StringLiteral(lit) => lit.value.as_str(),
             _ => return false,
         };
-        key_name == "eager"
-            && matches!(&prop.value, Expression::BooleanLiteral(lit) if lit.value)
+        key_name == "eager" && matches!(&prop.value, Expression::BooleanLiteral(lit) if lit.value)
     })
 }
 
@@ -4936,8 +4991,7 @@ fn resolve_glob_import_targets(
     // directory in the static prefix is a symlink; fall back to lexical
     // normalization for synthetic paths that don't exist on disk (mirrors
     // `resolve_dynamic_dir`).
-    let resolved_base =
-        std::fs::canonicalize(&base).unwrap_or_else(|_| lexical_normalize(&base));
+    let resolved_base = std::fs::canonicalize(&base).unwrap_or_else(|_| lexical_normalize(&base));
     let Ok(glob) = GlobBuilder::new(remainder).literal_separator(true).build() else {
         return Vec::new();
     };
@@ -5085,16 +5139,12 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
 
     // Explicit .d.* imports: existence-only check, no `known` membership required.
     // .d.ts files are intentionally excluded from the scan set but are valid import targets.
-    if raw
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| {
-            n.ends_with(".d.ts")
-                || n.ends_with(".d.mts")
-                || n.ends_with(".d.cts")
-                || n.ends_with(".d.tsx")
-        })
-    {
+    if raw.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+        n.ends_with(".d.ts")
+            || n.ends_with(".d.mts")
+            || n.ends_with(".d.cts")
+            || n.ends_with(".d.tsx")
+    }) {
         return std::fs::canonicalize(raw).ok();
     }
 
@@ -5137,14 +5187,15 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
         }
     } else {
         if raw.extension().is_some()
-            && let Some(raw_str) = raw.to_str() {
-                for ext in EXTS {
-                    let n = lexical_normalize(&PathBuf::from(format!("{raw_str}.{ext}")));
-                    if known.contains(&n) {
-                        return Some(n);
-                    }
+            && let Some(raw_str) = raw.to_str()
+        {
+            for ext in EXTS {
+                let n = lexical_normalize(&PathBuf::from(format!("{raw_str}.{ext}")));
+                if known.contains(&n) {
+                    return Some(n);
                 }
             }
+        }
         for ext in EXTS {
             let n = lexical_normalize(&raw.with_extension(ext));
             if known.contains(&n) {
@@ -5299,7 +5350,8 @@ impl OxcPathResolver {
         // aliases are synthesized below from these, so they resolve even when the
         // dir's `tsconfig.json` `extends` an absent package and oxc resolution
         // (which would otherwise handle `imports`) fails for the whole scope.
-        let mut subpath_import_dirs: FxHashMap<PathBuf, Vec<(String, String)>> = FxHashMap::default();
+        let mut subpath_import_dirs: FxHashMap<PathBuf, Vec<(String, String)>> =
+            FxHashMap::default();
 
         for path in known_paths {
             let Some(mut dir) = path.parent() else {
@@ -5316,7 +5368,9 @@ impl OxcPathResolver {
                 }
                 if let Some(pkg) = read_package_json(&dir.join("package.json")) {
                     if let Some(name) = pkg.name {
-                        workspace_packages.entry(name).or_insert_with(|| dir.to_path_buf());
+                        workspace_packages
+                            .entry(name)
+                            .or_insert_with(|| dir.to_path_buf());
                     }
                     if !pkg.subpath_import_targets.is_empty() {
                         subpath_import_dirs
@@ -5373,15 +5427,14 @@ impl OxcPathResolver {
             if resolvers.iter().any(|r| &r.dir == dir) {
                 continue;
             }
-            let aliases = Self::aliases_for_dir(
-                dir,
-                None,
-                &nuxt_dirs,
-                &vite_dirs,
-                &subpath_import_dirs,
-            );
+            let aliases =
+                Self::aliases_for_dir(dir, None, &nuxt_dirs, &vite_dirs, &subpath_import_dirs);
             let oxc = Self::make_oxc(None);
-            resolvers.push(TsconfigResolver { dir: dir.clone(), aliases, oxc });
+            resolvers.push(TsconfigResolver {
+                dir: dir.clone(),
+                aliases,
+                oxc,
+            });
         }
 
         resolvers.sort_by_key(|r| std::cmp::Reverse(r.dir.as_os_str().len()));
@@ -5559,9 +5612,10 @@ impl OxcPathResolver {
 
         // Try tsconfig path aliases first.
         if let Some(e) = entry
-            && let Some(resolved) = Self::resolve_alias(specifier, &e.aliases, known) {
-                return Some(resolved);
-            }
+            && let Some(resolved) = Self::resolve_alias(specifier, &e.aliases, known)
+        {
+            return Some(resolved);
+        }
 
         // Cross-package workspace import by name: a bare specifier whose head is
         // a sibling package's `name` resolves to that package's on-disk source,
@@ -5636,7 +5690,10 @@ impl OxcPathResolver {
     /// [`Self::resolve_alias`] selects the first alias whose expansion names a
     /// real file); `None` when no alias maps the prefix to a directory.
     fn resolve_alias_dir(&self, importer: &Path, prefix: &str) -> Option<PathBuf> {
-        let entry = self.resolvers.iter().find(|e| importer.starts_with(&e.dir))?;
+        let entry = self
+            .resolvers
+            .iter()
+            .find(|e| importer.starts_with(&e.dir))?;
         Self::expand_alias_targets(prefix, &entry.aliases).find(|dir| dir.is_dir())
     }
 
@@ -5732,8 +5789,10 @@ fn macro_may_declare_mods(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// True when `text` holds `mod <ident>;` as tokens.
 fn text_declares_mod(text: &str) -> bool {
     text.match_indices("mod").any(|(at, _)| {
-        let before_is_boundary =
-            !text[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let before_is_boundary = !text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
         let rest = &text[at + 3..];
         let name = rest.trim_start();
         let ident_len = name
@@ -6055,10 +6114,7 @@ struct RustModuleGraph {
 }
 
 impl RustModuleGraph {
-    fn build(
-        per_file: &[(PathBuf, FileExtract)],
-        known_paths: &FxHashSet<PathBuf>,
-    ) -> Self {
+    fn build(per_file: &[(PathBuf, FileExtract)], known_paths: &FxHashSet<PathBuf>) -> Self {
         let rust_files: Vec<&PathBuf> = per_file
             .iter()
             .filter(|(p, _)| matches!(p.extension().and_then(|e| e.to_str()), Some("rs")))
@@ -6407,9 +6463,15 @@ mod tests {
             local_script_specifier("./initialize.tsx"),
             Some("./initialize.tsx".to_string())
         );
-        assert_eq!(local_script_specifier("../shared/a.ts"), Some("../shared/a.ts".to_string()));
+        assert_eq!(
+            local_script_specifier("../shared/a.ts"),
+            Some("../shared/a.ts".to_string())
+        );
         // Vite's bundler-root-absolute form resolves relative to the document dir.
-        assert_eq!(local_script_specifier("/src/main.tsx"), Some("./src/main.tsx".to_string()));
+        assert_eq!(
+            local_script_specifier("/src/main.tsx"),
+            Some("./src/main.tsx".to_string())
+        );
         for external in [
             "https://cdn.example.com/x.js",
             "http://cdn.example.com/x.js",
@@ -6478,8 +6540,14 @@ mod tests {
 
         // Seeding the HTML file as a BFS root reaches the entry module and, transitively, its imports.
         let reachable = index.reachable_from(&[html.as_path()]);
-        assert!(reachable.contains(initialize), "entry module must be reachable from the HTML entry");
-        assert!(reachable.contains(router), "modules imported by the entry must be reachable too");
+        assert!(
+            reachable.contains(initialize),
+            "entry module must be reachable from the HTML entry"
+        );
+        assert!(
+            reachable.contains(router),
+            "modules imported by the entry must be reachable too"
+        );
     }
 
     // Regression for #7436: a dynamic `import()` is a deferred, code-split load
@@ -7155,8 +7223,7 @@ mod tests {
 
     #[test]
     fn js_extension_specifier_without_any_source_stays_unresolved() {
-        let (_dir, index, paths) =
-            build_index(&[("app.ts", "import { x } from './missing.js';")]);
+        let (_dir, index, paths) = build_index(&[("app.ts", "import { x } from './missing.js';")]);
         let imports = index.get_imports(&paths[0]);
         assert_eq!(imports.len(), 1);
         assert!(imports[0].source_path.is_none());
@@ -7494,7 +7561,9 @@ mod tests {
         ]);
         let composable_canon = &paths[1];
         assert!(
-            !index.get_usages(composable_canon, "useChunkUpload").is_empty(),
+            !index
+                .get_usages(composable_canon, "useChunkUpload")
+                .is_empty(),
             "useChunkUpload is imported by a .vue SFC and must not be dead",
         );
     }
@@ -7740,8 +7809,14 @@ mod tests {
         .unwrap();
 
         let sources = [
-            SourceFile { path: store.clone(), language: Language::TypeScript },
-            SourceFile { path: sidebar.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: store.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: sidebar.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -7820,8 +7895,14 @@ mod tests {
         .unwrap();
 
         let sources = [
-            SourceFile { path: lib.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: lib.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -7855,7 +7936,11 @@ mod tests {
         fs::create_dir_all(dir.path().join("service")).unwrap();
         fs::create_dir_all(dir.path().join("plugins")).unwrap();
         let directive = dir.path().join("directives/CodeHighlight.ts");
-        fs::write(&directive, "const CodeHighlight = {};\nexport default CodeHighlight;\n").unwrap();
+        fs::write(
+            &directive,
+            "const CodeHighlight = {};\nexport default CodeHighlight;\n",
+        )
+        .unwrap();
         let service = dir.path().join("service/NodeService.ts");
         fs::write(
             &service,
@@ -7869,9 +7954,18 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: directive.clone(), language: Language::TypeScript },
-            SourceFile { path: service.clone(), language: Language::TypeScript },
-            SourceFile { path: plugin.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: directive.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: service.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: plugin.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -7946,7 +8040,11 @@ mod tests {
         // No nuxt.config.*: not a Nuxt project.
         fs::create_dir_all(dir.path().join("directives")).unwrap();
         let directive = dir.path().join("directives/CodeHighlight.ts");
-        fs::write(&directive, "const CodeHighlight = {};\nexport default CodeHighlight;\n").unwrap();
+        fs::write(
+            &directive,
+            "const CodeHighlight = {};\nexport default CodeHighlight;\n",
+        )
+        .unwrap();
         let consumer = dir.path().join("consumer.ts");
         fs::write(
             &consumer,
@@ -7954,8 +8052,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: directive.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: directive.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -7997,8 +8101,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: service.clone(), language: Language::JavaScript },
-            SourceFile { path: consumer.clone(), language: Language::JavaScript },
+            SourceFile {
+                path: service.clone(),
+                language: Language::JavaScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::JavaScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8055,8 +8165,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: helper.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: helper.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8095,8 +8211,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: service.clone(), language: Language::JavaScript },
-            SourceFile { path: consumer.clone(), language: Language::JavaScript },
+            SourceFile {
+                path: service.clone(),
+                language: Language::JavaScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::JavaScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8127,7 +8249,10 @@ mod tests {
             "import { thing } from '@/does/not/exist';\nexport const used = thing;\n",
         )
         .unwrap();
-        let sources = [SourceFile { path: consumer.clone(), language: Language::JavaScript }];
+        let sources = [SourceFile {
+            path: consumer.clone(),
+            language: Language::JavaScript,
+        }];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
         let consumer_canon = fs::canonicalize(&consumer).unwrap();
@@ -8170,9 +8295,18 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: real.clone(), language: Language::TypeScript },
-            SourceFile { path: decoy.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: real.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: decoy.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8225,9 +8359,18 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: root_service.clone(), language: Language::TypeScript },
-            SourceFile { path: src_decoy.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: root_service.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: src_decoy.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8279,8 +8422,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: auth.clone(), language: Language::TypeScript },
-            SourceFile { path: route.clone(), language: Language::Tsx },
+            SourceFile {
+                path: auth.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: route.clone(),
+                language: Language::Tsx,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8355,8 +8504,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: target.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: target.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8398,8 +8553,14 @@ mod tests {
         )
         .unwrap();
         let sources = [
-            SourceFile { path: config.clone(), language: Language::TypeScript },
-            SourceFile { path: consumer.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: config.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: consumer.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8440,10 +8601,22 @@ mod tests {
         fs::write(&nested, "export const z = 1;\n").unwrap();
 
         let sources = [
-            SourceFile { path: main, language: Language::TypeScript },
-            SourceFile { path: a.clone(), language: Language::TypeScript },
-            SourceFile { path: b.clone(), language: Language::TypeScript },
-            SourceFile { path: nested.clone(), language: Language::TypeScript },
+            SourceFile {
+                path: main,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: a.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: b.clone(),
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: nested.clone(),
+                language: Language::TypeScript,
+            },
         ];
         let refs: Vec<&SourceFile> = sources.iter().collect();
         let index = ImportIndex::build(&refs);
@@ -8475,7 +8648,10 @@ mod tests {
             ("import.meta.glob('./modules/*.ts', { eager: false })", true),
             ("import.meta.glob('./modules/*.ts', opts)", true),
             ("import.meta.glob('./modules/*.ts', { eager: true })", false),
-            ("import.meta.glob('./modules/*.ts', { 'eager': true })", false),
+            (
+                "import.meta.glob('./modules/*.ts', { 'eager': true })",
+                false,
+            ),
             ("import.meta.globEager('./modules/*.ts')", false),
         ] {
             let main_src = format!("declare const opts: any;\nexport const m = {call};\n");
@@ -8821,8 +8997,10 @@ mod tests {
         // (TypeScript). None of the cases use JSX, so both must agree, and the
         // oxc `SourceType` is selected from the path extension exactly as in
         // production (`source_type_for_path`).
-        let variants: &[(Language, &str)] =
-            &[(Language::Tsx, "diff.tsx"), (Language::TypeScript, "diff.ts")];
+        let variants: &[(Language, &str)] = &[
+            (Language::Tsx, "diff.tsx"),
+            (Language::TypeScript, "diff.ts"),
+        ];
         for (lang, file) in variants {
             let path = Path::new(file);
             for (i, src) in DIFF_CASES.iter().enumerate() {
@@ -8871,7 +9049,10 @@ mod tests {
         assert_eq!(aug.specifier, "../glTFFileLoader");
         let mut members = aug.members.clone();
         members.sort();
-        assert_eq!(members, vec!["Extra", "MaterialVariantsController", "helper"]);
+        assert_eq!(
+            members,
+            vec!["Extra", "MaterialVariantsController", "helper"]
+        );
         // The augmentation block's members are not the file's own exports — only
         // the top-level `local` is.
         let own: Vec<&str> = extract.exports.iter().map(|e| e.name.as_str()).collect();
@@ -8915,7 +9096,10 @@ mod tests {
             bound("function guard(v) { return !!v; }\nexport default guard;"),
             Some(1)
         );
-        assert_eq!(bound("export default function only(x) { return x; }"), Some(1));
+        assert_eq!(
+            bound("export default function only(x) { return x; }"),
+            Some(1)
+        );
         // A two-parameter default carries its own bound; `binds_at_most(1)` is
         // then false while `binds_at_most(2)` holds (`reduce`'s budget, #8137).
         assert_eq!(
@@ -8975,10 +9159,7 @@ mod tests {
         // to no module.
         let mut known = FxHashSet::default();
         known.insert(PathBuf::from("/proj/comp/index.ts"));
-        assert_eq!(
-            probe_path(Path::new("/proj/comp/index.less"), &known),
-            None,
-        );
+        assert_eq!(probe_path(Path::new("/proj/comp/index.less"), &known), None,);
         // Same for an image asset with a script sibling of the same stem.
         let mut known = FxHashSet::default();
         known.insert(PathBuf::from("/proj/assets/logo.ts"));

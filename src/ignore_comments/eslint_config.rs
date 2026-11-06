@@ -68,7 +68,10 @@ fn collect_off_rules_from_comment(body: &str, off: &mut Vec<String>) {
 /// True when an ESLint severity value means "off": the scalar `0` / `"off"` /
 /// `'off'`, or an options array whose first element is one of those.
 fn is_off_severity(value: &str) -> bool {
-    let value = value.strip_prefix('[').map(str::trim_start).unwrap_or(value);
+    let value = value
+        .strip_prefix('[')
+        .map(str::trim_start)
+        .unwrap_or(value);
     // The severity is the first array element or the whole scalar value; stop at
     // the comma that separates it from the options object.
     let token = value.split(',').next().unwrap_or(value).trim();

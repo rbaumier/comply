@@ -317,7 +317,13 @@ fn span_is_projection_shaped(span: &str) -> bool {
 /// and the object (`TABLE`/`TYPE`) — e.g. `CREATE OR REPLACE TYPE`,
 /// `CREATE GLOBAL TEMPORARY TABLE`, `CREATE UNLOGGED TABLE`.
 pub(crate) const DDL_MODIFIERS: &[&str] = &[
-    "or", "replace", "temp", "temporary", "global", "local", "unlogged",
+    "or",
+    "replace",
+    "temp",
+    "temporary",
+    "global",
+    "local",
+    "unlogged",
 ];
 
 /// Returns true if `text` looks like a SQL DDL statement (schema
@@ -382,9 +388,9 @@ pub fn contains_complete_ddl_statement(text: &str) -> bool {
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .filter(|w| !w.is_empty())
         .collect();
-    DDL_STATEMENT_SHAPES.iter().any(|(verb, object)| {
-        words.windows(3).any(|w| w[0] == *verb && w[1] == *object)
-    })
+    DDL_STATEMENT_SHAPES
+        .iter()
+        .any(|(verb, object)| words.windows(3).any(|w| w[0] == *verb && w[1] == *object))
 }
 
 /// Returns true if `lower_text` (already lowercase) contains `word`
@@ -464,9 +470,10 @@ fn words_adjacent(lower_text: &str, first: &str, second: &str) -> bool {
             j += 1;
         }
         if let Some((second_start, _)) = find_word(lower_text, second, j)
-            && second_start == j {
-                return true;
-            }
+            && second_start == j
+        {
+            return true;
+        }
         from = first_end;
     }
     false
@@ -535,7 +542,9 @@ pub fn targets_system_catalog(text: &str) -> bool {
     if lower.contains("information_schema.") {
         return true;
     }
-    SYSTEM_CATALOG_TABLES.iter().any(|t| contains_word(&lower, t))
+    SYSTEM_CATALOG_TABLES
+        .iter()
+        .any(|t| contains_word(&lower, t))
 }
 
 /// Tree-sitter node kinds that represent string literals in TS / TSX / JS.
@@ -592,9 +601,7 @@ mod tests {
             "Update one user. const u = await prisma.user.update({ where: { id } })"
         ));
         // CLI help text describing a migrate command.
-        assert!(!is_sql_string(
-            "Update the database schema with migrations"
-        ));
+        assert!(!is_sql_string("Update the database schema with migrations"));
     }
 
     #[test]
@@ -728,7 +735,9 @@ mod tests {
 
     #[test]
     fn detects_update_set() {
-        assert!(is_sql_string("UPDATE users SET active = false WHERE id = 1"));
+        assert!(is_sql_string(
+            "UPDATE users SET active = false WHERE id = 1"
+        ));
     }
 
     #[test]
@@ -869,7 +878,9 @@ mod tests {
         assert!(is_clickhouse_ddl(
             "CREATE TABLE t (id UInt64) ENGINE=ReplacingMergeTree ORDER BY id"
         ));
-        assert!(is_clickhouse_ddl("CREATE TABLE t (x Int64) ENGINE = TinyLog"));
+        assert!(is_clickhouse_ddl(
+            "CREATE TABLE t (x Int64) ENGINE = TinyLog"
+        ));
         // ClickHouse type wrappers / functions.
         assert!(is_clickhouse_ddl(
             "ALTER TABLE X ADD COLUMN IF NOT EXISTS staled_at Nullable(DateTime64(6, 'UTC'))"
@@ -880,20 +891,22 @@ mod tests {
         assert!(is_clickhouse_ddl(
             "ALTER TABLE X ADD COLUMN ts DateTime64(3)"
         ));
-        assert!(is_clickhouse_ddl("ALTER TABLE X UPDATE ts = now64() WHERE 1"));
+        assert!(is_clickhouse_ddl(
+            "ALTER TABLE X UPDATE ts = now64() WHERE 1"
+        ));
         // ON CLUSTER and MODIFY COLUMN productions.
         assert!(is_clickhouse_ddl(
             "CREATE TABLE t ON CLUSTER my_cluster (id UInt64) ENGINE = Log"
         ));
-        assert!(is_clickhouse_ddl(
-            "ALTER TABLE X MODIFY COLUMN c String"
-        ));
+        assert!(is_clickhouse_ddl("ALTER TABLE X MODIFY COLUMN c String"));
     }
 
     #[test]
     fn is_clickhouse_ddl_rejects_postgres_ddl() {
         // Plain Postgres migrations carry no ClickHouse grammar marker.
-        assert!(!is_clickhouse_ddl("CREATE TABLE users (id serial primary key)"));
+        assert!(!is_clickhouse_ddl(
+            "CREATE TABLE users (id serial primary key)"
+        ));
         assert!(!is_clickhouse_ddl(
             "ALTER TABLE users ALTER COLUMN name SET NOT NULL"
         ));
@@ -905,12 +918,12 @@ mod tests {
         assert!(!is_clickhouse_ddl(
             "ALTER TABLE cars ADD COLUMN engine TEXT"
         ));
-        assert!(!is_clickhouse_ddl(
-            "SELECT * FROM t WHERE is_nullable(col)"
-        ));
+        assert!(!is_clickhouse_ddl("SELECT * FROM t WHERE is_nullable(col)"));
         // A Postgres comparison against a column named `engine` — the RHS is a
         // quoted string / number, not an engine-name identifier.
-        assert!(!is_clickhouse_ddl("UPDATE cars SET engine = 'v8' WHERE id = 1"));
+        assert!(!is_clickhouse_ddl(
+            "UPDATE cars SET engine = 'v8' WHERE id = 1"
+        ));
         assert!(!is_clickhouse_ddl("SELECT * FROM cars WHERE engine = 5"));
     }
 

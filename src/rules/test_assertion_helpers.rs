@@ -19,8 +19,12 @@ const MAX_HELPER_DEPTH: u32 = 3;
 /// end means rendering succeeded, so the render call *is* the assertion. React
 /// Testing Library and `react-dom/server` document these as valid no-throw
 /// tests, so a body relying solely on them is not assertion-less.
-pub(crate) const RENDER_ASSERTION_CALLS: &[&str] =
-    &["render", "renderToString", "renderToStaticMarkup", "renderHook"];
+pub(crate) const RENDER_ASSERTION_CALLS: &[&str] = &[
+    "render",
+    "renderToString",
+    "renderToStaticMarkup",
+    "renderHook",
+];
 
 /// The `node:assert` named assertion functions. Destructured and called
 /// directly (`strictEqual(a, b)`, `deepStrictEqual(actual, expected)`), they
@@ -474,9 +478,10 @@ fn declaration_is_promise_executor_param(
         AstKind::ArrowFunctionExpression(f) => &f.params,
         _ => return false,
     };
-    params.items.get(param_index).is_some_and(|param| {
-        param.span.start <= decl_span.start && decl_span.end <= param.span.end
-    })
+    params
+        .items
+        .get(param_index)
+        .is_some_and(|param| param.span.start <= decl_span.start && decl_span.end <= param.span.end)
 }
 
 /// True when the test callback declares a first formal parameter (the
@@ -517,7 +522,11 @@ pub(crate) fn test_callback_uses_done_param(
     let Some(sym_id) = id.symbol_id.get() else {
         return false;
     };
-    semantic.scoping().get_resolved_references(sym_id).next().is_some()
+    semantic
+        .scoping()
+        .get_resolved_references(sym_id)
+        .next()
+        .is_some()
 }
 
 /// True when a call within `body_span` resolves to a same-file helper function

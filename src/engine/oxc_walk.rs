@@ -4,11 +4,11 @@
 //! tree cursor we iterate the flat pre-order `AstNodes` vec. Dispatch
 //! uses `AstKind` discriminant (u8) for O(1) lookup.
 
+use super::prefilter::source_matches_prefilter;
 use super::{LangDispatch, WorkerState};
 use crate::diagnostic::Diagnostic;
 use crate::rules::backend::CheckCtx;
 use oxc_semantic::Semantic;
-use super::prefilter::source_matches_prefilter;
 
 /// Per-rule "pre-parse" enabled flags: config + test/relaxed-dir skips +
 /// prefilter — everything that does not need the parsed AST. Computed once per

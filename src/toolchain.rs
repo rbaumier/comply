@@ -39,7 +39,9 @@ mod tests {
 
     #[test]
     fn unusable_renders_a_single_sentence() {
-        let err = ToolchainError::Unusable { what: "`node` was not found".to_owned() };
+        let err = ToolchainError::Unusable {
+            what: "`node` was not found".to_owned(),
+        };
         assert_eq!(err.to_string(), "`node` was not found.");
     }
 }

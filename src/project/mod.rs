@@ -20,8 +20,8 @@
 //! - Lazy fields use `OnceLock<Option<T>>`; parse failures cache as `None`
 //!   (no retry within the run) and emit one stderr warning per field.
 
-use std::collections::{BTreeMap, BTreeSet};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -383,9 +383,7 @@ impl PackageJson {
     /// as `import.meta.dirname` landing in 20.11 and 21.2).
     pub fn min_node_version(&self) -> Option<(u32, u32)> {
         let spec = self.engines.get("node")?;
-        spec.split("||")
-            .filter_map(parse_node_range_min)
-            .min()
+        spec.split("||").filter_map(parse_node_range_min).min()
     }
 
     /// True if `spec` is a Node.js subpath import declared in this manifest's
@@ -766,7 +764,10 @@ fn cli_runner_binary_candidates(name: &str) -> Vec<String> {
         }
         return candidates;
     }
-    if let Some(base) = name.strip_suffix("-cli").or_else(|| name.strip_suffix("-bin")) {
+    if let Some(base) = name
+        .strip_suffix("-cli")
+        .or_else(|| name.strip_suffix("-bin"))
+    {
         candidates.push(name.to_string());
         if !base.is_empty() {
             candidates.push(base.to_string());
@@ -923,9 +924,7 @@ fn wildcard_target_matches(pattern: &str, rel: &str) -> bool {
     let Some((prefix, suffix)) = pattern.split_once('*') else {
         return false;
     };
-    rel.len() > prefix.len() + suffix.len()
-        && rel.starts_with(prefix)
-        && rel.ends_with(suffix)
+    rel.len() > prefix.len() + suffix.len() && rel.starts_with(prefix) && rel.ends_with(suffix)
 }
 
 /// True when every published entry path of `json` lives outside a top-level
@@ -1013,7 +1012,10 @@ fn collect_export_entry_stems(json: &Value) -> BTreeSet<String> {
     if let Some(exports) = json.get("exports") {
         collect_export_targets(exports, &mut targets);
     }
-    targets.iter().filter_map(|rel| entry_target_stem(rel)).collect()
+    targets
+        .iter()
+        .filter_map(|rel| entry_target_stem(rel))
+        .collect()
 }
 
 /// The entries of the `files` field — the npm publish whitelist. Each is a
@@ -1141,9 +1143,7 @@ fn parse_private(json: &Value) -> bool {
 fn ships_type_declarations(json: &Value) -> bool {
     json.get("types").is_some()
         || json.get("typings").is_some()
-        || json
-            .get("exports")
-            .is_some_and(exports_has_types_condition)
+        || json.get("exports").is_some_and(exports_has_types_condition)
 }
 
 /// True when a `types` condition key appears anywhere in an `exports` subtree.
@@ -1224,7 +1224,9 @@ pub fn is_cloudflare_worker_entry_source(source: &str, lang: crate::files::Langu
         if found || node.kind() != "export_statement" {
             return;
         }
-        let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+        let is_default = node
+            .children(&mut node.walk())
+            .any(|c| c.kind() == "default");
         if !is_default {
             return;
         }
@@ -1298,16 +1300,14 @@ pub fn is_oxlint_plugin_entry_source(source: &str, lang: crate::files::Language)
     let bytes = source.as_bytes();
     let mut imports_define_plugin = false;
     let mut exports_define_plugin_default = false;
-    crate::rules::walker::walk_tree(&tree, |node| {
-        match node.kind() {
-            "import_statement" if imports_from_oxlint_plugins(node, bytes) => {
-                imports_define_plugin = true;
-            }
-            "export_statement" if export_default_calls_define_plugin(node, bytes) => {
-                exports_define_plugin_default = true;
-            }
-            _ => {}
+    crate::rules::walker::walk_tree(&tree, |node| match node.kind() {
+        "import_statement" if imports_from_oxlint_plugins(node, bytes) => {
+            imports_define_plugin = true;
         }
+        "export_statement" if export_default_calls_define_plugin(node, bytes) => {
+            exports_define_plugin_default = true;
+        }
+        _ => {}
     });
     imports_define_plugin && exports_define_plugin_default
 }
@@ -1325,7 +1325,9 @@ fn imports_from_oxlint_plugins(node: tree_sitter::Node, source: &[u8]) -> bool {
 /// True when `node` (an `export_statement`) is an `export default` whose value
 /// is a call to `definePlugin(...)`.
 fn export_default_calls_define_plugin(node: tree_sitter::Node, source: &[u8]) -> bool {
-    let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+    let is_default = node
+        .children(&mut node.walk())
+        .any(|c| c.kind() == "default");
     if !is_default {
         return false;
     }
@@ -1487,18 +1489,18 @@ pub fn is_k6_script_source(source: &str, lang: crate::files::Language) -> bool {
     let bytes = source.as_bytes();
     let mut imports_k6 = false;
     let mut has_default_export = false;
-    crate::rules::walker::walk_tree(&tree, |node| {
-        match node.kind() {
-            "import_statement" if imports_from_k6_runtime(node, bytes) => {
-                imports_k6 = true;
-            }
-            "export_statement"
-                if node.children(&mut node.walk()).any(|c| c.kind() == "default") =>
-            {
-                has_default_export = true;
-            }
-            _ => {}
+    crate::rules::walker::walk_tree(&tree, |node| match node.kind() {
+        "import_statement" if imports_from_k6_runtime(node, bytes) => {
+            imports_k6 = true;
         }
+        "export_statement"
+            if node
+                .children(&mut node.walk())
+                .any(|c| c.kind() == "default") =>
+        {
+            has_default_export = true;
+        }
+        _ => {}
     });
     imports_k6 && has_default_export
 }
@@ -1610,7 +1612,9 @@ fn collect_convex_wrapper_exports(
     source: &[u8],
     out: &mut FxHashSet<String>,
 ) {
-    let is_default = node.children(&mut node.walk()).any(|c| c.kind() == "default");
+    let is_default = node
+        .children(&mut node.walk())
+        .any(|c| c.kind() == "default");
     if is_default {
         let calls_define_schema = node
             .named_children(&mut node.walk())
@@ -1635,7 +1639,9 @@ fn collect_convex_wrapper_exports(
             continue;
         };
         if value.kind() != "call_expression"
-            || !call_callee_is(value, source, &|name| CONVEX_FUNCTION_WRAPPERS.contains(&name))
+            || !call_callee_is(value, source, &|name| {
+                CONVEX_FUNCTION_WRAPPERS.contains(&name)
+            })
         {
             continue;
         }
@@ -1652,11 +1658,7 @@ fn collect_convex_wrapper_exports(
 /// True when `call` (a `call_expression`) has a plain-identifier callee whose
 /// text satisfies `pred`. A member-expression callee (`obj.query(...)`) does not
 /// match, so only the bare Convex wrapper calls are recognized.
-fn call_callee_is(
-    call: tree_sitter::Node,
-    source: &[u8],
-    pred: &dyn Fn(&str) -> bool,
-) -> bool {
+fn call_callee_is(call: tree_sitter::Node, source: &[u8], pred: &dyn Fn(&str) -> bool) -> bool {
     call.child_by_field_name("function")
         .filter(|f| f.kind() == "identifier")
         .and_then(|f| f.utf8_text(source).ok())
@@ -1746,10 +1748,9 @@ fn exported_function_signatures(
 ) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     // `export function f(…) {}` — the declaration carries both name and params.
-    if let Some(func) = node
-        .named_children(&mut node.walk())
-        .find(|c| c.kind() == "function_declaration" || c.kind() == "generator_function_declaration")
-    {
+    if let Some(func) = node.named_children(&mut node.walk()).find(|c| {
+        c.kind() == "function_declaration" || c.kind() == "generator_function_declaration"
+    }) {
         if let Some(name) = func
             .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source).ok())
@@ -1878,9 +1879,7 @@ fn specifier_resolves_to(config_dir: &Path, spec: &str, target: &Path) -> bool {
     let target = lexical_normalize(target);
     let resolved_stem = strip_module_extension(&resolved);
     let target_stem = strip_module_extension(&target);
-    resolved == target
-        || resolved_stem == target_stem
-        || resolved_stem.join("index") == target_stem
+    resolved == target || resolved_stem == target_stem || resolved_stem.join("index") == target_stem
 }
 
 /// The part of `spec` a `compilerOptions.paths` alias `key` leaves for the
@@ -2010,7 +2009,9 @@ fn es_lib_from_entry(entry: &str) -> EsLib {
     if edition == "next" {
         return EsLib::Next;
     }
-    edition.parse::<u16>().map_or(EsLib::Unspecified, EsLib::Year)
+    edition
+        .parse::<u16>()
+        .map_or(EsLib::Unspecified, EsLib::Year)
 }
 
 /// The edition a tsconfig's own `compilerOptions` declare. `lib` wins when
@@ -2521,8 +2522,7 @@ fn path_segments(path: &Path) -> Vec<&str> {
 impl CargoManifest {
     /// Async runtimes whose presence in any dependency section marks the crate
     /// as async.
-    const ASYNC_RUNTIMES: &'static [&'static str] =
-        &["tokio", "async-std", "async_std", "futures"];
+    const ASYNC_RUNTIMES: &'static [&'static str] = &["tokio", "async-std", "async_std", "futures"];
 
     /// Fuzzing runtimes whose presence in any dependency section marks the crate
     /// as a fuzz harness (cargo-fuzz `libfuzzer-sys`, AFL `afl`, honggfuzz).
@@ -2586,7 +2586,11 @@ impl CargoManifest {
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
-            .any(|table| Self::ASYNC_RUNTIMES.iter().any(|rt| table.contains_key(*rt)));
+            .any(|table| {
+                Self::ASYNC_RUNTIMES
+                    .iter()
+                    .any(|rt| table.contains_key(*rt))
+            });
 
         let error_derive_crate = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
@@ -2721,7 +2725,9 @@ impl CargoManifest {
     /// `[lib]` included: Cargo compiles it as a crate root.
     #[must_use]
     pub fn declares_target_at(&self, file_path: &Path) -> bool {
-        let relative = file_path.strip_prefix(&self.manifest_dir).unwrap_or(file_path);
+        let relative = file_path
+            .strip_prefix(&self.manifest_dir)
+            .unwrap_or(file_path);
         self.lib_path
             .as_deref()
             .is_some_and(|lib| path_segments(lib) == path_segments(relative))
@@ -2839,9 +2845,11 @@ impl CargoManifest {
     #[must_use]
     pub fn is_build_codegen_crate(&self) -> bool {
         self.name.as_deref().is_some_and(|n| {
-            ["-build", "-codegen", "-bindgen", "_build", "_codegen", "_bindgen"]
-                .iter()
-                .any(|suffix| n.ends_with(suffix))
+            [
+                "-build", "-codegen", "-bindgen", "_build", "_codegen", "_bindgen",
+            ]
+            .iter()
+            .any(|suffix| n.ends_with(suffix))
         })
     }
 
@@ -3050,13 +3058,8 @@ fn is_xml_parser_crate_name(name: &str) -> bool {
 /// the `rust-thiserror-for-lib` rule asks for. [`is_error_derive_crate_name`]
 /// also accepts the `_` separator spelling crates.io publishes the same package
 /// under.
-const ERROR_DERIVE_CRATE_NAMES: &[&str] = &[
-    "thiserror",
-    "snafu",
-    "miette",
-    "derive-more",
-    "error-stack",
-];
+const ERROR_DERIVE_CRATE_NAMES: &[&str] =
+    &["thiserror", "snafu", "miette", "derive-more", "error-stack"];
 
 /// True when `name` is a known error-derive library crate, comparing against
 /// both the `-` and `_` separator spellings (`derive-more` / `derive_more`).
@@ -3276,7 +3279,8 @@ pub struct ProjectCtx {
     // leaking its soft-delete status. The value `None` = no `schema.prisma` under
     // it (caller falls back to fire-on-all). Built lazily on first miss per
     // directory and reused for the run.
-    prisma_soft_delete_models_by_boundary: Mutex<FxHashMap<PathBuf, Option<FxHashMap<String, String>>>>,
+    prisma_soft_delete_models_by_boundary:
+        Mutex<FxHashMap<PathBuf, Option<FxHashMap<String, String>>>>,
 
     // Workspace member package `name` → its manifest directory, keyed by the
     // npm/pnpm workspaces root nearest an importer. `prisma-soft-delete-filter`
@@ -3353,8 +3357,12 @@ pub struct ProjectCtx {
     // set; `filename-naming-convention` uses it to accept snake_case files in a
     // snake_case-dominant project (Angular/Google source) without weakening the
     // rule for kebab-dominant projects.
-    dominant_ts_js_filename_convention:
-        OnceLock<Option<(crate::rules::filename_naming_convention::FilenameConvention, f64)>>,
+    dominant_ts_js_filename_convention: OnceLock<
+        Option<(
+            crate::rules::filename_naming_convention::FilenameConvention,
+            f64,
+        )>,
+    >,
 
     // Cross-file map: crate root (Cargo manifest dir) → set of type names that
     // have a hand-written `impl Debug for <Type>` somewhere in that crate. Built
@@ -3525,7 +3533,9 @@ impl ProjectCtx {
                         .min()
                         .cloned()
                 } else {
-                    self.import_index().min_indexed_path().map(Path::to_path_buf)
+                    self.import_index()
+                        .min_indexed_path()
+                        .map(Path::to_path_buf)
                 }
             })
             .clone()
@@ -3585,7 +3595,10 @@ impl ProjectCtx {
     /// dominant project while still flagging stray snake_case files elsewhere.
     pub fn dominant_ts_js_filename_convention(
         &self,
-    ) -> Option<(crate::rules::filename_naming_convention::FilenameConvention, f64)> {
+    ) -> Option<(
+        crate::rules::filename_naming_convention::FilenameConvention,
+        f64,
+    )> {
         *self.dominant_ts_js_filename_convention.get_or_init(|| {
             use crate::rules::filename_naming_convention::{
                 FilenameConvention, classify_ts_js_stem,
@@ -3648,7 +3661,10 @@ impl ProjectCtx {
     fn build_rust_debug_impl_targets(&self) -> FxHashMap<PathBuf, FxHashSet<String>> {
         let mut map: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
         let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        if parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .is_err()
+        {
             return map;
         }
         for path in self.import_index().indexed_paths() {
@@ -3712,7 +3728,10 @@ impl ProjectCtx {
     fn build_rust_non_debug_traits(&self) -> FxHashMap<PathBuf, FxHashSet<String>> {
         let mut map: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
         let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        if parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .is_err()
+        {
             return map;
         }
         for path in self.import_index().indexed_paths() {
@@ -3773,7 +3792,10 @@ impl ProjectCtx {
     fn build_rust_workspace_enums(&self) -> FxHashMap<PathBuf, FxHashMap<String, EnumDecl>> {
         let mut map: FxHashMap<PathBuf, FxHashMap<String, EnumDecl>> = FxHashMap::default();
         let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        if parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .is_err()
+        {
             return map;
         }
         for path in self.import_index().indexed_paths() {
@@ -3865,7 +3887,9 @@ impl ProjectCtx {
                 ".dev.vars",
                 "_routes.json",
             ];
-            MARKERS.iter().any(|name| root.join(name).metadata().is_ok())
+            MARKERS
+                .iter()
+                .any(|name| root.join(name).metadata().is_ok())
         })
     }
 
@@ -3887,7 +3911,11 @@ impl ProjectCtx {
                 .project_root
                 .iter()
                 .chain(self.workspace_roots.iter())
-                .any(|root| CONFIG_NAMES.iter().any(|name| root.join(name).metadata().is_ok()));
+                .any(|root| {
+                    CONFIG_NAMES
+                        .iter()
+                        .any(|name| root.join(name).metadata().is_ok())
+                });
             if has_config {
                 return true;
             }
@@ -3984,9 +4012,10 @@ impl ProjectCtx {
         };
         for pattern in &self.entrypoint_globs {
             if let Ok(glob) = Glob::new(pattern)
-                && glob.compile_matcher().is_match(rel.as_ref()) {
-                    return true;
-                }
+                && glob.compile_matcher().is_match(rel.as_ref())
+            {
+                return true;
+            }
         }
         false
     }
@@ -4045,7 +4074,12 @@ impl ProjectCtx {
         let Some(manifest_dir) = self.nearest_package_json_dir(path) else {
             return Vec::new();
         };
-        if let Some(found) = self.path_frameworks_cache.lock().unwrap().get(&manifest_dir) {
+        if let Some(found) = self
+            .path_frameworks_cache
+            .lock()
+            .unwrap()
+            .get(&manifest_dir)
+        {
             return found.clone();
         }
         let detected = self
@@ -4155,7 +4189,12 @@ impl ProjectCtx {
     /// Auto-import registrations declared anywhere under `root`, scanned once
     /// per root and memoized for the rest of the run.
     fn auto_import_registrations(&self, root: &Path) -> Arc<Vec<AutoImportRegistration>> {
-        if let Some(hit) = self.auto_import_registrations_cache.lock().unwrap().get(root) {
+        if let Some(hit) = self
+            .auto_import_registrations_cache
+            .lock()
+            .unwrap()
+            .get(root)
+        {
             return Arc::clone(hit);
         }
         let found = Arc::new(collect_auto_import_registrations(root));
@@ -4197,8 +4236,7 @@ impl ProjectCtx {
                 .iter()
                 .any(|mapping| specifier_resolves_to(&base, &mapping.replace('*', suffix), target))
         });
-        alias_hit
-            || (tsconfig.base_url.is_some() && specifier_resolves_to(&base, spec, target))
+        alias_hit || (tsconfig.base_url.is_some() && specifier_resolves_to(&base, spec, target))
     }
 
     /// True when the effective `package.json` chain for `path` declares the
@@ -4254,10 +4292,7 @@ impl ProjectCtx {
         let is_nuxt_server_route = crate::rules::path_utils::is_nuxt_server_route_file(path);
         let is_nuxt_plugin = crate::rules::path_utils::is_nuxt_plugin_file(path);
         let is_nuxt_app_middleware = crate::rules::path_utils::is_nuxt_app_middleware_file(path);
-        if !is_param_matcher
-            && !is_nuxt_server_route
-            && !is_nuxt_plugin
-            && !is_nuxt_app_middleware
+        if !is_param_matcher && !is_nuxt_server_route && !is_nuxt_plugin && !is_nuxt_app_middleware
         {
             return;
         }
@@ -4274,10 +4309,20 @@ impl ProjectCtx {
                 _ => false,
             };
             if route_file_match {
-                names.extend(fw.route_magic_exports.route_files.iter().map(String::as_str));
+                names.extend(
+                    fw.route_magic_exports
+                        .route_files
+                        .iter()
+                        .map(String::as_str),
+                );
             }
             if is_param_matcher {
-                names.extend(fw.route_magic_exports.param_matchers.iter().map(String::as_str));
+                names.extend(
+                    fw.route_magic_exports
+                        .param_matchers
+                        .iter()
+                        .map(String::as_str),
+                );
             }
         }
     }
@@ -4410,10 +4455,7 @@ impl ProjectCtx {
     ///
     /// [`nearest_package_json`]: ProjectCtx::nearest_package_json
     /// [`nearest_package_json_dir`]: ProjectCtx::nearest_package_json_dir
-    fn nearest_substantive_package_json(
-        &self,
-        path: &Path,
-    ) -> Option<(PathBuf, Arc<PackageJson>)> {
+    fn nearest_substantive_package_json(&self, path: &Path) -> Option<(PathBuf, Arc<PackageJson>)> {
         let mut start_dir = path.parent()?.to_path_buf();
         let mut fallback: Option<(PathBuf, Arc<PackageJson>)> = None;
 
@@ -4427,9 +4469,12 @@ impl ProjectCtx {
             else {
                 break;
             };
-            let Some(pkg) =
-                nearest_parsed_at(&self.package_json_cache, &dir, "package.json", PackageJson::parse)
-            else {
+            let Some(pkg) = nearest_parsed_at(
+                &self.package_json_cache,
+                &dir,
+                "package.json",
+                PackageJson::parse,
+            ) else {
                 break;
             };
             if !pkg.is_marker_only() {
@@ -4666,7 +4711,10 @@ impl ProjectCtx {
         if self.is_script_entry_file(path) {
             return true;
         }
-        if !self.nearest_package_json(path).is_some_and(|pkg| pkg.is_library) {
+        if !self
+            .nearest_package_json(path)
+            .is_some_and(|pkg| pkg.is_library)
+        {
             return false;
         }
         let index = self.import_index();
@@ -4823,7 +4871,11 @@ impl ProjectCtx {
             return hit;
         }
         let is_catalog = dir_holds_story_file(&dir);
-        self.story_catalog_dir_cache.lock().unwrap().entry(dir).or_insert(is_catalog);
+        self.story_catalog_dir_cache
+            .lock()
+            .unwrap()
+            .entry(dir)
+            .or_insert(is_catalog);
         is_catalog
     }
 
@@ -4950,7 +5002,12 @@ impl ProjectCtx {
     /// `ng_package` target is deliberately NOT a marker: a `BUILD.bazel` can
     /// describe an app or binary just as well as a library.
     fn dir_declares_bazel_ng_package(&self, manifest_dir: &Path) -> bool {
-        if let Some(&hit) = self.bazel_ng_package_cache.lock().unwrap().get(manifest_dir) {
+        if let Some(&hit) = self
+            .bazel_ng_package_cache
+            .lock()
+            .unwrap()
+            .get(manifest_dir)
+        {
             return hit;
         }
         let declares = std::fs::read_to_string(manifest_dir.join("BUILD.bazel"))
@@ -5073,7 +5130,10 @@ impl ProjectCtx {
 
         let mut dir = path.parent();
         while let Some(d) = dir {
-            if VITEST_CONFIG_FILES.iter().any(|name| d.join(name).is_file()) {
+            if VITEST_CONFIG_FILES
+                .iter()
+                .any(|name| d.join(name).is_file())
+            {
                 return true;
             }
             if stop_at.as_deref() == Some(d) {
@@ -5153,10 +5213,7 @@ impl ProjectCtx {
             return v;
         }
         let v = self.compute_uses_react_compiler(path);
-        self.react_compiler_dir_cache
-            .lock()
-            .unwrap()
-            .insert(key, v);
+        self.react_compiler_dir_cache.lock().unwrap().insert(key, v);
         v
     }
 
@@ -5558,8 +5615,13 @@ impl ProjectCtx {
         else {
             return ModuleType::CommonJs;
         };
-        nearest_parsed_at(&self.package_json_cache, &dir, "package.json", PackageJson::parse)
-            .map_or(ModuleType::CommonJs, |pkg| pkg.module_type)
+        nearest_parsed_at(
+            &self.package_json_cache,
+            &dir,
+            "package.json",
+            PackageJson::parse,
+        )
+        .map_or(ModuleType::CommonJs, |pkg| pkg.module_type)
     }
 
     /// True when the tsconfig governing `path` selects CommonJS module *emit*
@@ -5795,7 +5857,8 @@ impl ProjectCtx {
             return false;
         }
         if self
-            .nearest_package_json(path).is_none_or(|pkg| pkg.version.is_none())
+            .nearest_package_json(path)
+            .is_none_or(|pkg| pkg.version.is_none())
         {
             return false;
         }
@@ -6023,10 +6086,13 @@ impl ProjectCtx {
         let Some(tsconfig) = self.nearest_tsconfig(importer) else {
             return false;
         };
-        tsconfig.paths.keys().any(|key| match key.strip_suffix('*') {
-            Some(prefix) => !prefix.is_empty() && spec.starts_with(prefix),
-            None => key == spec,
-        })
+        tsconfig
+            .paths
+            .keys()
+            .any(|key| match key.strip_suffix('*') {
+                Some(prefix) => !prefix.is_empty() && spec.starts_with(prefix),
+                None => key == spec,
+            })
     }
 
     /// Lazily-loaded Tailwind theme. Stub returns `None`; future chantier
@@ -6519,7 +6585,11 @@ fn soft_delete_field_of_line(trimmed: &str) -> Option<&str> {
     let name = tokens.next()?;
     // Field lines start with an identifier; braces, block attributes (`@@index`)
     // and comments do not.
-    if !name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+    if !name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
+    {
         return None;
     }
     // Soft-delete columns are nullable timestamps; gate on the type, not the name.
@@ -6839,9 +6909,7 @@ fn for_each_plugin_source(root: &Path, mut visit: impl FnMut(&Path, &str)) {
                 .extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| PLUGIN_SOURCE_EXTS.contains(&e));
-            if is_plugin_source
-                && let Ok(source) = std::fs::read_to_string(&path)
-            {
+            if is_plugin_source && let Ok(source) = std::fs::read_to_string(&path) {
                 visit(&path, &source);
             }
         }
@@ -6952,8 +7020,7 @@ fn collect_auto_import_bindings(
         .and_then(|src| src.utf8_text(source).ok())
         .map(|spec| spec.trim_matches(|c| c == '\'' || c == '"' || c == '`'))
         .is_some_and(|spec| {
-            spec == AUTO_IMPORT_PACKAGE
-                || spec.starts_with(&format!("{AUTO_IMPORT_PACKAGE}/"))
+            spec == AUTO_IMPORT_PACKAGE || spec.starts_with(&format!("{AUTO_IMPORT_PACKAGE}/"))
         });
     if !is_plugin_import {
         return;
@@ -6994,14 +7061,14 @@ fn collect_call_registrations(
     if !is_plugin_call {
         return;
     }
-    let Some(options) = call
-        .child_by_field_name("arguments")
-        .and_then(|args| args.named_children(&mut args.walk()).find(|c| c.kind() == "object"))
-    else {
+    let Some(options) = call.child_by_field_name("arguments").and_then(|args| {
+        args.named_children(&mut args.walk())
+            .find(|c| c.kind() == "object")
+    }) else {
         return;
     };
-    let Some(imports) = object_property_value(options, source, "imports")
-        .filter(|value| value.kind() == "array")
+    let Some(imports) =
+        object_property_value(options, source, "imports").filter(|value| value.kind() == "array")
     else {
         return;
     };
@@ -7267,7 +7334,9 @@ fn source_gates_module_on_cfg_test(parent_src: &str, name: &str) -> Option<bool>
 /// loaded or the parse is aborted.
 pub(crate) fn parse_rust_source(src: &str) -> Option<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&tree_sitter_rust::LANGUAGE.into()).ok()?;
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .ok()?;
     parser.parse(src, None)
 }
 
@@ -7291,7 +7360,11 @@ fn find_file_backed_mod<'tree>(
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
                 == Some(name)
-            && !crate::rules::rust_helpers::any_outer_attribute(*node, source, attr_is_path_override)
+            && !crate::rules::rust_helpers::any_outer_attribute(
+                *node,
+                source,
+                attr_is_path_override,
+            )
     })
 }
 
@@ -7423,9 +7496,10 @@ fn debug_impl_base_type_name<'a>(target: tree_sitter::Node, source: &'a [u8]) ->
     match target.kind() {
         "generic_type" => debug_impl_base_type_name(target.child_by_field_name("type")?, source),
         "type_identifier" => target.utf8_text(source).ok(),
-        "scoped_type_identifier" => {
-            target.utf8_text(source).ok().and_then(|t| t.rsplit("::").next())
-        }
+        "scoped_type_identifier" => target
+            .utf8_text(source)
+            .ok()
+            .and_then(|t| t.rsplit("::").next()),
         _ => None,
     }
 }
@@ -7495,8 +7569,9 @@ fn walk_up_finding_cached(
 /// `src/types/Foo` matches `Foo.ts`, `Foo/index.ts`, etc. Read the same way when
 /// probing a stem against the tree — the set a source file may carry — so
 /// `.json` and `.vue` are candidates there too.
-const TS_SOURCE_EXTENSIONS: &[&str] =
-    &["ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "json"];
+const TS_SOURCE_EXTENSIONS: &[&str] = &[
+    "ts", "tsx", "d.ts", "mts", "cts", "js", "jsx", "mjs", "cjs", "vue", "json",
+];
 
 /// True if `candidate` (a module path that may carry an emitted JS-family
 /// extension) points at an existing local source file — directly, with a TS/JS
@@ -7519,13 +7594,14 @@ fn local_source_exists(candidate: &Path) -> bool {
         }
     }
     if let Some(name) = candidate.file_name().and_then(|n| n.to_str())
-        && let Some(parent) = candidate.parent() {
-            for ext in TS_SOURCE_EXTENSIONS {
-                if parent.join(format!("{name}.{ext}")).is_file() {
-                    return true;
-                }
+        && let Some(parent) = candidate.parent()
+    {
+        for ext in TS_SOURCE_EXTENSIONS {
+            if parent.join(format!("{name}.{ext}")).is_file() {
+                return true;
             }
         }
+    }
     if candidate.is_dir() {
         for ext in TS_SOURCE_EXTENSIONS {
             if candidate.join(format!("index.{ext}")).is_file() {
@@ -7701,9 +7777,7 @@ fn build_bazel_declares_ng_package(raw: &str) -> bool {
             .is_some_and(|i| is_bazel_ident_byte(bytes[i]));
         // The call must read `ng_package(` — skip any whitespace between the
         // identifier and the opening paren.
-        let followed_by_call = raw[end..]
-            .trim_start()
-            .starts_with('(');
+        let followed_by_call = raw[end..].trim_start().starts_with('(');
         if !preceded_by_ident && followed_by_call {
             return true;
         }
@@ -7813,7 +7887,10 @@ pub(crate) fn load_with_files(files: &[(&str, &str)]) -> (tempfile::TempDir, Pro
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
         if let Some(lang) = Language::from_path(&p) {
-            sources.push(SourceFile { path: p, language: lang });
+            sources.push(SourceFile {
+                path: p,
+                language: lang,
+            });
         }
     }
     let refs: Vec<&SourceFile> = sources.iter().collect();
@@ -7841,16 +7918,25 @@ mod tests {
     #[test]
     fn wildcard_target_matches_substring_and_rejects_non_matches() {
         // `*` expands to a non-empty substring (Node subpath-pattern semantics).
-        assert!(wildcard_target_matches("src/locales/*", "src/locales/de.ts"));
+        assert!(wildcard_target_matches(
+            "src/locales/*",
+            "src/locales/de.ts"
+        ));
         // `*` may span path separators.
-        assert!(wildcard_target_matches("src/locales/*", "src/locales/nested/de.ts"));
+        assert!(wildcard_target_matches(
+            "src/locales/*",
+            "src/locales/nested/de.ts"
+        ));
         // A suffix after `*` must be honored.
         assert!(wildcard_target_matches("dist/*.js", "dist/de.js"));
         assert!(!wildcard_target_matches("dist/*.js", "dist/de.ts"));
         // The spanned substring must be non-empty — prefix/suffix cannot overlap.
         assert!(!wildcard_target_matches("src/locales/*", "src/locales/"));
         // A path outside the prefix never matches.
-        assert!(!wildcard_target_matches("src/locales/*", "src/internal/de.ts"));
+        assert!(!wildcard_target_matches(
+            "src/locales/*",
+            "src/internal/de.ts"
+        ));
     }
 
     #[test]
@@ -7872,7 +7958,10 @@ mod tests {
         // `./util` is a literal target, not a wildcard.
         assert!(!wildcards.contains("src/util.ts"), "{wildcards:?}");
         // A bare specifier (no leading `./`) names no file here.
-        assert!(!wildcards.iter().any(|w| w.contains("some-other-package")), "{wildcards:?}");
+        assert!(
+            !wildcards.iter().any(|w| w.contains("some-other-package")),
+            "{wildcards:?}"
+        );
     }
 
     #[test]
@@ -7949,7 +8038,10 @@ mod tests {
 
     #[test]
     fn cli_runner_candidates_derive_from_package_name() {
-        assert_eq!(cli_runner_binary_candidates("@manypkg/cli"), vec!["manypkg"]);
+        assert_eq!(
+            cli_runner_binary_candidates("@manypkg/cli"),
+            vec!["manypkg"]
+        );
         assert_eq!(
             cli_runner_binary_candidates("@changesets/cli"),
             vec!["changesets", "changeset"]
@@ -8159,8 +8251,11 @@ mod tests {
         std::fs::create_dir_all(lib.join("common/src")).unwrap();
         std::fs::create_dir_all(lib.join("src")).unwrap();
         std::fs::write(lib.join("package.json"), r#"{"name":"@ionic/angular"}"#).unwrap();
-        std::fs::write(lib.join("ng-package.json"), r#"{"lib":{"entryFile":"src/index.ts"}}"#)
-            .unwrap();
+        std::fs::write(
+            lib.join("ng-package.json"),
+            r#"{"lib":{"entryFile":"src/index.ts"}}"#,
+        )
+        .unwrap();
         std::fs::write(
             lib.join("common/ng-package.json"),
             r#"{"lib":{"entryFile":"src/index.ts"}}"#,
@@ -8224,9 +8319,9 @@ mod tests {
         )
         .unwrap();
         let ctx = ProjectCtx::empty();
-        assert!(ctx.is_in_distributed_registry_dir(
-            &docs.join("src/lib/registry/ui/sidebar/index.ts")
-        ));
+        assert!(
+            ctx.is_in_distributed_registry_dir(&docs.join("src/lib/registry/ui/sidebar/index.ts"))
+        );
         // A file outside the common-ancestor registry root is not exempt.
         assert!(!ctx.is_in_distributed_registry_dir(&docs.join("src/lib/utils/orphan.ts")));
     }
@@ -8241,9 +8336,9 @@ mod tests {
         )
         .unwrap();
         let ctx = ProjectCtx::empty();
-        assert!(!ctx.is_in_distributed_registry_dir(
-            &dir.path().join("src/lib/registry/ui/index.ts")
-        ));
+        assert!(
+            !ctx.is_in_distributed_registry_dir(&dir.path().join("src/lib/registry/ui/index.ts"))
+        );
     }
 
     #[test]
@@ -8259,7 +8354,9 @@ mod tests {
         );
         // No shadcn schema marker → not a shadcn registry.
         assert_eq!(
-            parse_shadcn_registry_file_paths(r#"{ "items": [ { "files": [ { "path": "a.ts" } ] } ] }"#),
+            parse_shadcn_registry_file_paths(
+                r#"{ "items": [ { "files": [ { "path": "a.ts" } ] } ] }"#
+            ),
             None
         );
         // No file paths → None.
@@ -8292,7 +8389,9 @@ mod tests {
     #[test]
     fn parse_ng_package_entry_file_reads_jsonc_with_trailing_comma() {
         assert_eq!(
-            parse_ng_package_entry_file("{\n  \"lib\": {\n    \"entryFile\": \"src/index.ts\"\n  },\n}\n"),
+            parse_ng_package_entry_file(
+                "{\n  \"lib\": {\n    \"entryFile\": \"src/index.ts\"\n  },\n}\n"
+            ),
             Some("src/index.ts".to_string())
         );
         assert_eq!(
@@ -8309,13 +8408,17 @@ mod tests {
             "load(\"//tools:ng_package.bzl\", \"ng_package\")\nng_package(\n    name = \"npm_package\",\n)\n"
         ));
         // Whitespace/newline between the identifier and `(` still counts.
-        assert!(build_bazel_declares_ng_package("ng_package\n(name = \"x\")"));
+        assert!(build_bazel_declares_ng_package(
+            "ng_package\n(name = \"x\")"
+        ));
     }
 
     #[test]
     fn build_bazel_declares_ng_package_rejects_non_calls() {
         // A longer identifier ending in `ng_package` is not the rule.
-        assert!(!build_bazel_declares_ng_package("my_ng_package(name = \"x\")"));
+        assert!(!build_bazel_declares_ng_package(
+            "my_ng_package(name = \"x\")"
+        ));
         // A bare mention without a call (load string, comment) is not enough.
         assert!(!build_bazel_declares_ng_package(
             "# uses ng_package elsewhere\nts_library(name = \"x\")"
@@ -8359,7 +8462,11 @@ mod tests {
             r#"{"name":"my-app","dependencies":{"x":"1"}}"#,
         )
         .unwrap();
-        std::fs::write(dir.path().join("BUILD.bazel"), "ts_project(name = \"app\")\n").unwrap();
+        std::fs::write(
+            dir.path().join("BUILD.bazel"),
+            "ts_project(name = \"app\")\n",
+        )
+        .unwrap();
         let ctx = ProjectCtx::empty();
         assert!(!ctx.is_ng_package_entry_file(&dir.path().join("index.ts")));
     }
@@ -8387,7 +8494,12 @@ mod tests {
     #[test]
     fn min_node_version_none_when_unconstrained() {
         assert_eq!(min_node("*"), None);
-        assert_eq!(PackageJson::parse(r#"{"name":"t"}"#).unwrap().min_node_version(), None);
+        assert_eq!(
+            PackageJson::parse(r#"{"name":"t"}"#)
+                .unwrap()
+                .min_node_version(),
+            None
+        );
     }
 
     #[test]
@@ -8499,8 +8611,7 @@ mod tests {
 
     #[test]
     fn tsconfig_es_lib_treats_esnext_as_above_every_edition() {
-        let ts =
-            Tsconfig::parse(r#"{"compilerOptions":{"lib":["ESNext"]}}"#).expect("must parse");
+        let ts = Tsconfig::parse(r#"{"compilerOptions":{"lib":["ESNext"]}}"#).expect("must parse");
         assert_eq!(ts.es_lib, EsLib::Next);
         assert!(!ts.es_lib.is_below(2023));
     }
@@ -8516,7 +8627,8 @@ mod tests {
             .expect("must parse");
         assert_eq!(lib_wins.es_lib, EsLib::Next);
 
-        let neither = Tsconfig::parse(r#"{"compilerOptions":{"strict":true}}"#).expect("must parse");
+        let neither =
+            Tsconfig::parse(r#"{"compilerOptions":{"strict":true}}"#).expect("must parse");
         assert_eq!(neither.es_lib, EsLib::Unspecified);
         // Nothing declared proves nothing: an edition gate must stay enabled.
         assert!(!neither.es_lib.is_below(2023));
@@ -8585,8 +8697,14 @@ mod tests {
         let src = dir.path().join("App.vue");
 
         let ctx = ProjectCtx::empty();
-        assert_eq!(ctx.nearest_dependency_version_min(&src, "vue"), Some((3, 5)));
-        assert_eq!(ctx.nearest_dependency_version_min(&src, "vite"), Some((3, 4)));
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&src, "vue"),
+            Some((3, 5))
+        );
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&src, "vite"),
+            Some((3, 4))
+        );
         assert_eq!(ctx.nearest_dependency_version_min(&src, "react"), None);
     }
 
@@ -8622,9 +8740,15 @@ mod tests {
 
         let ctx = ProjectCtx::empty();
         // Named catalog `catalogs.frontend.vue`.
-        assert_eq!(ctx.nearest_dependency_version_min(&src, "vue"), Some((3, 5)));
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&src, "vue"),
+            Some((3, 5))
+        );
         // Bare `catalog:` → top-level default catalog.
-        assert_eq!(ctx.nearest_dependency_version_min(&src, "vite"), Some((5, 0)));
+        assert_eq!(
+            ctx.nearest_dependency_version_min(&src, "vite"),
+            Some((5, 0))
+        );
         // `catalog:default` → top-level default catalog.
         assert_eq!(
             ctx.nearest_dependency_version_min(&src, "esbuild"),
@@ -8667,19 +8791,39 @@ mod tests {
         .unwrap();
         let sub = dir.path().join("test").join("memory");
         std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(dir.path().join("test").join("package.json"), r#"{"type":"module"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("test").join("package.json"),
+            r#"{"type":"module"}"#,
+        )
+        .unwrap();
 
         let ctx = ProjectCtx::empty();
-        let pkg = ctx.nearest_package_json(&sub.join("vitest.config.ts")).unwrap();
-        assert_eq!(pkg.name.as_deref(), Some("msw"), "skips the marker, resolves the root");
-        assert!(pkg.is_library, "library detection uses the substantive root");
-        assert!(pkg.has_dep_or_engine("vitest"), "dep lookup uses the substantive root");
+        let pkg = ctx
+            .nearest_package_json(&sub.join("vitest.config.ts"))
+            .unwrap();
+        assert_eq!(
+            pkg.name.as_deref(),
+            Some("msw"),
+            "skips the marker, resolves the root"
+        );
+        assert!(
+            pkg.is_library,
+            "library detection uses the substantive root"
+        );
+        assert!(
+            pkg.has_dep_or_engine("vitest"),
+            "dep lookup uses the substantive root"
+        );
 
         // The directory projection agrees with the parsed manifest.
         let resolved_dir = ctx
             .nearest_package_json_dir(&sub.join("vitest.config.ts"))
             .unwrap();
-        assert_eq!(resolved_dir, dir.path(), "dir resolves past the marker to the root");
+        assert_eq!(
+            resolved_dir,
+            dir.path(),
+            "dir resolves past the marker to the root"
+        );
     }
 
     #[test]
@@ -8702,9 +8846,16 @@ mod tests {
 
         let ctx = ProjectCtx::empty();
         let pkg = ctx.nearest_package_json(&sub.join("index.ts")).unwrap();
-        assert_eq!(pkg.name.as_deref(), Some("@root/sub"), "substantive sub stays the boundary");
+        assert_eq!(
+            pkg.name.as_deref(),
+            Some("@root/sub"),
+            "substantive sub stays the boundary"
+        );
         assert!(pkg.has_dep_or_engine("lodash"));
-        assert!(!pkg.has_dep_or_engine("left-pad"), "root deps are not the sub's boundary");
+        assert!(
+            !pkg.has_dep_or_engine("left-pad"),
+            "root deps are not the sub's boundary"
+        );
     }
 
     #[test]
@@ -8719,7 +8870,11 @@ mod tests {
 
         let ctx = ProjectCtx::empty();
         let resolved = ctx.nearest_package_json_dir(&sub.join("t.ts"));
-        assert_eq!(resolved, Some(sub), "falls back to the nearest marker manifest");
+        assert_eq!(
+            resolved,
+            Some(sub),
+            "falls back to the nearest marker manifest"
+        );
     }
 
     #[test]
@@ -8728,14 +8883,46 @@ mod tests {
         assert!(marker.is_marker_only());
         assert!(PackageJson::parse("{}").unwrap().is_marker_only());
 
-        assert!(!PackageJson::parse(r#"{"name":"x"}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"main":"./i.js"}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"exports":{}}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"module":"./i.mjs"}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"bin":{"x":"./x.js"}}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"dependencies":{"a":"1"}}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"devDependencies":{"a":"1"}}"#).unwrap().is_marker_only());
-        assert!(!PackageJson::parse(r#"{"workspaces":["packages/*"]}"#).unwrap().is_marker_only());
+        assert!(
+            !PackageJson::parse(r#"{"name":"x"}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"main":"./i.js"}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"exports":{}}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"module":"./i.mjs"}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"bin":{"x":"./x.js"}}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"dependencies":{"a":"1"}}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"devDependencies":{"a":"1"}}"#)
+                .unwrap()
+                .is_marker_only()
+        );
+        assert!(
+            !PackageJson::parse(r#"{"workspaces":["packages/*"]}"#)
+                .unwrap()
+                .is_marker_only()
+        );
     }
 
     #[test]
@@ -8941,7 +9128,10 @@ mod tests {
                 "build-scripts/generate.js",
                 "import { commit } from './helpers/commit.js';\nexport function generate() { commit(); }\n",
             ),
-            ("build-scripts/helpers/commit.js", "export function commit() {}\n"),
+            (
+                "build-scripts/helpers/commit.js",
+                "export function commit() {}\n",
+            ),
             ("src/lib.js", "export function lib() {}\n"),
         ])
     }
@@ -8968,8 +9158,14 @@ mod tests {
                 "package.json",
                 r#"{"name":"shared","type":"module","module":"src/index.js","scripts":{"gen":"node scripts/generate.js"}}"#,
             ),
-            ("scripts/generate.js", "import { fmt } from '../src/format.js';\nfmt();\n"),
-            ("src/index.js", "import { fmt } from './format.js';\nexport const run = () => fmt();\n"),
+            (
+                "scripts/generate.js",
+                "import { fmt } from '../src/format.js';\nfmt();\n",
+            ),
+            (
+                "src/index.js",
+                "import { fmt } from './format.js';\nexport const run = () => fmt();\n",
+            ),
             ("src/format.js", "export function fmt() {}\n"),
         ]);
         // `src/format.js` is reached from the build script *and* from the
@@ -8984,7 +9180,10 @@ mod tests {
                 "package.json",
                 r#"{"name":"app","private":true,"type":"module","scripts":{"start":"node src/index.js"}}"#,
             ),
-            ("src/index.js", "import { serve } from './service.js';\nserve();\n"),
+            (
+                "src/index.js",
+                "import { serve } from './service.js';\nserve();\n",
+            ),
             ("src/service.js", "export function serve() {}\n"),
         ]);
         // The package declares no product entry, so `npm start` may well be
@@ -9006,9 +9205,13 @@ mod tests {
         .unwrap();
 
         let ctx = ProjectCtx::empty();
-        assert!(ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-google-metadata.js")));
+        assert!(
+            ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-google-metadata.js"))
+        );
         // A sibling the command never names stays out.
-        assert!(!ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-other-metadata.js")));
+        assert!(
+            !ctx.is_script_entry_file(&dir.path().join("build-scripts/pull-other-metadata.js"))
+        );
         // The XML argument is not a runner argument and names no source file.
         assert!(!ctx.is_script_entry_file(&dir.path().join("PhoneNumberMetadata.xml")));
     }
@@ -9450,7 +9653,8 @@ mod tests {
     fn resolves_workspace_packages_object_form_issue_1601() {
         // Yarn Berry / pnpm nested-object form: `"workspaces": {"packages": [...]}`.
         let dir = TempDir::new().unwrap();
-        let manifest = r#"{"name":"xstate-monorepo","workspaces":{"packages":["packages/*","scripts/*"]}}"#;
+        let manifest =
+            r#"{"name":"xstate-monorepo","workspaces":{"packages":["packages/*","scripts/*"]}}"#;
         std::fs::write(dir.path().join("package.json"), manifest).unwrap();
         let core = dir.path().join("packages").join("core");
         std::fs::create_dir_all(&core).unwrap();
@@ -9469,8 +9673,8 @@ mod tests {
     fn workspaces_object_without_packages_key_returns_empty() {
         // The object form may carry only `nohoist`; with no `packages` array
         // there are no globs to discover.
-        let pkg = PackageJson::parse(r#"{"name":"root","workspaces":{"nohoist":["**/foo"]}}"#)
-            .unwrap();
+        let pkg =
+            PackageJson::parse(r#"{"name":"root","workspaces":{"nohoist":["**/foo"]}}"#).unwrap();
         assert!(pkg.workspaces.is_empty());
     }
 
@@ -9586,8 +9790,8 @@ mod tests {
 
     #[test]
     fn exact_optional_property_types_parsed_directly() {
-        let ts = Tsconfig::parse(r#"{"compilerOptions":{"exactOptionalPropertyTypes":true}}"#)
-            .unwrap();
+        let ts =
+            Tsconfig::parse(r#"{"compilerOptions":{"exactOptionalPropertyTypes":true}}"#).unwrap();
         assert!(ts.exact_optional_property_types);
     }
 
@@ -9688,7 +9892,10 @@ mod tests {
             (r#"{"strict":true}"#, true),
             (r#"{"useUnknownInCatchVariables":true}"#, true),
             (r#"{"strict":false}"#, false),
-            (r#"{"strict":true,"useUnknownInCatchVariables":false}"#, false),
+            (
+                r#"{"strict":true,"useUnknownInCatchVariables":false}"#,
+                false,
+            ),
         ];
         for (options, expected) in cases {
             let dir = TempDir::new().unwrap();
@@ -9901,8 +10108,14 @@ mod tests {
 
     #[test]
     fn rust_version_parses_and_compares_numerically() {
-        assert_eq!(RustVersion::parse_str("1.66.0"), RustVersion::Specified(1, 66));
-        assert_eq!(RustVersion::parse_str("1.70"), RustVersion::Specified(1, 70));
+        assert_eq!(
+            RustVersion::parse_str("1.66.0"),
+            RustVersion::Specified(1, 66)
+        );
+        assert_eq!(
+            RustVersion::parse_str("1.70"),
+            RustVersion::Specified(1, 70)
+        );
         // Numeric, not lexical: "1.69" < "1.70" and "1.100" > "1.70".
         assert!(RustVersion::Specified(1, 69).is_below(1, 70));
         assert!(!RustVersion::Specified(1, 70).is_below(1, 70));
@@ -9923,7 +10136,9 @@ mod tests {
         .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         let ctx = ProjectCtx::empty();
-        let manifest = ctx.nearest_cargo_manifest(&dir.path().join("src/foo.rs")).unwrap();
+        let manifest = ctx
+            .nearest_cargo_manifest(&dir.path().join("src/foo.rs"))
+            .unwrap();
         assert_eq!(manifest.rust_version(), RustVersion::Specified(1, 66));
     }
 
@@ -9953,7 +10168,9 @@ tokio = "1"
 
         let ctx = ProjectCtx::empty();
         let first = ctx.nearest_cargo_manifest(&nested.join("t.rs")).unwrap();
-        let second = ctx.nearest_cargo_manifest(&nested.join("other.rs")).unwrap();
+        let second = ctx
+            .nearest_cargo_manifest(&nested.join("other.rs"))
+            .unwrap();
         assert!(
             Arc::ptr_eq(&first, &second),
             "sibling files should share the same cached Arc"
@@ -10057,9 +10274,11 @@ path = "tools/tool.rs"
             "a backslash-separated target path still matches the stripped file path"
         );
 
-        let no_targets =
-            CargoManifest::parse("[package]\nname = \"lib\"\n[lib]\npath = \"src/lib.rs\"\n", dir)
-                .unwrap();
+        let no_targets = CargoManifest::parse(
+            "[package]\nname = \"lib\"\n[lib]\npath = \"src/lib.rs\"\n",
+            dir,
+        )
+        .unwrap();
         assert!(
             !no_targets.declares_executable_at(Path::new("src/lib.rs")),
             "no explicit target tables => no executable targets"
@@ -10075,9 +10294,11 @@ path = "tools/tool.rs"
         std::fs::create_dir_all(auto_bin.path().join("src/bin")).unwrap();
         std::fs::write(auto_bin.path().join("src/lib.rs"), "").unwrap();
         std::fs::write(auto_bin.path().join("src/bin/lapce.rs"), "fn main() {}").unwrap();
-        let manifest =
-            CargoManifest::parse("[package]\nname = \"lapce-app\"\n", auto_bin.path().to_path_buf())
-                .unwrap();
+        let manifest = CargoManifest::parse(
+            "[package]\nname = \"lapce-app\"\n",
+            auto_bin.path().to_path_buf(),
+        )
+        .unwrap();
         assert!(
             manifest.declares_binary(),
             "a `.rs` file under src/bin/ is an auto-discovered binary target"
@@ -10088,9 +10309,11 @@ path = "tools/tool.rs"
         let pure_lib = TempDir::new().unwrap();
         std::fs::create_dir_all(pure_lib.path().join("src")).unwrap();
         std::fs::write(pure_lib.path().join("src/lib.rs"), "").unwrap();
-        let lib_manifest =
-            CargoManifest::parse("[package]\nname = \"purelib\"\n", pure_lib.path().to_path_buf())
-                .unwrap();
+        let lib_manifest = CargoManifest::parse(
+            "[package]\nname = \"purelib\"\n",
+            pure_lib.path().to_path_buf(),
+        )
+        .unwrap();
         assert!(
             !lib_manifest.declares_binary(),
             "a crate with only src/lib.rs declares no binary"
@@ -10101,10 +10324,16 @@ path = "tools/tool.rs"
         let nested_bin = TempDir::new().unwrap();
         std::fs::create_dir_all(nested_bin.path().join("src/bin/foo")).unwrap();
         std::fs::write(nested_bin.path().join("src/lib.rs"), "").unwrap();
-        std::fs::write(nested_bin.path().join("src/bin/foo/main.rs"), "fn main() {}").unwrap();
-        let nested_manifest =
-            CargoManifest::parse("[package]\nname = \"nested\"\n", nested_bin.path().to_path_buf())
-                .unwrap();
+        std::fs::write(
+            nested_bin.path().join("src/bin/foo/main.rs"),
+            "fn main() {}",
+        )
+        .unwrap();
+        let nested_manifest = CargoManifest::parse(
+            "[package]\nname = \"nested\"\n",
+            nested_bin.path().to_path_buf(),
+        )
+        .unwrap();
         assert!(
             nested_manifest.declares_binary(),
             "src/bin/<name>/main.rs is an auto-discovered binary target"
@@ -10129,7 +10358,10 @@ path = "tools/tool.rs"
         // src/main.rs on disk, each declare a binary.
         let bin_table =
             CargoManifest::parse("[[bin]]\nname = \"t\"\n", pure_lib.path().to_path_buf()).unwrap();
-        assert!(bin_table.declares_binary(), "[[bin]] table declares a binary");
+        assert!(
+            bin_table.declares_binary(),
+            "[[bin]] table declares a binary"
+        );
 
         let main_rs = TempDir::new().unwrap();
         std::fs::create_dir_all(main_rs.path().join("src")).unwrap();
@@ -10309,7 +10541,14 @@ path = "tools/tool.rs"
         };
 
         // Both the `-` and `_` separator spellings are recognized.
-        for name in ["quick-xml", "quick_xml", "xml-rs", "roxmltree", "serde-xml-rs", "xmlparser"] {
+        for name in [
+            "quick-xml",
+            "quick_xml",
+            "xml-rs",
+            "roxmltree",
+            "serde-xml-rs",
+            "xmlparser",
+        ] {
             assert!(
                 parse_name(name).is_xml_parser_crate(),
                 "name `{name}` is a known XML parser crate"
@@ -10458,8 +10697,16 @@ prost-build = "0.13"
         // flagged; and a crate that merely depends on tracing is not itself
         // logging infrastructure.
         for name in [
-            "blog", "dialog", "catalog", "login", "audit-log", "raft-log", "wal-log",
-            "event-logs", "myapp", "tokio",
+            "blog",
+            "dialog",
+            "catalog",
+            "login",
+            "audit-log",
+            "raft-log",
+            "wal-log",
+            "event-logs",
+            "myapp",
+            "tokio",
         ] {
             assert!(
                 !parse_name(name).is_logging_infra_crate(),
@@ -10566,11 +10813,9 @@ prost-build = "0.13"
             "[lib] without proc-macro = true => not a proc-macro crate"
         );
 
-        let no_lib = CargoManifest::parse(
-            "[package]\nname = \"nolib\"\nversion = \"0.1.0\"\n",
-            dir,
-        )
-        .unwrap();
+        let no_lib =
+            CargoManifest::parse("[package]\nname = \"nolib\"\nversion = \"0.1.0\"\n", dir)
+                .unwrap();
         assert!(
             !no_lib.is_proc_macro(),
             "no [lib] table => not a proc-macro crate"
@@ -10580,8 +10825,14 @@ prost-build = "0.13"
     #[test]
     fn source_declares_module_private_mirrors_is_pub_notion() {
         // Bare `pub` is the only public form; restricted forms are non-public.
-        assert_eq!(source_declares_module_private("pub mod foo;", "foo"), Some(false));
-        assert_eq!(source_declares_module_private("mod foo;", "foo"), Some(true));
+        assert_eq!(
+            source_declares_module_private("pub mod foo;", "foo"),
+            Some(false)
+        );
+        assert_eq!(
+            source_declares_module_private("mod foo;", "foo"),
+            Some(true)
+        );
         assert_eq!(
             source_declares_module_private("pub(crate) mod foo;", "foo"),
             Some(true)
@@ -10671,7 +10922,10 @@ prost-build = "0.13"
         // `cfg_attr` applies another attribute conditionally; the module itself
         // is compiled either way, so it is not a gate.
         assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg_attr(test, allow(dead_code))]\nmod unit;", "unit"),
+            source_gates_module_on_cfg_test(
+                "#[cfg_attr(test, allow(dead_code))]\nmod unit;",
+                "unit"
+            ),
             Some(false)
         );
         // A feature *value* that spells `test` is not the `test` cfg option.
@@ -10689,13 +10943,19 @@ prost-build = "0.13"
         // Nesting adds a path component: `mod harness { mod unit; }` backs
         // `<dir>/harness/unit.rs`, never the `<dir>/unit.rs` being walked.
         assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(test)]\nmod harness {\n    mod unit;\n}", "unit"),
+            source_gates_module_on_cfg_test(
+                "#[cfg(test)]\nmod harness {\n    mod unit;\n}",
+                "unit"
+            ),
             None
         );
         // A `#[path]` override decouples the module name from the file backing
         // it, so the declaration says nothing about `<dir>/unit.rs`.
         assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(test)]\n#[path = \"stubs/u.rs\"]\nmod unit;", "unit"),
+            source_gates_module_on_cfg_test(
+                "#[cfg(test)]\n#[path = \"stubs/u.rs\"]\nmod unit;",
+                "unit"
+            ),
             None
         );
     }
@@ -10819,7 +11079,10 @@ model Envelope {
     #[test]
     fn parse_collects_only_models_with_deleted_at() {
         let models = parse_prisma_soft_delete_models(SCHEMA_WITH_ENVELOPE);
-        assert_eq!(models.get("envelope").map(String::as_str), Some("deletedAt"));
+        assert_eq!(
+            models.get("envelope").map(String::as_str),
+            Some("deletedAt")
+        );
         assert!(!models.contains_key("account"));
     }
 
@@ -10881,7 +11144,10 @@ model User {
 }
 "#;
         let outputs = parse_prisma_generator_outputs(schema);
-        assert_eq!(outputs, vec!["./client".to_string(), "../generated/edge".to_string()]);
+        assert_eq!(
+            outputs,
+            vec!["./client".to_string(), "../generated/edge".to_string()]
+        );
     }
 
     #[test]
@@ -11075,7 +11341,11 @@ model Envelope {
         // @scope/prisma owns the schema.
         let prisma_pkg = dir.path().join("packages/prisma");
         std::fs::create_dir_all(&prisma_pkg).unwrap();
-        std::fs::write(prisma_pkg.join("package.json"), r#"{"name":"@scope/prisma"}"#).unwrap();
+        std::fs::write(
+            prisma_pkg.join("package.json"),
+            r#"{"name":"@scope/prisma"}"#,
+        )
+        .unwrap();
         std::fs::write(prisma_pkg.join("schema.prisma"), SCHEMA).unwrap();
         // @scope/lib consumes the client; it has no schema of its own.
         let lib_pkg = dir.path().join("packages/lib");
@@ -11114,14 +11384,22 @@ model Envelope {
     #[test]
     fn effective_package_jsons_unions_parent_for_private_overlay() {
         let (dir, ctx) = load_with_files(&[
-            ("packages/ls/package.json", r#"{"name":"ls","dependencies":{"vscode-languageserver-protocol":"^3"}}"#),
-            ("packages/ls/test/package.json", r#"{"name":"ls-tests","private":true,"dependencies":{"svelte":"^5"}}"#),
+            (
+                "packages/ls/package.json",
+                r#"{"name":"ls","dependencies":{"vscode-languageserver-protocol":"^3"}}"#,
+            ),
+            (
+                "packages/ls/test/package.json",
+                r#"{"name":"ls-tests","private":true,"dependencies":{"svelte":"^5"}}"#,
+            ),
             ("packages/ls/test/server.ts", "export const x = 1;"),
         ]);
         let importer = dir.path().join("packages/ls/test/server.ts");
         let chain = ctx.effective_package_jsons(&importer);
         assert!(
-            chain.iter().any(|p| p.has_dep_or_engine("vscode-languageserver-protocol")),
+            chain
+                .iter()
+                .any(|p| p.has_dep_or_engine("vscode-languageserver-protocol")),
             "parent dep must be unioned for a private overlay, chain={:?}",
             chain.iter().map(|p| p.name.clone()).collect::<Vec<_>>()
         );
@@ -11134,8 +11412,14 @@ model Envelope {
     #[test]
     fn effective_package_jsons_excludes_parent_for_non_private_nested() {
         let (dir, ctx) = load_with_files(&[
-            ("packages/ls/package.json", r#"{"name":"ls","dependencies":{"parent-only":"^1"}}"#),
-            ("packages/ls/sub/package.json", r#"{"name":"sub","dependencies":{"svelte":"^5"}}"#),
+            (
+                "packages/ls/package.json",
+                r#"{"name":"ls","dependencies":{"parent-only":"^1"}}"#,
+            ),
+            (
+                "packages/ls/sub/package.json",
+                r#"{"name":"sub","dependencies":{"svelte":"^5"}}"#,
+            ),
             ("packages/ls/sub/server.ts", "export const x = 1;"),
         ]);
         let importer = dir.path().join("packages/ls/sub/server.ts");
@@ -11151,8 +11435,14 @@ model Envelope {
     #[test]
     fn effective_package_jsons_excludes_parent_for_private_workspace_root() {
         let (dir, ctx) = load_with_files(&[
-            ("package.json", r#"{"name":"outer","dependencies":{"parent-only":"^1"}}"#),
-            ("inner/package.json", r#"{"name":"inner","private":true,"workspaces":["pkgs/*"],"dependencies":{"svelte":"^5"}}"#),
+            (
+                "package.json",
+                r#"{"name":"outer","dependencies":{"parent-only":"^1"}}"#,
+            ),
+            (
+                "inner/package.json",
+                r#"{"name":"inner","private":true,"workspaces":["pkgs/*"],"dependencies":{"svelte":"^5"}}"#,
+            ),
             ("inner/server.ts", "export const x = 1;"),
         ]);
         let importer = dir.path().join("inner/server.ts");
@@ -11182,7 +11472,10 @@ model Envelope {
     #[test]
     fn uses_unplugin_auto_import_absent_is_false() {
         let (dir, ctx) = load_with_files(&[
-            ("package.json", r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#),
+            (
+                "package.json",
+                r#"{"name":"app","devDependencies":{"vite":"^5.0.0"}}"#,
+            ),
             ("src/composables/dark.ts", "export const x = 1;"),
         ]);
         let path = dir.path().join("src/composables/dark.ts");
@@ -11218,10 +11511,16 @@ model Envelope {
 
         let table = ctx.auto_imported_names_for_module(&canonical("src/lib/table.ts"));
         assert!(table.contains("useTable"), "{table:?}");
-        assert!(table.contains("default"), "the aliased form registers `default`: {table:?}");
+        assert!(
+            table.contains("default"),
+            "the aliased form registers `default`: {table:?}"
+        );
 
         let other = ctx.auto_imported_names_for_module(&canonical("src/lib/other.ts"));
-        assert!(other.is_empty(), "an unregistered module gets nothing: {other:?}");
+        assert!(
+            other.is_empty(),
+            "an unregistered module gets nothing: {other:?}"
+        );
     }
 
     // Issue #4385: in a project whose `tsconfig.json` sets a non-React
@@ -11288,7 +11587,8 @@ model Envelope {
         let ctx = ProjectCtx::default();
         let path = Path::new("app.tsx");
 
-        let react_file = "import type { ReactNode } from \"react\";\nconst x = <div className=\"x\" />;";
+        let react_file =
+            "import type { ReactNode } from \"react\";\nconst x = <div className=\"x\" />;";
         assert!(
             !is_non_react_jsx_file(react_file, &ctx, path),
             "a React-signal file with no project default stays React"
@@ -11350,7 +11650,11 @@ model Envelope {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("package.json"), r#"{"name":"p"}"#).unwrap();
-        std::fs::write(dir.path().join("tsconfig.base.json"), r#"{"include":["src"]}"#).unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.base.json"),
+            r#"{"include":["src"]}"#,
+        )
+        .unwrap();
         let probe = dir.path().join("src/a.ts");
 
         std::fs::write(
@@ -11359,7 +11663,10 @@ model Envelope {
         )
         .unwrap();
         let ctx = ProjectCtx::empty();
-        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().join("src")]);
+        assert_eq!(
+            ctx.typescript_source_roots(&probe),
+            vec![dir.path().join("src")]
+        );
 
         std::fs::write(
             dir.path().join("tsconfig.json"),
@@ -11395,11 +11702,21 @@ model Envelope {
         let probe = dir.path().join("src/a.ts");
 
         let ctx = ProjectCtx::empty();
-        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().to_path_buf()]);
+        assert_eq!(
+            ctx.typescript_source_roots(&probe),
+            vec![dir.path().to_path_buf()]
+        );
 
-        std::fs::write(dir.path().join("tsconfig.json"), r#"{"compilerOptions":{}}"#).unwrap();
+        std::fs::write(
+            dir.path().join("tsconfig.json"),
+            r#"{"compilerOptions":{}}"#,
+        )
+        .unwrap();
         let ctx = ProjectCtx::empty();
-        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().to_path_buf()]);
+        assert_eq!(
+            ctx.typescript_source_roots(&probe),
+            vec![dir.path().to_path_buf()]
+        );
     }
 
     #[test]
@@ -11428,7 +11745,10 @@ model Envelope {
         )
         .unwrap();
         let ctx = ProjectCtx::empty();
-        assert_eq!(ctx.typescript_source_roots(&probe), vec![dir.path().join("source")]);
+        assert_eq!(
+            ctx.typescript_source_roots(&probe),
+            vec![dir.path().join("source")]
+        );
     }
 
     /// #8355: the published entry names a build artifact that only exists after
