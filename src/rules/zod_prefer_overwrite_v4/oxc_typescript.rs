@@ -55,14 +55,12 @@ impl OxcCheck for Check {
 
         let same_shape = if arrow.expression {
             // Expression body
-            let body_src = if let Some(stmt) = arrow.body.statements.first() {
-                if let Statement::ExpressionStatement(es) = stmt {
-                    let start = es.expression.span().start as usize;
-                    let end = es.expression.span().end as usize;
-                    Some(&ctx.source[start..end])
-                } else {
-                    None
-                }
+            let body_src = if let Some(Statement::ExpressionStatement(es)) =
+                arrow.body.statements.first()
+            {
+                let start = es.expression.span().start as usize;
+                let end = es.expression.span().end as usize;
+                Some(&ctx.source[start..end])
             } else {
                 None
             };

@@ -142,11 +142,10 @@ fn assignment_in_exported_fn(semantic: &oxc_semantic::Semantic, id: oxc_semantic
     let nodes = semantic.nodes();
     for ancestor in nodes.ancestors(id) {
         match ancestor.kind() {
-            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_) => {
-                if function_is_exported(semantic, ancestor.id()) {
+            AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
+                if function_is_exported(semantic, ancestor.id()) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

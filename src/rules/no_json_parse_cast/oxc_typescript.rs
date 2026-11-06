@@ -41,11 +41,10 @@ impl OxcCheck for Check {
         // Skip the deep-clone idiom `JSON.parse(JSON.stringify(x))`: a
         // serialize/parse round-trip of an already-typed value, not a parse of
         // external data, so `as T` is a truthful assertion.
-        if let Some(Argument::CallExpression(inner)) = call.arguments.first() {
-            if is_json_static_call(&inner.callee, "stringify") {
+        if let Some(Argument::CallExpression(inner)) = call.arguments.first()
+            && is_json_static_call(&inner.callee, "stringify") {
                 return;
             }
-        }
         let (line, column) = byte_offset_to_line_col(ctx.source, as_expr.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

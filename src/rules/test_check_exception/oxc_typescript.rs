@@ -41,11 +41,10 @@ impl OxcCheck for Check {
             return;
         }
         // Skip `.not.toThrow()` — asserts no error is thrown; no argument needed or meaningful
-        if let oxc_ast::ast::Expression::StaticMemberExpression(obj_member) = &member.object {
-            if obj_member.property.name.as_str() == "not" {
+        if let oxc_ast::ast::Expression::StaticMemberExpression(obj_member) = &member.object
+            && obj_member.property.name.as_str() == "not" {
                 return;
             }
-        }
         // Arguments must be empty
         if !call.arguments.is_empty() {
             return;

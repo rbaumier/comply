@@ -50,11 +50,9 @@ impl OxcCheck for Check {
                 // Treat it as explicit — TS already enforces consistency.
                 if let AstKind::VariableDeclarator(decl) =
                     semantic.nodes().parent_node(node.id()).kind()
-                {
-                    if decl.type_annotation.is_some() {
+                    && decl.type_annotation.is_some() {
                         return;
                     }
-                }
                 let mut return_types = FxHashSet::default();
                 collect_return_types_from_stmts(&arrow.body.statements, &mut return_types);
                 if let Some(diag) = check_return_types(&return_types, ctx, arrow.span.start as usize) {

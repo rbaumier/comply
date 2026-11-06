@@ -19,10 +19,7 @@ fn collect_chain<'a>(
     let mut current_call = call;
 
     // The outermost call is the node we start at — walk inward via callee.
-    loop {
-        let Expression::StaticMemberExpression(member) = &current_call.callee else {
-            break;
-        };
+    while let Expression::StaticMemberExpression(member) = &current_call.callee {
         let name = member.property.name.as_str();
         let span_start = member.span.start;
         methods.push((name, span_start, current_call));

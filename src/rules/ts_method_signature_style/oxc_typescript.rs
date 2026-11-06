@@ -54,11 +54,10 @@ fn report_method_signatures<'a>(
         if method.kind != TSMethodSignatureKind::Method {
             continue;
         }
-        if let Some(key) = stable_key(&method.key) {
-            if key_counts.get(key).copied().unwrap_or(0) > 1 {
+        if let Some(key) = stable_key(&method.key)
+            && key_counts.get(key).copied().unwrap_or(0) > 1 {
                 continue;
             }
-        }
         let name = key_name(&method.key);
         let (line, column) = byte_offset_to_line_col(ctx.source, method.span.start as usize);
         diagnostics.push(Diagnostic {

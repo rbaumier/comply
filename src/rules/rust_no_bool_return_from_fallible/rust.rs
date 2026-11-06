@@ -853,11 +853,10 @@ fn body_swallows_operation(node: tree_sitter::Node, source: &[u8]) -> bool {
                 return true;
             }
         }
-        "let_declaration" => {
-            if discards_call_result(node, source) {
+        "let_declaration"
+            if discards_call_result(node, source) => {
                 return true;
             }
-        }
         _ => {}
     }
     let mut cursor = node.walk();

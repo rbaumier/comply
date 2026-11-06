@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn rayon_worker_stack_size_covers_deep_project_walks() {
-        assert!(RAYON_WORKER_STACK_SIZE_BYTES >= 32 * 1024 * 1024);
+        const { assert!(RAYON_WORKER_STACK_SIZE_BYTES >= 32 * 1024 * 1024) };
     }
 
     fn write_ts(dir: &tempfile::TempDir, name: &str, content: &str) -> SourceFile {

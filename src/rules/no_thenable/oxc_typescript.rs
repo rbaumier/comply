@@ -163,8 +163,8 @@ impl OxcCheck for Check {
                                 });
                             }
                         }
-                        Declaration::ClassDeclaration(c) => {
-                            if c.id.as_ref().is_some_and(|id| id.name.as_str() == "then") {
+                        Declaration::ClassDeclaration(c)
+                            if c.id.as_ref().is_some_and(|id| id.name.as_str() == "then") => {
                                 let span = c.id.as_ref().unwrap().span;
                                 let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
                                 diagnostics.push(Diagnostic {
@@ -177,7 +177,6 @@ impl OxcCheck for Check {
                                     span: None,
                                 });
                             }
-                        }
                         _ => {}
                     }
                 }

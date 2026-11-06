@@ -4,8 +4,8 @@
 //! resolved TypeScript program — type queries, structural comparison — which
 //! no in-process tree-sitter pass can answer. comply drives a TypeScript
 //! checker (typescript-go, from `typescript` >= 7, its side-by-side alias
-//! `@typescript/native`, or else `@typescript/native-preview`) through a Node sidecar: it sends the tsconfig
-//! + file list + enabled rule ids, the sidecar builds the program once and
+//! `@typescript/native`, or else `@typescript/native-preview`) through a Node sidecar: it sends
+//! the tsconfig + file list + enabled rule ids, the sidecar builds the program once and
 //! returns the violations as JSON.
 //!
 //! Invoked when at least one rule needing that program is still enabled for

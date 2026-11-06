@@ -80,12 +80,12 @@ impl OxcCheck for Check {
                 }
                 // Flag numeric args and identifiers (potentially numeric).
                 // `new Buffer("string")` or `new Buffer(array)` are not size-based.
-                let is_suspect = match first {
-                    Argument::NumericLiteral(_) => true,
-                    Argument::Identifier(_) => true,
-                    Argument::BinaryExpression(_) => true,
-                    _ => false,
-                };
+                let is_suspect = matches!(
+                    first,
+                    Argument::NumericLiteral(_)
+                        | Argument::Identifier(_)
+                        | Argument::BinaryExpression(_)
+                );
                 if !is_suspect {
                     return;
                 }

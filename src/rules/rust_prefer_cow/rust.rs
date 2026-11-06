@@ -241,15 +241,14 @@ fn param_is_moved(node: tree_sitter::Node, source: &[u8], param_name: &str) -> b
                 return true;
             }
         }
-        "return_expression" => {
+        "return_expression"
             // `return x;` moves the owned value out as the function's return
             // value. The returned expression is the sole named child; a bare
             // `identifier` there transfers ownership, whereas `return &x` is a
             // `reference_expression` and `return x.clone()` a `call_expression`.
-            if is_param_identifier(node.named_child(0), source, param_name) {
+            if is_param_identifier(node.named_child(0), source, param_name) => {
                 return true;
             }
-        }
         _ => {}
     }
 

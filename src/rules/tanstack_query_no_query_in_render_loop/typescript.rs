@@ -120,7 +120,7 @@ mod tests {
     fn flags_use_query_in_nested_map() {
         let src = "rows.map((r) => cells.map((c) => useQuery({ queryKey: [r, c] })))";
         // Outer .map contains useQuery, inner .map also contains it.
-        assert!(run(src).len() >= 1);
+        assert!(!run(src).is_empty());
     }
 
     #[test]

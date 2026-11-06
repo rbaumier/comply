@@ -30,8 +30,8 @@ fn find_render_calls(
     ctx: &crate::rules::backend::CheckCtx,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if node.kind() == "call_expression" {
-        if let Some(callee) = node.child_by_field_name("function") {
+    if node.kind() == "call_expression"
+        && let Some(callee) = node.child_by_field_name("function") {
             let callee_name = match callee.kind() {
                 "identifier" => callee.utf8_text(source).ok(),
                 "member_expression" => {
@@ -50,8 +50,8 @@ fn find_render_calls(
                 _ => None,
             };
 
-            if let Some(name) = callee_name {
-                if is_render_call_name(name) {
+            if let Some(name) = callee_name
+                && is_render_call_name(name) {
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
                         line: node.start_position().row + 1,
@@ -65,9 +65,7 @@ fn find_render_calls(
                     });
                     return;
                 }
-            }
         }
-    }
 
     // Don't descend into nested JSX — those have their own jsx_expression nodes.
     if node.kind() == "jsx_element" || node.kind() == "jsx_self_closing_element" {

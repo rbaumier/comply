@@ -99,10 +99,7 @@ fn starts_nested_function(rest: &str) -> bool {
         return false;
     }
     let after = rest.get(8..).unwrap_or("");
-    match after.chars().next() {
-        Some(c) if c.is_ascii_alphanumeric() || c == '_' => false,
-        _ => true,
-    }
+    !matches!(after.chars().next(), Some(c) if c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn is_yield_at(code: &str, i: usize) -> bool {
@@ -118,10 +115,7 @@ fn is_yield_at(code: &str, i: usize) -> bool {
             return false;
         }
     }
-    match rest.as_bytes().get(5) {
-        Some(c) if c.is_ascii_alphanumeric() || *c == b'_' || *c == b'$' => false,
-        _ => true,
-    }
+    !matches!(rest.as_bytes().get(5), Some(c) if c.is_ascii_alphanumeric() || *c == b'_' || *c == b'$')
 }
 
 fn body_has_own_yield(code: &str) -> bool {
@@ -137,11 +131,10 @@ fn body_has_own_yield(code: &str) -> bool {
         match b {
             b'{' => depth += 1,
             b'}' => {
-                if let Some(&top) = nested_stack.last() {
-                    if depth == top {
+                if let Some(&top) = nested_stack.last()
+                    && depth == top {
                         nested_stack.pop();
                     }
-                }
                 depth -= 1;
                 if depth == 0 {
                     return false;
@@ -177,13 +170,11 @@ fn body_has_own_yield(code: &str) -> bool {
             }
             _ => {}
         }
-        if depth >= 1 && (nested_stack.is_empty() || depth <= *nested_stack.last().unwrap()) {
-            if let Some(rest) = code.get(i..) {
-                if starts_nested_function(rest) {
+        if depth >= 1 && (nested_stack.is_empty() || depth <= *nested_stack.last().unwrap())
+            && let Some(rest) = code.get(i..)
+                && starts_nested_function(rest) {
                     nested_stack.push(depth);
                 }
-            }
-        }
         let inside_nested = nested_stack.last().is_some_and(|&top| depth > top);
         if !inside_nested && depth >= 1 && is_yield_at(code, i) {
             return true;

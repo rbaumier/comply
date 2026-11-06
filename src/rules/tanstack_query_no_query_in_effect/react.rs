@@ -40,11 +40,10 @@ fn is_inside_effect_callback(node: tree_sitter::Node, source: &[u8]) -> bool {
     let mut ancestor = node.parent();
     while let Some(a) = ancestor {
         if a.kind() == "arrow_function" || a.kind() == "function_expression" {
-            if let Some(name) = callback_owner_hook_name(a, source) {
-                if EFFECT_HOOKS.contains(&name) {
+            if let Some(name) = callback_owner_hook_name(a, source)
+                && EFFECT_HOOKS.contains(&name) {
                     return true;
                 }
-            }
             return false;
         }
         if matches!(

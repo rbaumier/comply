@@ -38,6 +38,7 @@ pub struct Check;
 ///   - it accesses a browser global's member (`window.`/`document.`/`navigator.`
 ///     …) where that name is *not* shadowed by a local binding — an unresolved
 ///     reference to the real global, not a same-named local.
+///
 /// When none hold the file is treated as Node.js / server-side, where `window`
 /// and `document` are not globals.
 fn file_runs_in_browser<'a>(semantic: &'a oxc_semantic::Semantic<'a>, ctx: &CheckCtx) -> bool {
@@ -57,11 +58,10 @@ fn file_runs_in_browser<'a>(semantic: &'a oxc_semantic::Semantic<'a>, ctx: &Chec
                     return true;
                 }
             }
-            AstKind::ComputedMemberExpression(member) => {
-                if member_object_is_unshadowed_browser_global(&member.object, semantic) {
+            AstKind::ComputedMemberExpression(member)
+                if member_object_is_unshadowed_browser_global(&member.object, semantic) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }
@@ -129,6 +129,7 @@ fn is_declaration_file(path: &Path) -> bool {
 ///   - `document: TextDocument` / `document: lsp.TextDocument` (LSP convention)
 ///   - `console: VitestLogger` (console-shaped logger injection, #3332)
 ///   - `global: Record<string, unknown>` (test-environment object, #3332)
+///
 /// A binding with no annotation, or one annotated with a primitive / `any` /
 /// `unknown` (`document: string`, `console: any`), is not injection: a global's
 /// value is an object, so a non-object annotation signals an accidental name

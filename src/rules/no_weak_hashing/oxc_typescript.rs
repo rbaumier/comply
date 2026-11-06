@@ -201,6 +201,7 @@ const REDIS_SCRIPT_SUBCOMMANDS: &[&str] = &["load", "exists"];
 ///   - the generic-command form `recv.script('load' | 'exists', ...)`, where the
 ///     first string argument is a cache-managing SCRIPT subcommand (see
 ///     [`REDIS_SCRIPT_SUBCOMMANDS`]).
+///
 /// Walks the whole AST once; only reached on the rare `createHash('sha1')` path,
 /// so the per-file scan is not on the hot path.
 fn file_calls_redis_script_cache(semantic: &oxc_semantic::Semantic<'_>) -> bool {

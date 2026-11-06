@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 pub struct Check;
 
-fn receiver_looks_like_db(expr: &Expression, source: &str) -> bool {
-    let name = leftmost_identifier(expr, source);
+fn receiver_looks_like_db(expr: &Expression) -> bool {
+    let name = leftmost_identifier(expr);
     let Some(name) = name else { return false };
     let lower = name.to_lowercase();
     matches!(
@@ -23,13 +23,13 @@ fn receiver_looks_like_db(expr: &Expression, source: &str) -> bool {
         || name.ends_with("Db")
 }
 
-fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<String> {
+fn leftmost_identifier<'a>(expr: &'a Expression<'a>) -> Option<String> {
     match expr {
         Expression::Identifier(id) => Some(id.name.as_str().to_owned()),
         Expression::StaticMemberExpression(member) => {
             Some(member.property.name.as_str().to_owned())
         }
-        Expression::ComputedMemberExpression(member) => leftmost_identifier(&member.object, source),
+        Expression::ComputedMemberExpression(member) => leftmost_identifier(&member.object),
         _ => None,
     }
 }
@@ -101,7 +101,7 @@ impl OxcCheck for Check {
         if member.property.name.as_str() != "update" {
             return;
         }
-        if !receiver_looks_like_db(&member.object, ctx.source) {
+        if !receiver_looks_like_db(&member.object) {
             return;
         }
 

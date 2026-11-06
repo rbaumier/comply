@@ -12,11 +12,10 @@ pub struct Check;
 /// Walk a method-chained call expression to find the innermost `createServerFn()` span.
 fn find_create_server_fn_span(expr: &oxc_ast::ast::Expression) -> Option<oxc_span::Span> {
     if let oxc_ast::ast::Expression::CallExpression(call) = expr {
-        if let oxc_ast::ast::Expression::Identifier(id) = &call.callee {
-            if id.name.as_str() == "createServerFn" {
+        if let oxc_ast::ast::Expression::Identifier(id) = &call.callee
+            && id.name.as_str() == "createServerFn" {
                 return Some(call.span);
             }
-        }
         if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
             return find_create_server_fn_span(&member.object);
         }
@@ -68,11 +67,10 @@ impl OxcCheck for Check {
                 let method = member.property.name.as_str();
 
                 // A .handler() whose callback has no parameters means no caller input.
-                if method == "handler" && handler_callback_has_no_params(call) {
-                    if let Some(span) = find_create_server_fn_span(&member.object) {
+                if method == "handler" && handler_callback_has_no_params(call)
+                    && let Some(span) = find_create_server_fn_span(&member.object) {
                         no_input_spans.push(span);
                     }
-                }
 
                 // Check for .input() / .safeParse() / .parse()
                 if VALIDATION_METHODS.contains(&method) {

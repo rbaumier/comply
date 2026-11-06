@@ -13,11 +13,10 @@ pub struct Check;
 
 fn has_jsx_attr(attrs: &[oxc_ast::ast::JSXAttributeItem], name: &str) -> bool {
     attrs.iter().any(|item| {
-        if let oxc_ast::ast::JSXAttributeItem::Attribute(attr) = item {
-            if let oxc_ast::ast::JSXAttributeName::Identifier(id) = &attr.name {
+        if let oxc_ast::ast::JSXAttributeItem::Attribute(attr) = item
+            && let oxc_ast::ast::JSXAttributeName::Identifier(id) = &attr.name {
                 return id.name.as_str() == name;
             }
-        }
         false
     })
 }

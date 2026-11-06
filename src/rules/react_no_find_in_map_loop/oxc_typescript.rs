@@ -154,8 +154,8 @@ fn flagged_inside_loop_or_map(
                     return false;
                 }
             }
-            AstKind::CallExpression(call) => {
-                if is_map_call(call) {
+            AstKind::CallExpression(call)
+                if is_map_call(call) => {
                     // Distinguish how the walk reached this `.map`. If we ascended
                     // from its callee (the `X.map` member expression), the
                     // find/filter is in the receiver chain — `arr.filter(...).map(...)`
@@ -181,7 +181,6 @@ fn flagged_inside_loop_or_map(
                         return true;
                     }
                 }
-            }
             _ => {}
         }
     }

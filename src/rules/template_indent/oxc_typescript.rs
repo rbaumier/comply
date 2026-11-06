@@ -60,8 +60,8 @@ impl OxcCheck for Check {
             return;
         }
         // Snapshot assertions intentionally preserve indentation for readability.
-        if let AstKind::CallExpression(call) = parent.kind() {
-            if let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
+        if let AstKind::CallExpression(call) = parent.kind()
+            && let oxc_ast::ast::Expression::StaticMemberExpression(member) = &call.callee {
                 let method = member.property.name.as_str();
                 if matches!(
                     method,
@@ -72,18 +72,16 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-        }
         // A method call on the template that strips the indentation at runtime
         // (`.trim()`, `.replaceAll(/\n */gm, "")`, …) already handles it: the
         // template is the member's object and the member is invoked.
-        if let AstKind::StaticMemberExpression(member) = parent.kind() {
-            if strips_indentation(member.property.name.as_str()) {
+        if let AstKind::StaticMemberExpression(member) = parent.kind()
+            && strips_indentation(member.property.name.as_str()) {
                 let grandparent = semantic.nodes().parent_node(parent.id());
                 if matches!(grandparent.kind(), AstKind::CallExpression(_)) {
                     return;
                 }
             }
-        }
         let (line, column) = byte_offset_to_line_col(ctx.source, tpl.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

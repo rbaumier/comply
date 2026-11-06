@@ -33,8 +33,8 @@ fn flagged_inside_loop_or_map<'a>(call: tree_sitter::Node<'a>, source: &[u8]) ->
             "for_statement" | "for_in_statement" | "while_statement" | "do_statement" => {
                 return true;
             }
-            "call_expression" => {
-                if is_member_call(parent, "map", source) {
+            "call_expression"
+                if is_member_call(parent, "map", source) => {
                     // If the find/filter is on the same root identifier
                     // as the map callback's parameter (or a property of
                     // it — `x.tags.find(...)` where `x` is the param),
@@ -47,7 +47,6 @@ fn flagged_inside_loop_or_map<'a>(call: tree_sitter::Node<'a>, source: &[u8]) ->
                         _ => return true,
                     }
                 }
-            }
             _ => {}
         }
         node = parent;

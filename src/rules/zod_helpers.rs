@@ -35,7 +35,7 @@ fn zod_version_range(pkg: &PackageJson) -> Option<&str> {
         .or_else(|| pkg.peer_dependencies.get("zod"))
         .or_else(|| pkg.optional_dependencies.get("zod"))
         .map(String::as_str)
-        .or_else(|| (pkg.name.as_deref() == Some("zod")).then(|| pkg.version.as_deref())?)
+        .or_else(|| (pkg.name.as_deref() == Some("zod")).then_some(pkg.version.as_deref())?)
 }
 
 /// Smallest major version a range can resolve to. Splits on `||`, takes the

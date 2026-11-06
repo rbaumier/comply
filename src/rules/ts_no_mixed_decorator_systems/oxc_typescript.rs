@@ -42,11 +42,10 @@ impl OxcCheck for Check {
                         first_decorator_span = Some(method.decorators[0].span);
                     }
                 }
-                AstKind::PropertyDefinition(prop) => {
-                    if first_decorator_span.is_none() && !prop.decorators.is_empty() {
+                AstKind::PropertyDefinition(prop)
+                    if first_decorator_span.is_none() && !prop.decorators.is_empty() => {
                         first_decorator_span = Some(prop.decorators[0].span);
                     }
-                }
                 _ => {}
             }
         }

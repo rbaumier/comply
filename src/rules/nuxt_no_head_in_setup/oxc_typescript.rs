@@ -44,14 +44,12 @@ impl OxcCheck for Check {
         // Check if this object is inside a defineComponent call
         let mut in_define_component = false;
         for ancestor in semantic.nodes().ancestors(node.id()) {
-            if let AstKind::CallExpression(call) = ancestor.kind() {
-                if let oxc_ast::ast::Expression::Identifier(id) = &call.callee {
-                    if id.name.as_str() == "defineComponent" {
+            if let AstKind::CallExpression(call) = ancestor.kind()
+                && let oxc_ast::ast::Expression::Identifier(id) = &call.callee
+                    && id.name.as_str() == "defineComponent" {
                         in_define_component = true;
                         break;
                     }
-                }
-            }
         }
         if !in_define_component {
             return;

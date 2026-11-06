@@ -54,7 +54,7 @@ fn is_uniform_binary_pattern_element<'a>(
     semantic: &'a oxc_semantic::Semantic<'a>,
     source: &str,
 ) -> bool {
-    use oxc_ast::ast::{ArrayExpressionElement, Expression};
+    use oxc_ast::ast::Expression;
 
     let parent = semantic.nodes().parent_node(node.id());
     let AstKind::ArrayExpression(array) = parent.kind() else {

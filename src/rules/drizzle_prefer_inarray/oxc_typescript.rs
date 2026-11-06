@@ -63,54 +63,6 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
-    }
-
-    #[test]
-    fn flags_bare_in_predicate() {
-        // The whole `sql` template is a bare `col IN (...)` predicate over a JS
-        // array — `inArray(users.role, roles)` is the applicable rewrite, so the
-        // true positive must still fire.
-        let src = "db.select().from(users).where(sql`${users.role} IN (${roles})`)";
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn ignores_full_query_with_literal_in() {
-        // #5750 firing site (user-level-exclusivity.integration.test.ts): a raw
-        // multi-clause analytical query. `inArray()` cannot be spliced into the
-        // middle of it, so this must not be flagged.
-        let src = "const q = sql`SELECT DISTINCT u.id FROM users u WHERE om.role IN ('org_admin', 'org_read')`";
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn ignores_sql_join_fragment_in_larger_query() {
-        // #5750 firing site (trgm-indexes): a `NOT IN (${sql.join(...)})` clause
-        // embedded in a larger raw query — already parameterized, inexpressible
-        // via `inArray()`.
-        let src = "const q = sql`SELECT relname FROM pg_class WHERE relname NOT IN (${notInList})`";
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_in_subquery() {
-        // inArray() does not support subqueries — false positive from #529.
-        let src = r#"db.delete(account).where(sql`account.user_id IN (SELECT id FROM user WHERE email = ${email})`)"#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn allows_in_subquery_no_whitespace() {
-        let src = r#"db.select().where(sql`id IN (SELECT id FROM user)`)"#;
-        assert!(run(src).is_empty());
-    }
-}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -176,5 +128,53 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, src, "t.ts")
+    }
+
+    #[test]
+    fn flags_bare_in_predicate() {
+        // The whole `sql` template is a bare `col IN (...)` predicate over a JS
+        // array — `inArray(users.role, roles)` is the applicable rewrite, so the
+        // true positive must still fire.
+        let src = "db.select().from(users).where(sql`${users.role} IN (${roles})`)";
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_full_query_with_literal_in() {
+        // #5750 firing site (user-level-exclusivity.integration.test.ts): a raw
+        // multi-clause analytical query. `inArray()` cannot be spliced into the
+        // middle of it, so this must not be flagged.
+        let src = "const q = sql`SELECT DISTINCT u.id FROM users u WHERE om.role IN ('org_admin', 'org_read')`";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn ignores_sql_join_fragment_in_larger_query() {
+        // #5750 firing site (trgm-indexes): a `NOT IN (${sql.join(...)})` clause
+        // embedded in a larger raw query — already parameterized, inexpressible
+        // via `inArray()`.
+        let src = "const q = sql`SELECT relname FROM pg_class WHERE relname NOT IN (${notInList})`";
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_in_subquery() {
+        // inArray() does not support subqueries — false positive from #529.
+        let src = r#"db.delete(account).where(sql`account.user_id IN (SELECT id FROM user WHERE email = ${email})`)"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_in_subquery_no_whitespace() {
+        let src = r#"db.select().where(sql`id IN (SELECT id FROM user)`)"#;
+        assert!(run(src).is_empty());
     }
 }

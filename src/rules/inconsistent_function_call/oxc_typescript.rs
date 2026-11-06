@@ -271,11 +271,10 @@ fn has_new_optional_guard(func: &Function<'_>, name: &str) -> bool {
                     }
                 }
             }
-            Statement::IfStatement(if_stmt) => {
-                if is_self_redirect_guard(if_stmt, name, &this_aliases) {
+            Statement::IfStatement(if_stmt)
+                if is_self_redirect_guard(if_stmt, name, &this_aliases) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

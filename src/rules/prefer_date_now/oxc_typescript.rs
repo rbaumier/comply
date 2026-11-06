@@ -71,11 +71,11 @@ impl OxcCheck for Check {
                         });
                     }
             }
-            AstKind::UnaryExpression(unary) => {
+            AstKind::UnaryExpression(unary)
                 // Pattern 2: `+new Date()`
                 if unary.operator == oxc_ast::ast::UnaryOperator::UnaryPlus
                     && is_new_date_no_args(&unary.argument)
-                {
+                => {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, unary.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -88,7 +88,6 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-            }
             _ => {}
         }
     }

@@ -14,13 +14,7 @@ use std::sync::Arc;
 fn class_element_rank(elem: &ClassElement) -> Option<u8> {
     match elem {
         ClassElement::TSIndexSignature(_) => Some(0),
-        ClassElement::PropertyDefinition(prop) => {
-            if prop.r#type == oxc_ast::ast::PropertyDefinitionType::TSAbstractPropertyDefinition {
-                Some(1)
-            } else {
-                Some(1)
-            }
-        }
+        ClassElement::PropertyDefinition(_) => Some(1),
         ClassElement::MethodDefinition(method) => match method.kind {
             MethodDefinitionKind::Constructor => Some(2),
             // A `get x()` / `set x()` accessor is property-like, ranked the same

@@ -40,11 +40,10 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
     }
 
     // Defer to next-no-font-link for Google Fonts URLs.
-    if let Some(href) = get_jsx_attribute_string(node, source, "href") {
-        if FONT_HOSTS.iter().any(|host| href.contains(host)) {
+    if let Some(href) = get_jsx_attribute_string(node, source, "href")
+        && FONT_HOSTS.iter().any(|host| href.contains(host)) {
             return;
         }
-    }
 
     diagnostics.push(Diagnostic {
         path: std::sync::Arc::clone(&ctx.path_arc),

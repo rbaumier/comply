@@ -296,8 +296,8 @@ pub fn is_inside_spawned_closure(node: Node, source: &[u8]) -> bool {
         if parent.kind() == "function_item" {
             return false;
         }
-        if parent.kind() == "closure_expression" {
-            if let Some(args) = parent.parent()
+        if parent.kind() == "closure_expression"
+            && let Some(args) = parent.parent()
                 && args.kind() == "arguments"
                 && let Some(call) = args.parent()
                 && call.kind() == "call_expression"
@@ -306,7 +306,6 @@ pub fn is_inside_spawned_closure(node: Node, source: &[u8]) -> bool {
             {
                 return true;
             }
-        }
         cur = parent;
     }
     false
@@ -2250,11 +2249,10 @@ pub fn is_safety_marker(trimmed: &str) -> bool {
         .trim_start();
     // `# Safety` rustdoc heading at any level: the body opens with one or more
     // `#` followed by the sole word `safety`.
-    if let Some(after_hashes) = body.strip_prefix('#') {
-        if after_hashes.trim_start_matches('#').trim() == "safety" {
+    if let Some(after_hashes) = body.strip_prefix('#')
+        && after_hashes.trim_start_matches('#').trim() == "safety" {
             return true;
         }
-    }
     // `safety` as the leading token of the comment body, so a genuine
     // SAFETY-documentation comment is recognized regardless of the punctuation
     // that terminates the keyword.

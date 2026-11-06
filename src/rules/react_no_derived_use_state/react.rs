@@ -15,13 +15,11 @@ fn collect_destructured_names<'a>(
                     if let Ok(name) = child.utf8_text(source) {
                         out.push(name);
                     }
-                } else if child.kind() == "pair_pattern" {
-                    if let Some(val) = child.child_by_field_name("value") {
-                        if let Ok(name) = val.utf8_text(source) {
+                } else if child.kind() == "pair_pattern"
+                    && let Some(val) = child.child_by_field_name("value")
+                        && let Ok(name) = val.utf8_text(source) {
                             out.push(name);
                         }
-                    }
-                }
             }
         }
         "identifier" => {

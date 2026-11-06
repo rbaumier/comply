@@ -235,6 +235,7 @@ fn is_provably_non_callable_init(expr: &Expression) -> bool {
 ///     multi-arity arm (`cond ? (a, b) => … : …`) or an opaque branch (a bare
 ///     identifier or call whose arity is unknown) leaves the binding potentially
 ///     arity-unsafe and is not exempt.
+///
 /// Recursion resolves nested ternaries (`cond ? a : cond2 ? b : c`) and peels
 /// parentheses off every branch. It terminates because each recursive call
 /// descends into a strict sub-expression of a finite AST.

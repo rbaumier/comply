@@ -64,18 +64,16 @@ impl OxcCheck for Check {
                     let gp_id = nodes.parent_id(parent_id);
                     if gp_id != parent_id {
                         let gp = nodes.get_node(gp_id);
-                        if let AstKind::ObjectProperty(prop) = gp.kind() {
-                            if prop.key.static_name().is_some_and(|n| n == "setup") {
+                        if let AstKind::ObjectProperty(prop) = gp.kind()
+                            && prop.key.static_name().is_some_and(|n| n == "setup") {
                                 in_setup = true;
                             }
-                        }
                     }
                     // Also check if function itself has id "setup"
-                    if let Some(id) = &f.id {
-                        if id.name.as_str() == "setup" {
+                    if let Some(id) = &f.id
+                        && id.name.as_str() == "setup" {
                             in_setup = true;
                         }
-                    }
                 }
                 AstKind::ArrowFunctionExpression(_) => {
                     at_module_scope = false;

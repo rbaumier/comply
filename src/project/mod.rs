@@ -733,7 +733,7 @@ fn extract_script_test_runners(cmd: &str) -> Vec<String> {
 /// (a token starting with `-`) and empty segments name no binary and are
 /// dropped.
 fn extract_script_command_heads(cmd: &str) -> Vec<String> {
-    cmd.split(|c: char| matches!(c, '&' | '|' | ';' | '(' | ')'))
+    cmd.split(['&', '|', ';', '(', ')'])
         .filter_map(|segment| segment.split_whitespace().next())
         .filter(|head| !head.starts_with('-'))
         .map(|head| head.rsplit('/').next().unwrap_or(head))
@@ -3983,11 +3983,10 @@ impl ProjectCtx {
             std::borrow::Cow::Borrowed(path.strip_prefix("./").unwrap_or(path))
         };
         for pattern in &self.entrypoint_globs {
-            if let Ok(glob) = Glob::new(pattern) {
-                if glob.compile_matcher().is_match(rel.as_ref()) {
+            if let Ok(glob) = Glob::new(pattern)
+                && glob.compile_matcher().is_match(rel.as_ref()) {
                     return true;
                 }
-            }
         }
         false
     }
@@ -5795,9 +5794,8 @@ impl ProjectCtx {
         if path.file_stem().and_then(|s| s.to_str()) != Some("index") {
             return false;
         }
-        if !self
-            .nearest_package_json(path)
-            .is_some_and(|pkg| pkg.version.is_some())
+        if self
+            .nearest_package_json(path).is_none_or(|pkg| pkg.version.is_none())
         {
             return false;
         }
@@ -6480,8 +6478,7 @@ fn parse_prisma_soft_delete_models(schema: &str) -> FxHashMap<String, String> {
                     result.insert(name.to_lowercase(), field);
                 }
             }
-        } else if trimmed.starts_with("model ") {
-            let rest = &trimmed["model ".len()..];
+        } else if let Some(rest) = trimmed.strip_prefix("model ") {
             let name = rest.split_whitespace().next().unwrap_or("");
             if name.is_empty() || name == "{" {
                 continue;
@@ -7521,15 +7518,14 @@ fn local_source_exists(candidate: &Path) -> bool {
             }
         }
     }
-    if let Some(name) = candidate.file_name().and_then(|n| n.to_str()) {
-        if let Some(parent) = candidate.parent() {
+    if let Some(name) = candidate.file_name().and_then(|n| n.to_str())
+        && let Some(parent) = candidate.parent() {
             for ext in TS_SOURCE_EXTENSIONS {
                 if parent.join(format!("{name}.{ext}")).is_file() {
                     return true;
                 }
             }
         }
-    }
     if candidate.is_dir() {
         for ext in TS_SOURCE_EXTENSIONS {
             if candidate.join(format!("index.{ext}")).is_file() {

@@ -3520,7 +3520,7 @@ export {};
     }
 
     #[test]
-    fn flags_top_level_beforeAll_without_vitest_import() {
+    fn flags_top_level_before_all_without_vitest_import() {
         // `beforeAll` defined locally — it is a top-level value binding, so the
         // shape check treats it as a user function, not an injected hook.
         let src = "\

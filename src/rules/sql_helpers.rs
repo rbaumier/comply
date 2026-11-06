@@ -463,11 +463,10 @@ fn words_adjacent(lower_text: &str, first: &str, second: &str) -> bool {
         while j < bytes.len() && bytes[j].is_ascii_whitespace() {
             j += 1;
         }
-        if let Some((second_start, _)) = find_word(lower_text, second, j) {
-            if second_start == j {
+        if let Some((second_start, _)) = find_word(lower_text, second, j)
+            && second_start == j {
                 return true;
             }
-        }
         from = first_end;
     }
     false

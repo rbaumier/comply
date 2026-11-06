@@ -61,8 +61,8 @@ fn imports_from_client_only_package(program: tree_sitter::Node<'_>, source: &[u8
         // The import source is a `string` node — last named child or child named "source"
         let mut inner = child.walk();
         for part in child.children(&mut inner) {
-            if part.kind() == "string" {
-                if let Ok(text) = part.utf8_text(source) {
+            if part.kind() == "string"
+                && let Ok(text) = part.utf8_text(source) {
                     let pkg = text.trim_matches(|c| c == '"' || c == '\'');
                     if CLIENT_ONLY_PACKAGE_PREFIXES
                         .iter()
@@ -71,7 +71,6 @@ fn imports_from_client_only_package(program: tree_sitter::Node<'_>, source: &[u8
                         return true;
                     }
                 }
-            }
         }
     }
     false

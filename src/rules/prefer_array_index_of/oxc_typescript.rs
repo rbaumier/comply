@@ -122,6 +122,5 @@ fn is_simple_equality(
     let left_is_ident = matches!(&bin.left, Expression::Identifier(_));
     let right_is_ident = matches!(&bin.right, Expression::Identifier(_));
 
-    (left_text == param_name && left_is_ident && right_is_ident)
-        || (right_text == param_name && right_is_ident && left_is_ident)
+    left_is_ident && right_is_ident && (left_text == param_name || right_text == param_name)
 }

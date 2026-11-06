@@ -85,11 +85,10 @@ fn file_has_guard_call(semantic: &oxc_semantic::Semantic<'_>) -> bool {
         let oxc_ast::AstKind::CallExpression(call) = node.kind() else {
             continue;
         };
-        if let Expression::StaticMemberExpression(member) = &call.callee {
-            if member.property.name.as_str() == "guard" {
+        if let Expression::StaticMemberExpression(member) = &call.callee
+            && member.property.name.as_str() == "guard" {
                 return true;
             }
-        }
     }
     false
 }
@@ -166,11 +165,10 @@ impl OxcCheck for Check {
             }
 
             // Skip `.resolve()` on variables assigned from `Promise.withResolvers()`.
-            if let Expression::Identifier(ident) = &member.object {
-                if with_resolvers_vars.contains(ident.name.as_str()) {
+            if let Expression::Identifier(ident) = &member.object
+                && with_resolvers_vars.contains(ident.name.as_str()) {
                     continue;
                 }
-            }
 
             let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
             diagnostics.push(Diagnostic {

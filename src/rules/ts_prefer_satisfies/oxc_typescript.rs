@@ -130,8 +130,8 @@ impl OxcCheck for Check {
         // keys (`--*`) is the documented workaround: @types/react removed the
         // index signature, so `satisfies React.CSSProperties` would fail to
         // compile when any key starts with `--`.
-        if type_text.trim() == "React.CSSProperties" {
-            if let Expression::ObjectExpression(obj) = &as_expr.expression {
+        if type_text.trim() == "React.CSSProperties"
+            && let Expression::ObjectExpression(obj) = &as_expr.expression {
                 let has_css_custom_prop = obj.properties.iter().any(|prop| {
                     if let ObjectPropertyKind::ObjectProperty(p) = prop {
                         p.key.static_name().is_some_and(|k| k.starts_with("--"))
@@ -143,7 +143,6 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-        }
 
         // `as PropType<T>` is Vue's branded prop-type marker. A runtime
         // constructor value (`String`, or an array of them like
@@ -237,10 +236,6 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn run_ts(s: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, s, "t.ts")
-    }
 
     #[test]
     fn flags_object_literal_cast() {

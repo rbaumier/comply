@@ -77,12 +77,11 @@ impl OxcCheck for Check {
                 first = false;
                 continue;
             }
-            if let AstKind::ObjectProperty(parent_prop) = ancestor.kind() {
-                if prop_key_name(&parent_prop.key) == Some("data") {
+            if let AstKind::ObjectProperty(parent_prop) = ancestor.kind()
+                && prop_key_name(&parent_prop.key) == Some("data") {
                     found_data = true;
                     break;
                 }
-            }
         }
         if !found_data {
             return;

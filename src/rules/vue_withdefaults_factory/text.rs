@@ -21,11 +21,10 @@ fn find_withdefaults_block(src: &str) -> Option<(usize, usize, usize)> {
         match bytes[j] {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
-            b',' if depth == 1 => {
-                if top_comma.is_none() {
+            b',' if depth == 1
+                && top_comma.is_none() => {
                     top_comma = Some(j);
                 }
-            }
             _ => {}
         }
         j += 1;

@@ -44,15 +44,12 @@ fn body_has_error_semantics(
             AstKind::AwaitExpression(_) => return true,
             AstKind::ThrowStatement(_) => return true,
             AstKind::CallExpression(call) => {
-                if let Expression::StaticMemberExpression(member) = &call.callee {
-                    if member.property.name.as_str() == "err" {
-                        if let Expression::Identifier(obj) = &member.object {
-                            if obj.name.as_str() == "Result" {
+                if let Expression::StaticMemberExpression(member) = &call.callee
+                    && member.property.name.as_str() == "err"
+                        && let Expression::Identifier(obj) = &member.object
+                            && obj.name.as_str() == "Result" {
                                 return true;
                             }
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -129,7 +126,7 @@ impl OxcCheck for Check {
                 }
                 _ => None,
             };
-            if func_name.is_some_and(|name| is_helper_function_name(name)) {
+            if func_name.is_some_and(is_helper_function_name) {
                 continue;
             }
 

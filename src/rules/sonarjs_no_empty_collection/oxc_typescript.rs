@@ -21,8 +21,8 @@ pub struct Check;
 fn is_empty_forever<'a>(decl: &'a VariableDeclarator<'a>) -> bool {
     let Some(init) = &decl.init else { return false };
     // Case A: `[] as const`
-    if let Expression::TSAsExpression(as_expr) = init {
-        if let Expression::ArrayExpression(arr) = &as_expr.expression
+    if let Expression::TSAsExpression(as_expr) = init
+        && let Expression::ArrayExpression(arr) = &as_expr.expression
             && arr.elements.is_empty()
             && matches!(
                 &as_expr.type_annotation,
@@ -32,7 +32,6 @@ fn is_empty_forever<'a>(decl: &'a VariableDeclarator<'a>) -> bool {
         {
             return true;
         }
-    }
     // Case B: explicit `readonly []` / `never[]` type annotation.
     if let Expression::ArrayExpression(arr) = init
         && arr.elements.is_empty()

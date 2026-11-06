@@ -247,7 +247,7 @@ pub fn lint_files(
     // non-exported name → signature fingerprint). `collect` preserves file
     // order, so `import_maps[idx]` and `module_local_decls[idx]` belong to the
     // file whose functions carry `file_idx == idx`.
-    let per_file: Vec<(Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>)> = files
+    let per_file: Vec<FileExtraction> = files
         .par_iter()
         .enumerate()
         .map_init(Parser::new, |parser, (idx, file)| {
@@ -423,12 +423,15 @@ pub fn lint_files(
     diags
 }
 
+/// A file's functions, import map and module-local declaration fingerprints.
+type FileExtraction = (Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>);
+
 fn extract_functions(
     parser: &mut Parser,
     file: &SourceFile,
     file_idx: usize,
     min_body_tokens: usize,
-) -> (Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>) {
+) -> FileExtraction {
     let Ok(source) = std::fs::read_to_string(&file.path) else {
         return (Vec::new(), FxHashMap::default(), FxHashMap::default());
     };
@@ -471,13 +474,12 @@ fn extract_functions(
         {
             collect_use(argument, "", bytes, &mut import_map);
         }
-        if let Some((name, decl, sig_node, body)) = named_function_parts(node) {
-            if let Some(entry) =
+        if let Some((name, decl, sig_node, body)) = named_function_parts(node)
+            && let Some(entry) =
                 build_entry(name, decl, sig_node, body, bytes, file_idx, min_body_tokens)
             {
                 entries.push((entry, is_nested_function(decl)));
             }
-        }
         if cursor.goto_first_child() {
             continue;
         }

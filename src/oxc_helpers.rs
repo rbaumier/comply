@@ -5214,13 +5214,12 @@ pub fn is_in_sslmode_no_verify_branch(
                     return true;
                 }
             }
-            AstKind::ConditionalExpression(cond) => {
+            AstKind::ConditionalExpression(cond)
                 if test_compares_no_verify(&cond.test)
                     && span_contains(cond.consequent.span(), node_span)
-                {
+                => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

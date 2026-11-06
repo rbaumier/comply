@@ -34,7 +34,7 @@ impl OxcCheck for Check {
             return;
         }
 
-        if !receiver_looks_like_db(&member.object, ctx.source) {
+        if !receiver_looks_like_db(&member.object) {
             return;
         }
 
@@ -70,8 +70,8 @@ impl OxcCheck for Check {
 }
 
 /// Decide whether the receiver of `.delete(..)` looks like a database client.
-fn receiver_looks_like_db(expr: &Expression, source: &str) -> bool {
-    let name = leftmost_identifier(expr, source);
+fn receiver_looks_like_db(expr: &Expression) -> bool {
+    let name = leftmost_identifier(expr);
     let Some(name) = name else { return false };
     let lower = name.to_lowercase();
     matches!(
@@ -83,7 +83,7 @@ fn receiver_looks_like_db(expr: &Expression, source: &str) -> bool {
         || name.ends_with("Db")
 }
 
-fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<String> {
+fn leftmost_identifier<'a>(expr: &'a Expression<'a>) -> Option<String> {
     match expr {
         Expression::Identifier(id) => Some(id.name.to_string()),
         Expression::StaticMemberExpression(member) => {
@@ -91,7 +91,7 @@ fn leftmost_identifier<'a>(expr: &'a Expression<'a>, source: &str) -> Option<Str
             Some(member.property.name.to_string())
         }
         Expression::ComputedMemberExpression(member) => {
-            leftmost_identifier(&member.object, source)
+            leftmost_identifier(&member.object)
         }
         Expression::ThisExpression(_) => Some("this".into()),
         _ => None,
