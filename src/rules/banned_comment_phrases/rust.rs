@@ -13,7 +13,7 @@ crate::ast_check! { on ["line_comment", "block_comment"] => |node, source, ctx, 
         &node,
         super::META.id,
         format!(
-            "Comment uses `{phrase}` — narrator filler typical of AI-generated \
+            "Comment uses `{phrase}` — filler typical of AI-generated \
              prose. State the point directly or delete the comment."
         ),
         Severity::Error,
@@ -52,6 +52,18 @@ mod tests {
     #[test]
     fn flags_block_comment() {
         assert_eq!(run("/* circle back to this once the API lands */\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_hedging_deferral_and_jargon_phrases() {
+        assert_eq!(run("// I think this handles the empty case\nfn f() {}").len(), 1);
+        assert_eq!(run("// refactor later once the API settles\nfn f() {}").len(), 1);
+        assert_eq!(run("/// A state-of-the-art tokenizer\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn ignores_phrase_in_string_literal() {
+        assert!(run("fn f() { let _ = \"should work, I think\"; }").is_empty());
     }
 
     #[test]

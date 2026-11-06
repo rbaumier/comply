@@ -1,10 +1,12 @@
-//! banned-comment-phrases — flag AI-tell narrator preambles and business
-//! jargon in code comments.
+//! banned-comment-phrases — flag AI-tell narrator preambles, hedges, deferrals
+//! and business jargon in code comments.
 //!
-//! Phrases like "here's the thing", "let me walk you through" or "deep dive"
-//! announce a point instead of stating it. They read as AI-generated prose
-//! (see the stop-slop skill) and carry no information a reader of the code
-//! needs. Cut the phrase and state the point, or delete the comment.
+//! Phrases like "here's the thing" or "deep dive" announce a point instead of
+//! stating it; "I think" or "should work" hedge on behaviour the code fixes;
+//! "refactor later" or "temporary fix" defer work no tracker holds. They read
+//! as AI-generated prose (see the stop-slop skill) and carry no information a
+//! reader of the code needs. Cut the phrase and state the point, or delete the
+//! comment.
 
 mod oxc_typescript;
 mod rust;
@@ -18,13 +20,18 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "banned-comment-phrases",
-    description: "Narrator preambles and business jargon in comments read as AI-generated filler.",
+    description: "Narrator preambles, hedges, deferrals and business jargon in comments read as AI-generated filler.",
     remediation: "Drop the phrase and state the point directly, or delete the comment. \
                   Banned: here's the thing, here's what, here's why, let me be clear, \
                   let me walk you through, in this section we'll, as we'll see, the \
                   uncomfortable truth, let that sink in, make no mistake, the reality is, \
                   at the end of the day, it's worth noting, think about it, and that's okay, \
-                  deep dive, game-changer, circle back, double down, on the same page.",
+                  deep dive, game-changer, circle back, double down, on the same page, \
+                  should work, might need, probably works, not sure if, I think, I believe, \
+                  I assume, as far as I know, temporary fix, will refactor, refactor later, \
+                  clean up later, revisit later, good enough for now, quick and dirty, \
+                  band-aid, stop-gap, fix this later, change this later, cutting-edge, \
+                  state-of-the-art, best-in-class, industry-leading, game-changing.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
@@ -54,6 +61,30 @@ const PHRASES: &[&str] = &[
     "circle back",
     "double down",
     "on the same page",
+    "should work",
+    "might need",
+    "probably works",
+    "not sure if",
+    "i think",
+    "i believe",
+    "i assume",
+    "as far as i know",
+    "temporary fix",
+    "will refactor",
+    "refactor later",
+    "clean up later",
+    "revisit later",
+    "good enough for now",
+    "quick and dirty",
+    "band-aid",
+    "stop-gap",
+    "fix this later",
+    "change this later",
+    "cutting-edge",
+    "state-of-the-art",
+    "best-in-class",
+    "industry-leading",
+    "game-changing",
 ];
 
 /// Return the first banned phrase found in `text`, case-insensitive, matched
