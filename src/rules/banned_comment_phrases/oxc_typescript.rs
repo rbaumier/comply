@@ -30,7 +30,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Comment uses `{phrase}` \u{2014} narrator filler typical of \
+                    "Comment uses `{phrase}` \u{2014} filler typical of \
                      AI-generated prose. State the point directly or delete the comment."
                 ),
                 severity: Severity::Error,

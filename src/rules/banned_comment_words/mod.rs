@@ -1,10 +1,13 @@
-//! banned-comment-words — flag dismissive filler words in code comments.
+//! banned-comment-words — flag dismissive filler, hedging and jargon words in
+//! code comments.
 //!
 //! Words like "obviously", "simply", "just", "basically" are red flags in
 //! comments. They paper over complexity without explaining it. The
 //! coding-standards skill says: "If it's obvious, no comment is needed; if
 //! it needs `simply`, it's not simple." Strip the filler and either delete
-//! the comment or rewrite it to explain the actual subtlety.
+//! the comment or rewrite it to explain the actual subtlety. Hedges
+//! ("hopefully") and marketing jargon ("robust", "leverage") fail the same
+//! way: they rate the code instead of saying what it does.
 //!
 //! A banned spelling is filler only in the sense its neighbours give it, and
 //! only where no explanation stands beside it. Three matches are left alone:
@@ -26,12 +29,14 @@ use rustc_hash::FxHashSet;
 
 pub const META: RuleMeta = RuleMeta {
     id: "banned-comment-words",
-    description: "Dismissive filler words in comments hide complexity instead of explaining it.",
+    description: "Filler, hedging and jargon words in comments hide complexity instead of explaining it.",
     remediation: "Remove the filler word and rewrite the comment to explain the actual \
                   subtlety. If the line needs no explanation, delete the comment instead. \
                   Banned: obviously, simply, just, basically, clearly, trivially, \
                   reloaded, really, literally, genuinely, honestly, truly, fundamentally, \
-                  inevitably, interestingly, importantly, crucially.",
+                  inevitably, interestingly, importantly, crucially, hopefully, robust, \
+                  seamless, leverage, utilize, facilitate, streamline, delve, pivotal, \
+                  myriad, plethora, paramount, bandaid, stopgap.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["comments"],
@@ -58,6 +63,20 @@ const BANNED: &[&str] = &[
     "interestingly",
     "importantly",
     "crucially",
+    "hopefully",
+    "robust",
+    "seamless",
+    "leverage",
+    "utilize",
+    "facilitate",
+    "streamline",
+    "delve",
+    "pivotal",
+    "myriad",
+    "plethora",
+    "paramount",
+    "bandaid",
+    "stopgap",
 ];
 
 /// Return the earliest banned word in list order that `text` holds at a word

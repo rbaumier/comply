@@ -110,7 +110,7 @@ impl AstCheck for Check {
                 column: found.column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Comment uses `{word}` — dismissive filler that hides complexity. \
+                    "Comment uses `{word}` — filler or jargon that hides complexity. \
                      Either explain the actual subtlety or delete the comment if the \
                      line is genuinely self-explanatory."
                 ),
@@ -184,6 +184,18 @@ mod tests {
     #[test]
     fn flags_crucially() {
         assert_eq!(run("// crucially this runs first\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn flags_hedging_deferral_and_jargon_words() {
+        assert_eq!(run("// hopefully the cache is warm\nfn f() {}").len(), 1);
+        assert_eq!(run("// stopgap until the parser lands\nfn f() {}").len(), 1);
+        assert_eq!(run("// a robust retry loop\nfn f() {}").len(), 1);
+    }
+
+    #[test]
+    fn ignores_jargon_word_outside_comments() {
+        assert!(run("fn leverage() { let _ = \"robust\"; }").is_empty());
     }
 
     #[test]

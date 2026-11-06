@@ -32,7 +32,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Comment uses `{word}` — dismissive filler that hides complexity. \
+                    "Comment uses `{word}` — filler or jargon that hides complexity. \
                      Either explain the actual subtlety or delete the comment if the \
                      line is genuinely self-explanatory."
                 ),

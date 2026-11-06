@@ -125,7 +125,7 @@ fn validates_signed_cookie_csrf(text: &str) -> bool {
 fn is_oauth_callback_path(path: &str) -> bool {
     let unquoted = path.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
     let lower = unquoted.to_ascii_lowercase();
-    // Drop a query string and trailing slash so the terminal-segment check is robust.
+    // Drop a query string and trailing slash before the terminal-segment check.
     let stem = lower.split('?').next().unwrap_or(&lower).trim_end_matches('/');
     // Explicit OAuth/auth context anywhere covers provider sub-paths like
     // `/auth/callback/:provider`.
