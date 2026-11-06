@@ -44,9 +44,9 @@ fn any_divergent_import_source(
 ) -> bool {
     let map_a = &import_maps[a.file_idx];
     let map_b = &import_maps[b.file_idx];
-    a.body_idents.iter().any(|name| {
-        matches!((map_a.get(name), map_b.get(name)), (Some(sa), Some(sb)) if sa != sb)
-    })
+    a.body_idents
+        .iter()
+        .any(|name| matches!((map_a.get(name), map_b.get(name)), (Some(sa), Some(sb)) if sa != sb))
 }
 
 /// Whether a specifier resolves inside the importing package or crate.
@@ -69,9 +69,9 @@ fn any_relative_import_dependency(
 ) -> bool {
     let map_a = &import_maps[a.file_idx];
     let map_b = &import_maps[b.file_idx];
-    a.body_idents
-        .iter()
-        .any(|name| is_relative_specifier(map_a.get(name)) || is_relative_specifier(map_b.get(name)))
+    a.body_idents.iter().any(|name| {
+        is_relative_specifier(map_a.get(name)) || is_relative_specifier(map_b.get(name))
+    })
 }
 
 /// Whether a body name resolves to diverging module-local declarations.
@@ -424,7 +424,11 @@ pub fn lint_files(
 }
 
 /// A file's functions, import map and module-local declaration fingerprints.
-type FileExtraction = (Vec<FnEntry>, FxHashMap<String, String>, FxHashMap<String, Vec<u8>>);
+type FileExtraction = (
+    Vec<FnEntry>,
+    FxHashMap<String, String>,
+    FxHashMap<String, Vec<u8>>,
+);
 
 fn extract_functions(
     parser: &mut Parser,
@@ -477,9 +481,9 @@ fn extract_functions(
         if let Some((name, decl, sig_node, body)) = named_function_parts(node)
             && let Some(entry) =
                 build_entry(name, decl, sig_node, body, bytes, file_idx, min_body_tokens)
-            {
-                entries.push((entry, is_nested_function(decl)));
-            }
+        {
+            entries.push((entry, is_nested_function(decl)));
+        }
         if cursor.goto_first_child() {
             continue;
         }
@@ -977,8 +981,16 @@ function cellToString(cell: unknown): string {
         // Regression (saurenya MR 1292): `cellToString` pasted verbatim into two
         // import readers. ~30 body tokens — under no-clones' 100-token window.
         let dir = tempfile::tempdir().unwrap();
-        let a = write(&dir, "direct-reader.ts", &format!("export const x = 1;\n{CELL_TO_STRING}"));
-        let b = write(&dir, "hipra.ts", &format!("export const y = 2;\n{CELL_TO_STRING}"));
+        let a = write(
+            &dir,
+            "direct-reader.ts",
+            &format!("export const x = 1;\n{CELL_TO_STRING}"),
+        );
+        let b = write(
+            &dir,
+            "hipra.ts",
+            &format!("export const y = 2;\n{CELL_TO_STRING}"),
+        );
         let diags = run(&[&a, &b]);
         assert_eq!(diags.len(), 1, "the pasted function must be flagged");
         assert_eq!(diags[0].rule_id, RULE_ID);
@@ -1006,7 +1018,11 @@ function cellToString(cell: unknown): string {
 }
 ";
         let b = write(&dir, "b.ts", with_comment);
-        assert_eq!(run(&[&a, &b]).len(), 1, "comments and whitespace are not part of the body");
+        assert_eq!(
+            run(&[&a, &b]).len(),
+            1,
+            "comments and whitespace are not part of the body"
+        );
     }
 
     #[test]
@@ -1022,7 +1038,10 @@ function cellToString(cell: unknown): string {
 }
 ";
         let b = write(&dir, "b.ts", variant);
-        assert!(run(&[&a, &b]).is_empty(), "a different body is not a duplicate");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a different body is not a duplicate"
+        );
     }
 
     #[test]
@@ -1161,19 +1180,29 @@ export function stringifyCell(value: unknown): string {
         let dir = tempfile::tempdir().unwrap();
         let a = write(&dir, "a.ts", "export function noop() {}\n");
         let b = write(&dir, "b.ts", "export function noop() {}\n");
-        assert!(run(&[&a, &b]).is_empty(), "a body under min_body_tokens is ignored");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "a body under min_body_tokens is ignored"
+        );
     }
 
     #[test]
     fn flags_duplicate_arrow_const() {
         let dir = tempfile::tempdir().unwrap();
         let arrow = CELL_TO_STRING
-            .replace("function cellToString(cell: unknown): string {", "const cellToString = (cell: unknown): string => {")
+            .replace(
+                "function cellToString(cell: unknown): string {",
+                "const cellToString = (cell: unknown): string => {",
+            )
             .replace("\n}\n", "\n};\n");
         let a = write(&dir, "a.ts", &arrow);
         let b = write(&dir, "b.ts", &arrow);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a duplicated arrow-const function is flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a duplicated arrow-const function is flagged"
+        );
         assert!(diags[0].message.contains("`cellToString`"));
     }
 
@@ -1196,7 +1225,11 @@ export function stringifyCell(value: unknown): string {
         let helper = write(&dir, "render.tsx", CELL_TO_STRING);
         let spec = write(&dir, "feature.test.tsx", CELL_TO_STRING);
         let diags = run(&[&helper, &spec]);
-        assert_eq!(diags.len(), 1, "a helper duplicated into a spec is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a helper duplicated into a spec is still flagged"
+        );
         // Canonical is the lexicographically-first path (`feature.test.tsx`);
         // the helper reports it.
         assert!(diags[0].path.ends_with("render.tsx"));
@@ -1206,9 +1239,15 @@ export function stringifyCell(value: unknown): string {
     fn formatting_insensitive() {
         let dir = tempfile::tempdir().unwrap();
         let a = write(&dir, "a.ts", CELL_TO_STRING);
-        let reformatted = CELL_TO_STRING.replace("  ", "\t").replace(") return", ")\n    return");
+        let reformatted = CELL_TO_STRING
+            .replace("  ", "\t")
+            .replace(") return", ")\n    return");
         let b = write(&dir, "b.ts", &reformatted);
-        assert_eq!(run(&[&a, &b]).len(), 1, "token-based match ignores formatting");
+        assert_eq!(
+            run(&[&a, &b]).len(),
+            1,
+            "token-based match ignores formatting"
+        );
     }
 
     #[test]
@@ -1226,7 +1265,10 @@ export function stringifyCell(value: unknown): string {
             "b.ts",
             "function pick(x: number): number;\nfunction pick(x: string): string;\nfunction pick(x: unknown) { return String(x); }\n",
         );
-        assert!(run(&[&a, &b]).is_empty(), "overload signatures have no body and differ in impl");
+        assert!(
+            run(&[&a, &b]).is_empty(),
+            "overload signatures have no body and differ in impl"
+        );
     }
 
     #[test]
@@ -1346,7 +1388,11 @@ function wrap() {
         let a = write(&dir, "a/alias.ts", f);
         let b = write(&dir, "b/alias.ts", f);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical generics + signature + body is still a duplicate");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical generics + signature + body is still a duplicate"
+        );
         assert!(diags[0].message.contains("`alias`"));
     }
 
@@ -1365,7 +1411,11 @@ function toOption(e: ScopeEntity): Option {
         let a = write(&dir, "a.ts", f);
         let b = write(&dir, "b.ts", f);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "identical signature + body is still a duplicate");
+        assert_eq!(
+            diags.len(),
+            1,
+            "identical signature + body is still a duplicate"
+        );
         assert!(diags[0].message.contains("`toOption`"));
     }
 
@@ -1385,7 +1435,10 @@ function toOption(e: ScopeEntity): Option {
         let dir = tempfile::tempdir().unwrap();
         let src = write(&dir, "src/util.ts", CELL_TO_STRING);
         let fuzz = write(&dir, "fuzz/fuzz_targets/harness.ts", CELL_TO_STRING);
-        assert!(run(&[&src, &fuzz]).is_empty(), "fuzz-harness function copies are exempt");
+        assert!(
+            run(&[&src, &fuzz]).is_empty(),
+            "fuzz-harness function copies are exempt"
+        );
     }
 
     #[test]
@@ -1705,7 +1758,11 @@ fn sum_all(xs: &[u32]) -> u32 {
         let a = write(&dir, "src/admin.js", CELL_TO_STRING);
         let b = write(&dir, "src/reader.js", CELL_TO_STRING);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "duplicates across real source files are still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "duplicates across real source files are still flagged"
+        );
         assert!(diags[0].message.contains("`cellToString`"));
     }
 
@@ -1744,7 +1801,11 @@ fn sum_all(xs: &[u32]) -> u32 {
         let a = write(&dir, "packages/array/asc.ts", PRIVATE_HELPER);
         let b = write(&dir, "packages/array/range.ts", PRIVATE_HELPER);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "intra-package private duplicates are still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "intra-package private duplicates are still flagged"
+        );
         assert!(diags[0].message.contains("`ascR`"));
     }
 
@@ -1760,7 +1821,11 @@ fn sum_all(xs: &[u32]) -> u32 {
         let a = write(&dir, "packages/collection/index.ts", &exported);
         let b = write(&dir, "packages/array/index.ts", &exported);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "exported cross-package duplicates are still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "exported cross-package duplicates are still flagged"
+        );
         assert!(diags[0].message.contains("`ascR`"));
     }
 
@@ -1825,7 +1890,11 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let a = write(&dir, "a.ts", pure);
         let b = write(&dir, "b.ts", pure);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "an import-free pure duplicate is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an import-free pure duplicate is still flagged"
+        );
         assert!(diags[0].message.contains("`shallowEqual`"));
     }
 
@@ -1891,7 +1960,11 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let a = write(&dir, "packages/xstate-react/src/shallowEqual.ts", pure);
         let b = write(&dir, "packages/xstate-store/src/shallowEqual.ts", pure);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a pure cross-package duplicate is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a pure cross-package duplicate is still flagged"
+        );
         assert!(diags[0].message.contains("`shallowEqual`"));
     }
 
@@ -1913,7 +1986,11 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
             &use_machine_entry("./useActor"),
         );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "intra-package relative-delegating duplicates are still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "intra-package relative-delegating duplicates are still flagged"
+        );
         assert!(diags[0].message.contains("`useMachine`"));
     }
 
@@ -1926,10 +2003,22 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let dir = tempfile::tempdir().unwrap();
         write_pkg(&dir, "packages/a", "@scope/a");
         write_pkg(&dir, "packages/b", "@scope/b");
-        let a = write(&dir, "packages/a/src/useMachine.ts", &use_machine_entry("xstate"));
-        let b = write(&dir, "packages/b/src/useMachine.ts", &use_machine_entry("xstate"));
+        let a = write(
+            &dir,
+            "packages/a/src/useMachine.ts",
+            &use_machine_entry("xstate"),
+        );
+        let b = write(
+            &dir,
+            "packages/b/src/useMachine.ts",
+            &use_machine_entry("xstate"),
+        );
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a bare-import cross-package duplicate is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a bare-import cross-package duplicate is still flagged"
+        );
         assert!(diags[0].message.contains("`useMachine`"));
     }
 
@@ -2002,7 +2091,11 @@ export function shallowEqual(a: Record<string, unknown>, b: Record<string, unkno
         let a = write(&dir, "a.ts", f);
         let b = write(&dir, "b.ts", f);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "an imported shared delegate stays a duplicate");
+        assert_eq!(
+            diags.len(),
+            1,
+            "an imported shared delegate stays a duplicate"
+        );
         assert!(diags[0].message.contains("`convertDriverError`"));
     }
 
@@ -2027,7 +2120,11 @@ function deepClone(value: unknown): unknown {
         let a = write(&dir, "a.ts", f);
         let b = write(&dir, "b.ts", f);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a recursive private helper is still a duplicate");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a recursive private helper is still a duplicate"
+        );
         assert!(diags[0].message.contains("`deepClone`"));
     }
 
@@ -2049,7 +2146,11 @@ function factorial(n: number): number {
         let a = write(&dir, "a.ts", &format!("export {body}"));
         let b = write(&dir, "b.ts", body);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a recursive duplicate exported in one file is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a recursive duplicate exported in one file is still flagged"
+        );
         assert!(diags[0].message.contains("`factorial`"));
     }
 
@@ -2075,8 +2176,16 @@ function factorial(n: number): number {
                  }}\n"
             )
         };
-        let a = write(&dir, "neon.ts", &module("case \"22001\":\n      return { kind: \"LengthMismatch\" };"));
-        let b = write(&dir, "sqlite.ts", &module("case \"SQLITE_BUSY\":\n      return { kind: \"SocketTimeout\" };"));
+        let a = write(
+            &dir,
+            "neon.ts",
+            &module("case \"22001\":\n      return { kind: \"LengthMismatch\" };"),
+        );
+        let b = write(
+            &dir,
+            "sqlite.ts",
+            &module("case \"SQLITE_BUSY\":\n      return { kind: \"SocketTimeout\" };"),
+        );
         assert!(
             run(&[&a, &b]).is_empty(),
             "a divergent const-arrow module-local callee is exempt"
@@ -2153,7 +2262,11 @@ export function compute(input: number): number {
         // true duplicate.
         let dir = tempfile::tempdir().unwrap();
         let a = write(&dir, "overlay/Overlay.tsx", &keydown_component("zIndex"));
-        let b = write(&dir, "popup/Popup.tsx", &keydown_component("normalizedZIndex"));
+        let b = write(
+            &dir,
+            "popup/Popup.tsx",
+            &keydown_component("normalizedZIndex"),
+        );
         assert!(
             run(&[&a, &b]).is_empty(),
             "a nested closure capturing enclosing-scope bindings is exempt"
@@ -2178,7 +2291,11 @@ function helper(a: number, b: number): number {
         let a = write(&dir, "a.ts", helper);
         let b = write(&dir, "b.ts", helper);
         let diags = run(&[&a, &b]);
-        assert_eq!(diags.len(), 1, "a module-scope no-capture duplicate is still flagged");
+        assert_eq!(
+            diags.len(),
+            1,
+            "a module-scope no-capture duplicate is still flagged"
+        );
         assert!(diags[0].message.contains("`helper`"));
     }
 }

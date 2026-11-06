@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use tree_sitter::Node;
 
 use crate::project::{
-    RUST_MODULE_CHAIN_MAX_DEPTH, ProjectCtx, parse_rust_source, rust_module_parent_candidates,
+    ProjectCtx, RUST_MODULE_CHAIN_MAX_DEPTH, parse_rust_source, rust_module_parent_candidates,
 };
 
 /// True if `node` is inside an `async fn`. Walks up parents looking
@@ -298,14 +298,14 @@ pub fn is_inside_spawned_closure(node: Node, source: &[u8]) -> bool {
         }
         if parent.kind() == "closure_expression"
             && let Some(args) = parent.parent()
-                && args.kind() == "arguments"
-                && let Some(call) = args.parent()
-                && call.kind() == "call_expression"
-                && let Some(fn_text) = call_function_name(call, source)
-                && is_thread_spawn_fn(fn_text)
-            {
-                return true;
-            }
+            && args.kind() == "arguments"
+            && let Some(call) = args.parent()
+            && call.kind() == "call_expression"
+            && let Some(fn_text) = call_function_name(call, source)
+            && is_thread_spawn_fn(fn_text)
+        {
+            return true;
+        }
         cur = parent;
     }
     false
@@ -451,8 +451,7 @@ pub fn result_ok_type<'a>(node: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
 /// must skip these, since no `Err`-typed value is produced here.
 pub fn is_expression_turbofish(node: Node) -> bool {
     node.parent().is_some_and(|parent| {
-        parent.kind() == "scoped_identifier"
-            && parent.child_by_field_name("path") == Some(node)
+        parent.kind() == "scoped_identifier" && parent.child_by_field_name("path") == Some(node)
     })
 }
 
@@ -771,9 +770,9 @@ pub fn is_under_tests_dir(path: &std::path::Path) -> bool {
     ];
 
     if path.components().any(|c| {
-        c.as_os_str().to_str().is_some_and(|seg| {
-            segment_is_test_token_dir(seg) || TEST_SEGMENTS.contains(&seg)
-        })
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|seg| segment_is_test_token_dir(seg) || TEST_SEGMENTS.contains(&seg))
     }) {
         return true;
     }
@@ -862,7 +861,7 @@ fn attr_marks_test(text: &str) -> bool {
 fn attr_is_test_macro(text: &str) -> bool {
     text.contains("#[test]")
         || text.contains("::test]")   // #[tokio::test], #[actix_rt::test], …
-        || text.contains("::test(")   // #[tokio::test(flavor = "multi_thread")], …
+        || text.contains("::test(") // #[tokio::test(flavor = "multi_thread")], …
 }
 
 /// True when `node` sits inside a function carrying the test macro itself —
@@ -910,7 +909,9 @@ pub fn is_suppressed_by_clippy_allow(node: Node, lints: &[&str], source: &[u8]) 
     let mut cur = node;
     loop {
         if item_has_clippy_allow(cur, lints, source)
-            || any_owned_attribute(cur, |attr| attr_node_allows_clippy_lint(attr, lints, source))
+            || any_owned_attribute(cur, |attr| {
+                attr_node_allows_clippy_lint(attr, lints, source)
+            })
         {
             return true;
         }
@@ -943,15 +944,22 @@ fn attr_allows_clippy_lint(text: &str, lints: &[&str]) -> bool {
         || text.contains("expect(")
         || text.contains("allow (")
         || text.contains("expect (");
-    is_allow_or_expect && lints.iter().any(|lint| text.contains(&format!("clippy::{lint}")))
+    is_allow_or_expect
+        && lints
+            .iter()
+            .any(|lint| text.contains(&format!("clippy::{lint}")))
 }
 
 /// The bounded set of async-mutex module paths whose `Mutex` guards an async
 /// critical section across `.await` and therefore has no lock-free `AtomicX`
 /// drop-in replacement. Resolved from import provenance (the `use` path or a
 /// qualified type path), never from a user-chosen identifier.
-pub const ASYNC_MUTEX_MODULES: &[&str] =
-    &["tokio::sync", "futures::lock", "async_std::sync", "async_lock"];
+pub const ASYNC_MUTEX_MODULES: &[&str] = &[
+    "tokio::sync",
+    "futures::lock",
+    "async_std::sync",
+    "async_lock",
+];
 
 /// True if `module_path` (the `::`-joined segments preceding a type name) names
 /// one of [`ASYNC_MUTEX_MODULES`].
@@ -1170,8 +1178,10 @@ pub fn file_references_db_crate(node: Node, source: &[u8]) -> bool {
             // A `use` declaration holds nothing but its own path.
             continue;
         }
-        if matches!(current.kind(), "scoped_identifier" | "scoped_type_identifier")
-            && path_root_segment(current, source).is_some_and(is_db_crate)
+        if matches!(
+            current.kind(),
+            "scoped_identifier" | "scoped_type_identifier"
+        ) && path_root_segment(current, source).is_some_and(is_db_crate)
             && !cfg_gates_compilation(current, source, "test")
         {
             return true;
@@ -1615,7 +1625,11 @@ fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<Use
             };
             let mut module = prefix.to_vec();
             module.extend_from_slice(module_tail);
-            out.push(UsePathLeaf { module, local: local.clone(), source_name: None });
+            out.push(UsePathLeaf {
+                module,
+                local: local.clone(),
+                source_name: None,
+            });
         }
         "identifier" | "type_identifier" => {
             out.push(UsePathLeaf {
@@ -1651,7 +1665,11 @@ fn scan_use_tree(node: Node, source: &[u8], prefix: &[String], out: &mut Vec<Use
             if let Some(path) = use_path_child(node) {
                 inner.extend(rust_path_segments(path, source));
             }
-            out.push(UsePathLeaf { module: inner, local: "*".to_string(), source_name: None });
+            out.push(UsePathLeaf {
+                module: inner,
+                local: "*".to_string(),
+                source_name: None,
+            });
         }
         "use_as_clause" => {
             let mut cursor = node.walk();
@@ -1988,8 +2006,7 @@ pub fn has_declared_attribute_segment(item: Node, source: &[u8], segments: &[&st
 /// `#[core::track_caller]` both count. The segment is bounded by `[`/`::` on the
 /// left so `#[my_track_caller]` does not match.
 fn attr_names_path(attr_text: &str, attr_path: &str) -> bool {
-    attr_text.contains(&format!("[{attr_path}]"))
-        || attr_text.contains(&format!("::{attr_path}]"))
+    attr_text.contains(&format!("[{attr_path}]")) || attr_text.contains(&format!("::{attr_path}]"))
 }
 
 /// Outer-attribute path identifiers that publish an item under a linker symbol
@@ -2108,7 +2125,9 @@ pub fn has_attached_comment(node: Node) -> bool {
         if has_comment_above(current) || has_trailing_comment(current) {
             return true;
         }
-        let Some(parent) = current.parent() else { return false };
+        let Some(parent) = current.parent() else {
+            return false;
+        };
         if parent.start_position().row != row {
             return false;
         }
@@ -2121,7 +2140,9 @@ pub fn has_attached_comment(node: Node) -> bool {
 /// lines stack, so the nearest sibling is the one that touches `node`; an
 /// earlier one can only end higher up.
 fn has_comment_above(node: Node) -> bool {
-    let Some(previous) = node.prev_named_sibling() else { return false };
+    let Some(previous) = node.prev_named_sibling() else {
+        return false;
+    };
     is_comment_node(previous)
         && last_occupied_row(previous) + 1 == node.start_position().row
         && starts_its_line(previous)
@@ -2130,7 +2151,9 @@ fn has_comment_above(node: Node) -> bool {
 /// True if the named sibling immediately after `node` is a comment that opens on
 /// `node`'s line and ends it — the trailing `// why` / `/* why */` position.
 fn has_trailing_comment(node: Node) -> bool {
-    let Some(next) = node.next_named_sibling() else { return false };
+    let Some(next) = node.next_named_sibling() else {
+        return false;
+    };
     is_comment_node(next)
         && next.start_position().row == node.start_position().row
         && ends_its_line(next)
@@ -2160,7 +2183,11 @@ fn ends_its_line(comment: Node) -> bool {
 /// lands on column 0 of the next row, where it occupies nothing.
 fn last_occupied_row(node: Node) -> usize {
     let end = node.end_position();
-    if end.column == 0 { end.row.saturating_sub(1) } else { end.row }
+    if end.column == 0 {
+        end.row.saturating_sub(1)
+    } else {
+        end.row
+    }
 }
 
 /// True if `node` is a `//` or `/* */` comment, doc or not.
@@ -2250,9 +2277,10 @@ pub fn is_safety_marker(trimmed: &str) -> bool {
     // `# Safety` rustdoc heading at any level: the body opens with one or more
     // `#` followed by the sole word `safety`.
     if let Some(after_hashes) = body.strip_prefix('#')
-        && after_hashes.trim_start_matches('#').trim() == "safety" {
-            return true;
-        }
+        && after_hashes.trim_start_matches('#').trim() == "safety"
+    {
+        return true;
+    }
     // `safety` as the leading token of the comment body, so a genuine
     // SAFETY-documentation comment is recognized regardless of the punctuation
     // that terminates the keyword.
@@ -2262,7 +2290,9 @@ pub fn is_safety_marker(trimmed: &str) -> bool {
     // The keyword stands alone: the next character (if any) is a
     // word boundary, so a longer identifier such as `safetycheck` or
     // `safety_check` does not match (`_` is part of a word, not a boundary).
-    rest.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    rest.chars()
+        .next()
+        .is_none_or(|c| !c.is_alphanumeric() && c != '_')
 }
 
 /// True if `item` carries a `#[doc(hidden)]` outer attribute as a preceding
@@ -2878,7 +2908,9 @@ fn attribute_is_cfg_debug_assertions(attribute_item: Node, source: &[u8]) -> boo
 /// scanning raw text — means an attribute whose name merely ends in `cfg`, or a
 /// comment mentioning `cfg`, does not match.
 pub fn has_cfg_attribute(item: Node, source: &[u8]) -> bool {
-    any_preceding_attribute_item(item, |attribute_item| attribute_is_cfg(attribute_item, source))
+    any_preceding_attribute_item(item, |attribute_item| {
+        attribute_is_cfg(attribute_item, source)
+    })
 }
 
 /// Collect the trait names from the top-level `#[derive(...)]` attributes
@@ -3158,7 +3190,8 @@ pub fn trait_impl_mandating_return_type(node: Node) -> Option<Node> {
 /// `impl ops::Index<…> for T` / `impl std::ops::IndexMut<…> for T`, via
 /// [`enclosing_trait_impl_name`].
 pub fn is_in_index_trait_impl(node: Node, source: &[u8]) -> bool {
-    enclosing_trait_impl_name(node, source).is_some_and(|name| name == "Index" || name == "IndexMut")
+    enclosing_trait_impl_name(node, source)
+        .is_some_and(|name| name == "Index" || name == "IndexMut")
 }
 
 /// The trait's last path segment from an `impl_item`'s `trait` field, e.g.
@@ -3674,7 +3707,12 @@ fn declaring_mod_exposure(
 
     let root = tree.root_node();
     let (declaring_mod, mod_name) = find_declaring_mod(root, source, decl_dir, stem, target)?;
-    Some(classify_mod_declaration(declaring_mod, source, mod_name, names))
+    Some(classify_mod_declaration(
+        declaring_mod,
+        source,
+        mod_name,
+        names,
+    ))
 }
 
 /// The top-level external `mod` statement in the file rooted at `root` that
@@ -3712,7 +3750,10 @@ fn find_declaring_mod<'tree, 'src>(
         if !path_targets.is_empty() {
             // A `#[path]` rename overrides the stem: this `mod` declares the
             // attribute's target(s), not a `<stem>.rs` sibling.
-            if path_targets.iter().any(|t| paths_lexically_equal(t, target)) {
+            if path_targets
+                .iter()
+                .any(|t| paths_lexically_equal(t, target))
+            {
                 return Some((child, mod_name));
             }
             continue;
@@ -4058,7 +4099,10 @@ pub fn cast_operand_bit_count_max(cast: Node, source: &[u8]) -> Option<i128> {
     // The widest integer is 128 bits (`u128`/`i128`), so a bit count is ≤ 128.
     const MAX_BIT_COUNT: i128 = 128;
 
-    let name = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    let name = function
+        .child_by_field_name("field")?
+        .utf8_text(source)
+        .ok()?;
     BIT_COUNT_METHODS.contains(&name).then_some(MAX_BIT_COUNT)
 }
 
@@ -4228,9 +4272,7 @@ fn find_binding_type_before(node: Node, limit: usize, name: &str, source: &[u8])
 /// value produced.
 fn initializer_variant_path_enum(value: Node, source: &[u8]) -> Option<String> {
     match value.kind() {
-        "parenthesized_expression" => {
-            initializer_variant_path_enum(value.named_child(0)?, source)
-        }
+        "parenthesized_expression" => initializer_variant_path_enum(value.named_child(0)?, source),
         "block" => initializer_variant_path_enum(block_tail_expression(value)?, source),
         "scoped_identifier" => variant_path_enum_name(value, source),
         "if_expression" => {
@@ -4360,8 +4402,15 @@ pub(crate) fn match_arm_of_pattern(pattern: Node) -> Option<Node> {
 /// tuple variant, or the binding position is out of range. Never guesses.
 fn match_arm_binding_type(pattern: Node, name: &str, source: &[u8]) -> Option<String> {
     let index = tuple_struct_binding_index(pattern, name, source)?;
-    let path = pattern.child_by_field_name("type")?.utf8_text(source).ok()?;
-    let segments: Vec<&str> = path.split("::").map(str::trim).filter(|s| !s.is_empty()).collect();
+    let path = pattern
+        .child_by_field_name("type")?
+        .utf8_text(source)
+        .ok()?;
+    let segments: Vec<&str> = path
+        .split("::")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     let (variant_name, enum_segment) = match segments.as_slice() {
         [.., enum_seg, variant] => (*variant, Some(*enum_seg)),
         [variant] => (*variant, None),
@@ -4391,8 +4440,8 @@ fn tuple_struct_binding_index(pattern: Node, name: &str, source: &[u8]) -> Optio
             // still consumes a position (`V(_, x)` binds `x` at index 1).
             // Punctuation (`(` `,` `)`) is unnamed and not `_`, so it is skipped
             // without consuming a slot.
-            let is_slot = cursor.field_name() != Some("type")
-                && (child.is_named() || child.kind() == "_");
+            let is_slot =
+                cursor.field_name() != Some("type") && (child.is_named() || child.kind() == "_");
             if is_slot {
                 if child.kind() == "remaining_field_pattern" {
                     return None;
@@ -4455,7 +4504,9 @@ fn resolve_variant_field_type(
     if node.kind() == "enum_item" {
         let name_matches = match enum_name {
             Some(want) => {
-                node.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok()) == Some(want)
+                node.child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
+                    == Some(want)
             }
             None => true,
         };
@@ -4489,7 +4540,9 @@ fn variant_tuple_field_type(
     let mut cursor = body.walk();
     for variant in body.children(&mut cursor) {
         if variant.kind() != "enum_variant"
-            || variant.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+            || variant
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
                 != Some(variant_name)
         {
             continue;
@@ -4499,8 +4552,13 @@ fn variant_tuple_field_type(
             return None;
         }
         let mut field_cursor = fields.walk();
-        let field_type = fields.children_by_field_name("type", &mut field_cursor).nth(index)?;
-        return field_type.utf8_text(source).ok().map(|t| t.trim().to_string());
+        let field_type = fields
+            .children_by_field_name("type", &mut field_cursor)
+            .nth(index)?;
+        return field_type
+            .utf8_text(source)
+            .ok()
+            .map(|t| t.trim().to_string());
     }
     None
 }
@@ -4778,7 +4836,9 @@ pub fn operand_is_bool(node: Node, source: &[u8]) -> bool {
 /// bool-returning operator impl exists in the file, this returns `false` and the
 /// `&`/`|` stays flagged.
 pub fn bitop_operand_type_has_bool_output_impl(node: Node, source: &[u8]) -> bool {
-    let Some(op) = node.child_by_field_name("operator").and_then(|o| o.utf8_text(source).ok())
+    let Some(op) = node
+        .child_by_field_name("operator")
+        .and_then(|o| o.utf8_text(source).ok())
     else {
         return false;
     };
@@ -4819,7 +4879,9 @@ fn const_identifier_type(ident: Node, name: &str, source: &[u8]) -> Option<Strin
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             if child.kind() == "const_item"
-                && child.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                && child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
                     == Some(name)
                 && let Some(ty) = child.child_by_field_name("type")
                 && let Ok(text) = ty.utf8_text(source)
@@ -4837,7 +4899,12 @@ fn const_identifier_type(ident: Node, name: &str, source: &[u8]) -> Option<Strin
 /// `trait` base segment equals `trait_name` (`BitAnd`/`BitOr`, matching
 /// `ops::BitAnd`/`std::ops::BitAnd<T>` too), whose Self `type` base name equals
 /// `ty`, and whose body declares the associated `type Output = bool`.
-fn file_has_bool_output_operator_impl(root: Node, ty: &str, trait_name: &str, source: &[u8]) -> bool {
+fn file_has_bool_output_operator_impl(
+    root: Node,
+    ty: &str,
+    trait_name: &str,
+    source: &[u8],
+) -> bool {
     if root.kind() == "impl_item" && impl_is_bool_output_operator(root, ty, trait_name, source) {
         return true;
     }
@@ -4849,7 +4916,12 @@ fn file_has_bool_output_operator_impl(root: Node, ty: &str, trait_name: &str, so
 /// True when `impl_item` is `impl <trait_name> for <ty>` and its body declares
 /// `type Output = bool`. Matches the trait by its last path segment and the Self
 /// type / `Output` type by their base names.
-fn impl_is_bool_output_operator(impl_item: Node, ty: &str, trait_name: &str, source: &[u8]) -> bool {
+fn impl_is_bool_output_operator(
+    impl_item: Node,
+    ty: &str,
+    trait_name: &str,
+    source: &[u8],
+) -> bool {
     let Some(trait_node) = impl_item.child_by_field_name("trait") else {
         return false;
     };
@@ -4869,7 +4941,9 @@ fn impl_is_bool_output_operator(impl_item: Node, ty: &str, trait_name: &str, sou
     let mut cursor = body.walk();
     body.named_children(&mut cursor).any(|item| {
         item.kind() == "type_item"
-            && item.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+            && item
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
                 == Some("Output")
             && item
                 .child_by_field_name("type")
@@ -5101,8 +5175,7 @@ fn operand_is_char(node: Node, cast: Node, source: &[u8]) -> bool {
                     .is_some_and(|operand| call_returns_char_ref(operand, source))
         }
         "identifier" => node.utf8_text(source).ok().is_some_and(|name| {
-            find_identifier_type(cast, name, source)
-                .is_some_and(|type_text| type_text == "char")
+            find_identifier_type(cast, name, source).is_some_and(|type_text| type_text == "char")
                 || binding_is_chars_iter(cast, name, source)
                 || binding_is_char_option_unwrap(cast, name, source)
         }),
@@ -5763,7 +5836,11 @@ fn range_literal_interval(range: Node, source: &[u8]) -> Option<(i128, i128)> {
     }
     let lo = resolve_range_bound(range.named_child(0)?, source)?;
     let hi_raw = resolve_range_bound(range.named_child(1)?, source)?;
-    let hi = if inclusive { hi_raw } else { hi_raw.checked_sub(1)? };
+    let hi = if inclusive {
+        hi_raw
+    } else {
+        hi_raw.checked_sub(1)?
+    };
     (lo <= hi).then_some((lo, hi))
 }
 
@@ -5791,7 +5868,11 @@ fn interval_fits_int_target(lo: i128, hi: i128, target: &str) -> bool {
         if lo < 0 {
             return false;
         }
-        let target_max: u128 = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let target_max: u128 = if bits >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits) - 1
+        };
         // `hi >= lo >= 0`, so the cast to `u128` is exact.
         (hi as u128) <= target_max
     } else if let Some(bits) = signed_int_bits(target) {
@@ -6092,9 +6173,13 @@ fn guard_proves_above_max(condition: Node, name: &str, target_max: u128, source:
     let max_plus_one = target_max.checked_add(1);
     match op {
         ">" if ident_left => parse_int_literal(right, source) == Some(target_max),
-        ">=" if ident_left => max_plus_one.is_some_and(|m| parse_int_literal(right, source) == Some(m)),
+        ">=" if ident_left => {
+            max_plus_one.is_some_and(|m| parse_int_literal(right, source) == Some(m))
+        }
         "<" if ident_right => parse_int_literal(left, source) == Some(target_max),
-        "<=" if ident_right => max_plus_one.is_some_and(|m| parse_int_literal(left, source) == Some(m)),
+        "<=" if ident_right => {
+            max_plus_one.is_some_and(|m| parse_int_literal(left, source) == Some(m))
+        }
         _ => false,
     }
 }
@@ -6302,8 +6387,9 @@ fn enclosing_upper_bound_fits(cast: Node, name: &str, target_bits: u16, source: 
                 let bounded = if parent.child_by_field_name("consequence") == Some(child) {
                     condition.is_some_and(|c| condition_upper_bounds(c, name, target_bits, source))
                 } else if parent.child_by_field_name("alternative") == Some(child) {
-                    condition
-                        .is_some_and(|c| negated_condition_upper_bounds(c, name, target_bits, source))
+                    condition.is_some_and(|c| {
+                        negated_condition_upper_bounds(c, name, target_bits, source)
+                    })
                 } else {
                     false
                 };
@@ -6378,7 +6464,9 @@ fn preceding_exit_guard_upper_bounds(
 fn exit_guard_if(stmt: Node) -> Option<Node> {
     let if_expr = match stmt.kind() {
         "if_expression" => stmt,
-        "expression_statement" => stmt.named_child(0).filter(|c| c.kind() == "if_expression")?,
+        "expression_statement" => stmt
+            .named_child(0)
+            .filter(|c| c.kind() == "if_expression")?,
         _ => return None,
     };
     if if_expr.child_by_field_name("alternative").is_some() {
@@ -6510,12 +6598,17 @@ pub(crate) fn block_diverges(block: Node, source: &[u8]) -> bool {
 pub(crate) fn node_diverges(node: Node, source: &[u8]) -> bool {
     match node.kind() {
         "return_expression" | "break_expression" | "continue_expression" => true,
-        "expression_statement" => node.named_child(0).is_some_and(|c| node_diverges(c, source)),
+        "expression_statement" => node
+            .named_child(0)
+            .is_some_and(|c| node_diverges(c, source)),
         "macro_invocation" => node
             .child_by_field_name("macro")
             .and_then(|m| m.utf8_text(source).ok())
             .is_some_and(|n| {
-                matches!(n, "panic" | "unreachable" | "todo" | "unimplemented" | "bail")
+                matches!(
+                    n,
+                    "panic" | "unreachable" | "todo" | "unimplemented" | "bail"
+                )
             }),
         "call_expression" => callee_never_returns(node, source),
         "unsafe_block" => node
@@ -6682,7 +6775,9 @@ fn condition_upper_bounds(condition: Node, name: &str, target_bits: u16, source:
         // `name < N` proves `name <= N - 1`; safe when `N - 1 <= target_max`.
         // `checked_sub` rejects `name < 0` (an unsatisfiable guard) without
         // adding `1` to `target_max`, which would overflow for a u128 target.
-        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+        bound
+            .checked_sub(1)
+            .is_some_and(|max_value| max_value <= target_max)
     }
 }
 
@@ -6748,7 +6843,9 @@ fn negated_condition_upper_bounds(
         // `name < N` proves `name <= N - 1`; safe when `N - 1 <= target_max`.
         // `checked_sub` rejects an empty (`name < 0`) bound without adding `1` to
         // `target_max`, which would overflow for a u128 target.
-        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+        bound
+            .checked_sub(1)
+            .is_some_and(|max_value| max_value <= target_max)
     }
 }
 
@@ -6807,7 +6904,9 @@ fn resolve_const_int(ident: Node, source: &[u8]) -> Option<u128> {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             if child.kind() == "const_item"
-                && child.child_by_field_name("name").and_then(|n| n.utf8_text(source).ok())
+                && child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok())
                     == Some(target)
             {
                 let value = child.child_by_field_name("value")?;
@@ -6982,7 +7081,9 @@ pub fn enclosing_block_statement(node: Node) -> Option<(Node, Node)> {
 fn assert_macro_invocation<'a>(stmt: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
     let macro_node = match stmt.kind() {
         "macro_invocation" => stmt,
-        "expression_statement" => stmt.named_child(0).filter(|c| c.kind() == "macro_invocation")?,
+        "expression_statement" => stmt
+            .named_child(0)
+            .filter(|c| c.kind() == "macro_invocation")?,
         _ => return None,
     };
     let name = macro_node
@@ -7053,7 +7154,9 @@ fn assert_upper_bounds(macro_node: Node, name: &str, target_bits: u16, source: &
     } else {
         // `name < N` proves `name <= N - 1`. `checked_sub` rejects `name < 0`
         // without adding 1 to `target_max` (which would overflow a u128 target).
-        bound.checked_sub(1).is_some_and(|max_value| max_value <= target_max)
+        bound
+            .checked_sub(1)
+            .is_some_and(|max_value| max_value <= target_max)
     }
 }
 
@@ -7081,8 +7184,7 @@ fn bound_upper_value(tokens: &[Node], source: &[u8]) -> Option<u128> {
         [lit] if lit.kind() == "integer_literal" => parse_int_literal(*lit, source),
         // `<utype>::MAX` — value is that type's maximum.
         [ty, sep, max]
-            if sep.utf8_text(source) == Ok("::")
-                && max.utf8_text(source) == Ok("MAX") =>
+            if sep.utf8_text(source) == Ok("::") && max.utf8_text(source) == Ok("MAX") =>
         {
             ty.utf8_text(source)
                 .ok()
@@ -7102,11 +7204,7 @@ fn bound_upper_value(tokens: &[Node], source: &[u8]) -> Option<u128> {
 /// Strip a single layer of wrapping `(` … `)` tokens from a token-tree slice.
 fn strip_paren_tokens<'a>(tokens: &'a [Node<'a>]) -> &'a [Node<'a>] {
     match tokens {
-        [first, mid @ .., last]
-            if first.kind() == "(" && last.kind() == ")" =>
-        {
-            mid
-        }
+        [first, mid @ .., last] if first.kind() == "(" && last.kind() == ")" => mid,
         _ => tokens,
     }
 }
@@ -7119,13 +7217,7 @@ fn strip_paren_tokens<'a>(tokens: &'a [Node<'a>]) -> &'a [Node<'a>] {
 ///
 /// `name` may be a binding name or a place expression's source text
 /// (`self.store`), so an assignment's left-hand side is compared by text.
-fn name_rebound_in_range(
-    block: Node,
-    start: usize,
-    end: usize,
-    name: &str,
-    source: &[u8],
-) -> bool {
+fn name_rebound_in_range(block: Node, start: usize, end: usize, name: &str, source: &[u8]) -> bool {
     let mut cursor = block.walk();
     let mut stack: Vec<Node> = block.children(&mut cursor).collect();
     while let Some(node) = stack.pop() {
@@ -7255,7 +7347,11 @@ fn let_condition_is_none_on(cond: Node, receiver_text: &str, source: &[u8]) -> b
         return false;
     }
     cond.child_by_field_name("value")
-        .and_then(|value| variant_preserving_base(value, source).utf8_text(source).ok())
+        .and_then(|value| {
+            variant_preserving_base(value, source)
+                .utf8_text(source)
+                .ok()
+        })
         .map(str::trim)
         == Some(receiver_text)
 }
@@ -7277,7 +7373,11 @@ fn is_matching_nullity_call(call: Node, receiver_text: &str, source: &[u8]) -> b
     }
     function
         .child_by_field_name("value")
-        .and_then(|value| variant_preserving_base(value, source).utf8_text(source).ok())
+        .and_then(|value| {
+            variant_preserving_base(value, source)
+                .utf8_text(source)
+                .ok()
+        })
         .map(str::trim)
         == Some(receiver_text)
 }
@@ -7314,7 +7414,10 @@ fn variant_preserving_adapter_receiver<'tree>(
     if function.kind() != "field_expression" {
         return None;
     }
-    let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    let method = function
+        .child_by_field_name("field")?
+        .utf8_text(source)
+        .ok()?;
     if !matches!(
         method,
         "as_ref" | "as_mut" | "as_deref" | "as_deref_mut" | "cloned" | "copied" | "clone"
@@ -7377,7 +7480,9 @@ pub fn cast_operand_is_bitwise(cast: Node, source: &[u8]) -> bool {
 /// Any `parenthesized_expression` layers around the operand are transparent.
 /// Shared by `rust-no-lossy-as-cast` and `rust-no-as-numeric-cast`.
 pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
-    let Some(target) = cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok())
+    let Some(target) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
     else {
         return false;
     };
@@ -7397,7 +7502,11 @@ pub fn cast_operand_is_modulo_bounded(cast: Node, source: &[u8]) -> bool {
 fn int_target_max(type_text: &str) -> Option<u128> {
     if let Some(bits) = unsigned_int_bits(type_text) {
         // `1u128 << 128` overflows, so the widest unsigned target is spelled out.
-        return Some(if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 });
+        return Some(if bits >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits) - 1
+        });
     }
     signed_int_bits(type_text).map(|bits| (1u128 << (bits - 1)) - 1)
 }
@@ -7431,7 +7540,10 @@ fn rem_euclid_modulus(value: Node, source: &[u8]) -> Option<u128> {
     if function.kind() != "field_expression" {
         return None;
     }
-    let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+    let method = function
+        .child_by_field_name("field")?
+        .utf8_text(source)
+        .ok()?;
     if method != "rem_euclid" {
         return None;
     }
@@ -7448,7 +7560,9 @@ fn rem_euclid_modulus(value: Node, source: &[u8]) -> Option<u128> {
 /// `target_max`. The largest remainder is `modulus - 1`; a zero or unparsed
 /// modulus has no interval and rejects.
 fn remainder_fits_target(modulus: u128, target_max: u128) -> bool {
-    modulus.checked_sub(1).is_some_and(|remainder_max| remainder_max <= target_max)
+    modulus
+        .checked_sub(1)
+        .is_some_and(|remainder_max| remainder_max <= target_max)
 }
 
 /// True when `value` (parens transparent) is a modulo whose remainder interval
@@ -7534,7 +7648,9 @@ pub fn cast_operand_is_modulo_bounded_via_binding(cast: Node, source: &[u8]) -> 
     let Ok(name) = value.utf8_text(source) else {
         return false;
     };
-    let Some(target) = cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok())
+    let Some(target) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
     else {
         return false;
     };
@@ -7807,8 +7923,9 @@ fn expression_yields_float(node: Node, source: &[u8], depth: u32) -> bool {
                 .is_some_and(|operator| matches!(operator, "+" | "-" | "*" | "/" | "%"));
             is_arithmetic
                 && ["left", "right"].iter().any(|side| {
-                    node.child_by_field_name(side)
-                        .is_some_and(|operand| expression_yields_float(operand, source, inner_depth))
+                    node.child_by_field_name(side).is_some_and(|operand| {
+                        expression_yields_float(operand, source, inner_depth)
+                    })
                 })
         }
         "call_expression" => call_yields_float(node, source),
@@ -7994,7 +8111,10 @@ fn to_digit_radix_literal(value: Node, source: &[u8]) -> Option<u128> {
                 if function.kind() != "field_expression" {
                     return None;
                 }
-                let method = function.child_by_field_name("field")?.utf8_text(source).ok()?;
+                let method = function
+                    .child_by_field_name("field")?
+                    .utf8_text(source)
+                    .ok()?;
                 match method {
                     "to_digit" => return to_digit_arg_literal(node, source),
                     "ok_or" | "ok_or_else" | "unwrap" | "expect" => {
@@ -8197,7 +8317,11 @@ fn to_digit_arg_literal(call: Node, source: &[u8]) -> Option<u128> {
 /// never overflows because `bits <= 128`.
 fn int_type_max_u128(type_text: &str) -> Option<u128> {
     if let Some(bits) = unsigned_int_bits(type_text) {
-        return Some(if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 });
+        return Some(if bits >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits) - 1
+        });
     }
     let bits = signed_int_bits(type_text)?;
     Some((1u128 << (bits - 1)) - 1)
@@ -8412,9 +8536,7 @@ pub fn cast_operand_is_raw_pointer(cast: Node, source: &[u8]) -> bool {
         "call_expression" => value
             .child_by_field_name("function")
             .and_then(|f| pointer_call_segment(f, source))
-            .is_some_and(|seg| {
-                matches!(seg, "as_ptr" | "as_mut_ptr" | "null" | "null_mut")
-            }),
+            .is_some_and(|seg| matches!(seg, "as_ptr" | "as_mut_ptr" | "null" | "null_mut")),
         _ => false,
     }
 }
@@ -8438,7 +8560,9 @@ fn pointer_cast_pointee_bits(node: Node, source: &[u8]) -> Option<u16> {
     if node.kind() != "type_cast_expression" {
         return None;
     }
-    let pointer_type = node.child_by_field_name("type").filter(|t| t.kind() == "pointer_type")?;
+    let pointer_type = node
+        .child_by_field_name("type")
+        .filter(|t| t.kind() == "pointer_type")?;
     let pointee = pointer_type.child_by_field_name("type")?;
     let text = pointee.utf8_text(source).ok()?.trim();
     fixed_width_int_kind(text).map(|(_, bits)| bits)
@@ -8595,7 +8719,11 @@ fn simd_intrinsic_lane_bits(name: &str) -> Option<u16> {
 /// and non-numeric targets. Platform-width targets are excluded so "same width"
 /// is always a definite comparison.
 fn cast_target_int_kind(cast: Node, source: &[u8]) -> Option<(bool, u16)> {
-    let target = cast.child_by_field_name("type")?.utf8_text(source).ok()?.trim();
+    let target = cast
+        .child_by_field_name("type")?
+        .utf8_text(source)
+        .ok()?
+        .trim();
     fixed_width_int_kind(target)
 }
 
@@ -8616,8 +8744,10 @@ fn cast_target_int_kind(cast: Node, source: &[u8]) -> Option<(bool, u16)> {
 /// applies. A `char`/`bool` operand is not an integer here, and a float→float
 /// narrowing (`f64 as f32`) has a float source, so neither is exempted.
 pub fn cast_is_int_to_float(cast: Node, source: &[u8]) -> bool {
-    let Some(target) =
-        cast.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok()).map(str::trim)
+    let Some(target) = cast
+        .child_by_field_name("type")
+        .and_then(|t| t.utf8_text(source).ok())
+        .map(str::trim)
     else {
         return false;
     };
@@ -8668,7 +8798,9 @@ fn classify_cast_source(cast: Node, source: &[u8]) -> CastSource {
 /// identifier node, peeling one parenthesized wrapper (`(*x)`); otherwise `None`.
 fn deref_borrow_identifier<'a>(value: Node<'a>, source: &[u8]) -> Option<Node<'a>> {
     if value.kind() == "parenthesized_expression" {
-        return value.named_child(0).and_then(|inner| deref_borrow_identifier(inner, source));
+        return value
+            .named_child(0)
+            .and_then(|inner| deref_borrow_identifier(inner, source));
     }
     if value.kind() != "unary_expression" {
         return None;
@@ -8680,14 +8812,20 @@ fn deref_borrow_identifier<'a>(value: Node<'a>, source: &[u8]) -> Option<Node<'a
     if !is_deref {
         return None;
     }
-    value.named_child(0).filter(|operand| operand.kind() == "identifier")
+    value
+        .named_child(0)
+        .filter(|operand| operand.kind() == "identifier")
 }
 
 /// Strip a single leading `&` / `&mut` borrow from a type's source text so a
 /// dereferenced operand resolves to its referent (`&u16` → `u16`).
 fn strip_leading_borrow(type_text: &str) -> &str {
     match type_text.trim_start().strip_prefix('&') {
-        Some(rest) => rest.trim_start().strip_prefix("mut ").unwrap_or(rest).trim_start(),
+        Some(rest) => rest
+            .trim_start()
+            .strip_prefix("mut ")
+            .unwrap_or(rest)
+            .trim_start(),
         None => type_text,
     }
 }
@@ -8699,7 +8837,9 @@ fn fixed_width_int_kind(type_text: &str) -> Option<(bool, u16)> {
     if let Some(bits) = signed_int_bits(t).filter(|_| t != "isize") {
         return Some((true, bits));
     }
-    unsigned_int_bits(t).filter(|_| t != "usize").map(|bits| (false, bits))
+    unsigned_int_bits(t)
+        .filter(|_| t != "usize")
+        .map(|bits| (false, bits))
 }
 
 /// The final path segment of a call's `function` node, used to match a call by
@@ -9290,9 +9430,7 @@ fn field_base_type_name(type_node: Node, source: &[u8]) -> Option<String> {
             .ok()
             .and_then(|t| t.rsplit("::").next())
             .map(str::to_string),
-        "reference_type" => {
-            field_base_type_name(type_node.child_by_field_name("type")?, source)
-        }
+        "reference_type" => field_base_type_name(type_node.child_by_field_name("type")?, source),
         "generic_type" => {
             let name = field_base_type_name(type_node.child_by_field_name("type")?, source)?;
             if matches!(name.as_str(), "Arc" | "Rc") {
@@ -9523,8 +9661,7 @@ pub fn tuple_struct_pattern_binds_const(tuple_struct_pattern: Node, source: &[u8
         .children(&mut cursor)
         .enumerate()
         .filter(|(i, child)| {
-            child.is_named()
-                && tuple_struct_pattern.field_name_for_child(*i as u32) != Some("type")
+            child.is_named() && tuple_struct_pattern.field_name_for_child(*i as u32) != Some("type")
         })
         .map(|(_, child)| child)
         .collect();
@@ -9540,7 +9677,9 @@ pub fn tuple_struct_pattern_binds_const(tuple_struct_pattern: Node, source: &[u8
 /// is the shared entry point for that parsing.
 pub(crate) fn macro_body(text: &str) -> Option<&str> {
     let bytes = text.as_bytes();
-    let open = bytes.iter().position(|&b| matches!(b, b'(' | b'[' | b'{'))?;
+    let open = bytes
+        .iter()
+        .position(|&b| matches!(b, b'(' | b'[' | b'{'))?;
     let close = matching_close(bytes, open)?;
     text.get(open + 1..close)
 }
@@ -9822,7 +9961,11 @@ fn let_binds_vec(let_node: Node, var: &str, source: &[u8]) -> bool {
         return false;
     }
     if let Some(ty) = let_node.child_by_field_name("type")
-        && ty.utf8_text(source).unwrap_or("").trim_start().starts_with("Vec<")
+        && ty
+            .utf8_text(source)
+            .unwrap_or("")
+            .trim_start()
+            .starts_with("Vec<")
     {
         return true;
     }
@@ -9937,7 +10080,10 @@ pub fn type_text_is_buffer(ty: &str) -> bool {
         base = rest.trim_start();
     }
     let head = base.split('<').next().unwrap_or(base).trim();
-    matches!(head.rsplit("::").next().unwrap_or(head).trim(), "String" | "Vec")
+    matches!(
+        head.rsplit("::").next().unwrap_or(head).trim(),
+        "String" | "Vec"
+    )
 }
 
 /// Whether the `.unwrap()`/`.expect()` receiver of `field_expr` is a write into an
@@ -10935,8 +11081,14 @@ mod tests {
     #[test]
     fn is_under_env_var_gate_resolves_inline_and_bound_conditions() {
         let cases = [
-            (r#"fn f() { if std::env::var("K").is_ok() { dbg!(x); } }"#, true),
-            (r#"fn f() { if env::var_os("K").is_some() { dbg!(x); } }"#, true),
+            (
+                r#"fn f() { if std::env::var("K").is_ok() { dbg!(x); } }"#,
+                true,
+            ),
+            (
+                r#"fn f() { if env::var_os("K").is_some() { dbg!(x); } }"#,
+                true,
+            ),
             (
                 r#"fn f() { if env::var("K").as_deref() == Ok("1") { dbg!(x); } }"#,
                 true,
@@ -11036,9 +11188,13 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
-            assert_eq!(cast_in_const_context(cast, src.as_bytes()), expected, "src: {src}");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
+            assert_eq!(
+                cast_in_const_context(cast, src.as_bytes()),
+                expected,
+                "src: {src}"
+            );
         }
     }
 
@@ -11060,8 +11216,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(is_in_enum_discriminant(cast), expected, "src: {src}");
         }
     }
@@ -11112,7 +11268,10 @@ mod tests {
                 true,
             ),
             // A `let`-annotated binding of a fieldless in-file enum, same idiom.
-            ("enum E { A, B } fn f() -> u8 { let e: E = E::A; e as u8 }", true),
+            (
+                "enum E { A, B } fn f() -> u8 { let e: E = E::A; e as u8 }",
+                true,
+            ),
             // A parameter typed as a DATA-carrying in-file enum: the `as`-cast is
             // not a plain discriminant read.
             ("enum E { A(u32), B } fn f(e: E) -> u8 { e as u8 }", false),
@@ -11140,8 +11299,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_enum_discriminant(cast, src.as_bytes()),
                 expected,
@@ -11180,8 +11339,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_literal_value(cast, src.as_bytes()),
                 expected,
@@ -11227,8 +11386,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_enum_discriminant(cast, src.as_bytes()),
                 expected,
@@ -11287,8 +11446,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_enum_discriminant(cast, src.as_bytes()),
                 expected,
@@ -11316,7 +11475,10 @@ mod tests {
             // requiring a provably non-negative dividend.
             ("fn f(x: i32) -> u8 { (x % 256) as u8 }", false),
             // A named in-file `const` is the number it stands for.
-            ("const N: u32 = 10; fn f(x: u32) -> u8 { (x % N) as u8 }", true),
+            (
+                "const N: u32 = 10; fn f(x: u32) -> u8 { (x % N) as u8 }",
+                true,
+            ),
             // A runtime binding is not a constant bound.
             ("fn f(x: u32, n: u32) -> u8 { (x % n) as u8 }", false),
             // A const from another module cannot be read here.
@@ -11334,8 +11496,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_modulo_bounded(cast, src.as_bytes()),
                 expected,
@@ -11350,13 +11512,16 @@ mod tests {
     fn cast_operand_is_modulo_bounded_via_binding_shares_the_interval_check() {
         let cases = [
             ("fn f(x: u32) -> i8 { let q = x % 100; q as i8 }", true),
-            ("const N: u32 = 100; fn f(x: u32) -> u8 { let q = x % N; q as u8 }", true),
+            (
+                "const N: u32 = 100; fn f(x: u32) -> u8 { let q = x % N; q as u8 }",
+                true,
+            ),
             ("fn f(x: u32) -> i8 { let q = x % 300; q as i8 }", false),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             assert_eq!(
                 cast_operand_is_modulo_bounded_via_binding(cast, src.as_bytes()),
                 expected,
@@ -11372,11 +11537,19 @@ mod tests {
         let cases = [
             // Attribute half: an inline test module inside `src/`, under no
             // test directory.
-            ("src/lib.rs", "#[cfg(test)]\nmod tests { fn helper() {} }", true),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod tests { fn helper() {} }",
+                true,
+            ),
             // Path half: a fixture helper in a Cargo integration test carries
             // no test attribute of its own — Cargo gates the whole tree.
             ("tests/common/mod.rs", "fn helper() {}", true),
-            ("tests/integration.rs", "fn encode(n: i32) -> u8 { n as u8 }", true),
+            (
+                "tests/integration.rs",
+                "fn encode(n: i32) -> u8 { n as u8 }",
+                true,
+            ),
             // Neither: ordinary production code.
             ("src/lib.rs", "fn helper() {}", false),
         ];
@@ -11458,8 +11631,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let cast = first_type_cast_expression(tree.root_node())
-                .expect("source should contain a cast");
+            let cast =
+                first_type_cast_expression(tree.root_node()).expect("source should contain a cast");
             let target = cast
                 .child_by_field_name("type")
                 .and_then(|t| t.utf8_text(src.as_bytes()).ok())
@@ -11556,10 +11729,16 @@ mod tests {
     fn tuple_struct_pattern_binds_const_distinguishes_const_from_binding() {
         let cases = [
             // scoped_identifier payload — always a path/const, never a binding.
-            ("fn f(r: R) { match r { Err(Self::REGISTERED) => {} } }", true),
+            (
+                "fn f(r: R) { match r { Err(Self::REGISTERED) => {} } }",
+                true,
+            ),
             ("fn f(r: R) { match r { Err(Foo::BAR) => {} } }", true),
             // A qualified `Result::Err` head must not be mistaken for the payload.
-            ("fn f(r: R) { match r { Result::Err(Self::REGISTERED) => {} } }", true),
+            (
+                "fn f(r: R) { match r { Result::Err(Self::REGISTERED) => {} } }",
+                true,
+            ),
             // SCREAMING_SNAKE identifier — a const by convention.
             ("fn f(r: R) { match r { Err(MAX_RETRIES) => {} } }", true),
             ("fn f(r: R) { match r { Err(REGISTERED) => {} } }", true),
@@ -11624,7 +11803,10 @@ mod tests {
             ("pub mod m { pub use foo::*; }", false),
             // Nested: a private module anywhere in the chain confines it,
             // even when the innermost module is bare-`pub`.
-            ("pub(crate) mod outer { pub mod inner { pub use foo::*; } }", true),
+            (
+                "pub(crate) mod outer { pub mod inner { pub use foo::*; } }",
+                true,
+            ),
             // All-public chain: nothing confines the item.
             ("pub mod outer { pub mod inner { pub use foo::*; } }", false),
             // File scope: no enclosing module at all.
@@ -11656,7 +11838,10 @@ mod tests {
             ("mod imp { pub fn f() {} }", false),
             ("pub(crate) mod m { pub fn f() {} }", false),
             // Nested: a private module anywhere in the chain confines it.
-            ("pub(crate) mod outer { pub mod inner { pub fn f() {} } }", false),
+            (
+                "pub(crate) mod outer { pub mod inner { pub fn f() {} } }",
+                false,
+            ),
         ];
         // A path with no resolvable parent module file on disk, so the
         // cross-file check is a no-op and only the in-file visibility logic
@@ -11682,20 +11867,52 @@ mod tests {
         // a different module re-exports that module's items, not this one's, so
         // it leaves the item confined.
         let cases = [
-            ("pub use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", true),
-            ("pub use cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", true),
+            (
+                "pub use self::cmd::CmdPreprocessor;\nmod cmd;\n",
+                "CmdPreprocessor",
+                true,
+            ),
+            (
+                "pub use cmd::CmdPreprocessor;\nmod cmd;\n",
+                "CmdPreprocessor",
+                true,
+            ),
             ("pub use self::cmd::*;\nmod cmd;\n", "CmdPreprocessor", true),
             // An `as` rename still exposes the item it renames.
-            ("pub use self::cmd::CmdPreprocessor as Cmd;\nmod cmd;\n", "CmdPreprocessor", true),
+            (
+                "pub use self::cmd::CmdPreprocessor as Cmd;\nmod cmd;\n",
+                "CmdPreprocessor",
+                true,
+            ),
             // Re-exported, but not this item.
-            ("pub use self::cmd::Other;\nmod cmd;\n", "CmdPreprocessor", false),
-            ("pub use self::cmd::Other as Cmd;\nmod cmd;\n", "CmdPreprocessor", false),
+            (
+                "pub use self::cmd::Other;\nmod cmd;\n",
+                "CmdPreprocessor",
+                false,
+            ),
+            (
+                "pub use self::cmd::Other as Cmd;\nmod cmd;\n",
+                "CmdPreprocessor",
+                false,
+            ),
             // Re-export of a sibling module does not expose `cmd`.
-            ("pub use self::index::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            (
+                "pub use self::index::CmdPreprocessor;\nmod cmd;\n",
+                "CmdPreprocessor",
+                false,
+            ),
             // A non-`pub` `use` re-exports nothing.
-            ("use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            (
+                "use self::cmd::CmdPreprocessor;\nmod cmd;\n",
+                "CmdPreprocessor",
+                false,
+            ),
             // A restricted re-export never escapes the crate.
-            ("pub(crate) use self::cmd::CmdPreprocessor;\nmod cmd;\n", "CmdPreprocessor", false),
+            (
+                "pub(crate) use self::cmd::CmdPreprocessor;\nmod cmd;\n",
+                "CmdPreprocessor",
+                false,
+            ),
             // No re-export at all: the private `mod cmd;` confines the item.
             ("mod cmd;\n", "CmdPreprocessor", false),
         ];
@@ -11785,12 +12002,18 @@ mod tests {
             // No re-export, a non-`pub` one, and a restricted one all confine.
             ("mod inner { pub struct T; }", false),
             ("mod inner { pub struct T; }\nuse inner::T;", false),
-            ("mod inner { pub struct T; }\npub(crate) use inner::T;", false),
+            (
+                "mod inner { pub struct T; }\npub(crate) use inner::T;",
+                false,
+            ),
             // A restricted `mod` is not re-exported by a bare `pub use` of a
             // sibling module.
             ("mod inner { pub struct T; }\npub use other::T;", false),
             // Nested: the outer private `mod` still confines the item.
-            ("mod outer { mod inner { pub struct T; } pub use inner::T; }", false),
+            (
+                "mod outer { mod inner { pub struct T; } pub use inner::T; }",
+                false,
+            ),
         ];
         // No parent module file on disk, so only the in-file logic applies.
         let path = Path::new("/nonexistent_comply_test/src/t.rs");
@@ -11855,9 +12078,10 @@ mod tests {
     fn is_effectively_pub_follows_a_module_reexported_by_name() {
         // `pub use self::engine;` re-exports the whole module, so every `pub`
         // item inside it stays reachable even though `mod engine;` is private.
-        for (root_decl, expected) in
-            [("mod engine;\npub use self::engine;\n", true), ("mod engine;\n", false)]
-        {
+        for (root_decl, expected) in [
+            ("mod engine;\npub use self::engine;\n", true),
+            ("mod engine;\n", false),
+        ] {
             let dir = tempfile::TempDir::new().unwrap();
             let src_dir = dir.path().join("src");
             std::fs::create_dir_all(&src_dir).unwrap();
@@ -11883,11 +12107,7 @@ mod tests {
         let inherent_impl = "struct T; impl T { fn m(&self) {} }";
         let free_fn = "fn m() {}";
 
-        let cases = [
-            (trait_impl, true),
-            (inherent_impl, false),
-            (free_fn, false),
-        ];
+        let cases = [(trait_impl, true), (inherent_impl, false), (free_fn, false)];
         for (src, expected) in cases {
             let tree = parse(src);
             let func = first_function_item(tree.root_node())
@@ -11905,16 +12125,28 @@ mod tests {
         // Anchor on the `Result<…>` return type (`generic_type`), the position
         // rules ask about.
         let cases = [
-            ("impl Tr for T { fn m() -> Result<u8, ()> { todo!() } }", true),
+            (
+                "impl Tr for T { fn m() -> Result<u8, ()> { todo!() } }",
+                true,
+            ),
             ("impl T { fn m() -> Result<u8, ()> { todo!() } }", false),
             ("fn m() -> Result<u8, ()> { todo!() }", false),
             ("trait Tr { fn m() -> Result<u8, ()>; }", false),
             // Parameter type, not return type.
-            ("impl Tr for T { fn m(x: Result<u8, ()>) -> u8 { 0 } }", false),
+            (
+                "impl Tr for T { fn m(x: Result<u8, ()>) -> u8 { 0 } }",
+                false,
+            ),
             // Body binding, not signature.
-            ("impl Tr for T { fn m() -> u8 { let x: Result<u8, ()> = e; 0 } }", false),
+            (
+                "impl Tr for T { fn m() -> u8 { let x: Result<u8, ()> = e; 0 } }",
+                false,
+            ),
             // Nested helper `fn`: the trait declares no such method.
-            ("impl Tr for T { fn m() -> u8 { fn n() -> Result<u8, ()> {} 0 } }", false),
+            (
+                "impl Tr for T { fn m() -> u8 { fn n() -> Result<u8, ()> {} 0 } }",
+                false,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -11936,11 +12168,7 @@ mod tests {
         let free_fn = "fn f() -> Result<(), String> { Ok(()) }";
         let inherent_impl = "struct S; impl S { fn f() -> Result<(), String> { Ok(()) } }";
 
-        let cases = [
-            (trait_def, true),
-            (free_fn, false),
-            (inherent_impl, false),
-        ];
+        let cases = [(trait_def, true), (free_fn, false), (inherent_impl, false)];
         for (src, expected) in cases {
             let tree = parse(src);
             let ret = first_of_kind(tree.root_node(), "generic_type")
@@ -11980,7 +12208,10 @@ mod tests {
         let cases = [
             ("#[doc(hidden)]\npub use x::*;", true),
             // doc(hidden) sits beside a cfg — must traverse past it.
-            ("#[cfg(feature = \"derive\")]\n#[doc(hidden)]\npub use x::*;", true),
+            (
+                "#[cfg(feature = \"derive\")]\n#[doc(hidden)]\npub use x::*;",
+                true,
+            ),
             // interleaved comment between attribute and item.
             ("#[doc(hidden)]\n// note\npub use x::*;", true),
             // bare, no doc(hidden).
@@ -12126,7 +12357,10 @@ mod tests {
                 "#[cfg_attr(not(feature = \"unstable\"), non_exhaustive)]\nstruct S;",
                 false,
             ),
-            ("#[cfg_attr(unix, cfg_attr(nightly, must_use))]\nstruct S;", true),
+            (
+                "#[cfg_attr(unix, cfg_attr(nightly, must_use))]\nstruct S;",
+                true,
+            ),
             // The predicate is not an applied attribute.
             ("#[cfg_attr(must_use, derive(Debug))]\nstruct S;", false),
             // A word inside a doc string is not an attribute path.
@@ -12173,7 +12407,10 @@ mod tests {
             // Negative space: the word as another attribute's argument, as the
             // `cfg_attr` predicate, or inside a doc string is not a path.
             ("#[allow(no_mangle)]\nstatic X: u8 = 1;", false),
-            ("#[cfg_attr(no_mangle, allow(dead_code))]\nstatic X: u8 = 1;", false),
+            (
+                "#[cfg_attr(no_mangle, allow(dead_code))]\nstatic X: u8 = 1;",
+                false,
+            ),
             ("#[doc = \"no_mangle\"]\nstatic X: u8 = 1;", false),
             ("#[allow(dead_code)]\nstatic X: u8 = 1;", false),
             ("static X: u8 = 1;", false),
@@ -12198,7 +12435,10 @@ mod tests {
             // A path-qualified derive still names the trait in its last segment.
             ("#[derive(clap::Parser)]\nstruct S;", true),
             // Issue #8435: a `cfg_attr`-applied derive counts.
-            ("#[cfg_attr(feature = \"cli\", derive(Parser))]\nstruct S;", true),
+            (
+                "#[cfg_attr(feature = \"cli\", derive(Parser))]\nstruct S;",
+                true,
+            ),
             // Negative space: the word in a doc string, in another attribute's
             // arguments, or as a field name is not a derive.
             ("#[doc = \"derive from Parser output\"]\nstruct S;", false),
@@ -12231,7 +12471,10 @@ mod tests {
                 "#[serde(rename_all = \"kebab-case\", default)]\nstruct S { a: u32 }",
                 true,
             ),
-            ("#[cfg_attr(nightly, serde(default))]\nstruct S { a: u32 }", true),
+            (
+                "#[cfg_attr(nightly, serde(default))]\nstruct S { a: u32 }",
+                true,
+            ),
             // The key of a `key = value` meta item enables the same option.
             (
                 "#[serde(default = \"make_config\")]\nstruct S { a: u32 }",
@@ -12289,8 +12532,14 @@ mod tests {
         // anchor on; reproduce the jiff FP from #1324 with one.
         let test_cases = [
             ("#[cfg(test)]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
-            ("#[cfg(all(test, not(loom)))]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
-            ("#[cfg(any(test, fuzzing))]\nmod m { fn f() { eprintln!(\"x\"); } }", true),
+            (
+                "#[cfg(all(test, not(loom)))]\nmod m { fn f() { eprintln!(\"x\"); } }",
+                true,
+            ),
+            (
+                "#[cfg(any(test, fuzzing))]\nmod m { fn f() { eprintln!(\"x\"); } }",
+                true,
+            ),
             (
                 "#[cfg(all(test, feature = \"std\", feature = \"logging\"))]\nimpl T { fn f(&self) { eprintln!(\"x\"); } }",
                 true,
@@ -12300,9 +12549,18 @@ mod tests {
                 true,
             ),
             // Negative space: `not(test)` is production-only, not test context.
-            ("#[cfg(not(test))]\nmod m { fn f() { eprintln!(\"x\"); } }", false),
-            ("#[cfg(all(not(test), unix))]\nfn f() { eprintln!(\"x\"); }", false),
-            ("#[cfg(feature = \"std\")]\nfn f() { eprintln!(\"x\"); }", false),
+            (
+                "#[cfg(not(test))]\nmod m { fn f() { eprintln!(\"x\"); } }",
+                false,
+            ),
+            (
+                "#[cfg(all(not(test), unix))]\nfn f() { eprintln!(\"x\"); }",
+                false,
+            ),
+            (
+                "#[cfg(feature = \"std\")]\nfn f() { eprintln!(\"x\"); }",
+                false,
+            ),
             ("fn f() { eprintln!(\"x\"); }", false),
         ];
         for (src, expected) in test_cases {
@@ -12327,7 +12585,10 @@ mod tests {
                 true,
             ),
             // Bare statement-level gate.
-            ("fn f() {\n    #[cfg(debug_assertions)]\n    panic!(\"x\");\n}", true),
+            (
+                "fn f() {\n    #[cfg(debug_assertions)]\n    panic!(\"x\");\n}",
+                true,
+            ),
             // Compound gate that still requires debug_assertions positively.
             (
                 "fn f() {\n    #[cfg(all(debug_assertions, unix))]\n    panic!(\"x\");\n}",
@@ -12349,7 +12610,10 @@ mod tests {
                 false,
             ),
             // Negative space: a feature gate is not a debug gate.
-            ("fn f() {\n    #[cfg(feature = \"foo\")]\n    panic!(\"x\");\n}", false),
+            (
+                "fn f() {\n    #[cfg(feature = \"foo\")]\n    panic!(\"x\");\n}",
+                false,
+            ),
             // Negative space: no gate at all.
             ("fn f() { panic!(\"x\"); }", false),
         ];
@@ -12409,7 +12673,10 @@ mod tests {
             ("#[cfg(test)]\nmod m {}", true),
             ("#[cfg_attr(test, derive(Debug))]\nstruct S;", true),
             ("#[tokio::test]\nasync fn f() {}", true),
-            ("#[tokio::test(flavor = \"multi_thread\")]\nasync fn f() {}", true),
+            (
+                "#[tokio::test(flavor = \"multi_thread\")]\nasync fn f() {}",
+                true,
+            ),
             ("#[cfg(all(test, not(loom)))]\nmod m {}", true),
             ("#[cfg(any(test, fuzzing))]\nmod m {}", true),
             ("#[cfg(all(test, feature = \"std\"))]\nmod m {}", true),
@@ -12457,7 +12724,10 @@ mod tests {
             // out for another reason, are a different question. `#[cfg(test)]`
             // belongs to `cfg_gates_compilation`.
             ("#[cfg(test)]\nfn f() { let x = 1; }", false),
-            ("#[cfg_attr(test, allow(dead_code))]\nfn f() { let x = 1; }", false),
+            (
+                "#[cfg_attr(test, allow(dead_code))]\nfn f() { let x = 1; }",
+                false,
+            ),
             ("#[cfg(not(test))]\nfn f() { let x = 1; }", false),
             ("fn f() { let x = 1; }", false),
         ];
@@ -12549,7 +12819,10 @@ mod tests {
             // Issue #8397: in a tuple struct the field's `visibility_modifier`
             // is a sibling standing between the attribute and the type
             // (`ordered_field_declaration_list`), and must not end the scan.
-            ("struct S(#[allow(clippy::mutex_atomic)] pub Mutex<bool>);", true),
+            (
+                "struct S(#[allow(clippy::mutex_atomic)] pub Mutex<bool>);",
+                true,
+            ),
             // Boundary: an `#[allow]` on the *previous* item, separated from the
             // flagged struct by that struct's own doc comment, does not leak.
             (
@@ -12694,7 +12967,10 @@ mod tests {
         // file, or block that carries it, so it must be honored from inside a
         // function too — while an outer `#[allow]` on a sibling item must not.
         let cases = [
-            ("#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }", true),
+            (
+                "#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }",
+                true,
+            ),
             (
                 "mod m {\n#![allow(clippy::float_cmp)]\nfn f(x: f64) -> bool { x == 1.5 }\n}",
                 true,
@@ -12729,10 +13005,7 @@ mod tests {
         // makes a sibling of the attribute rather than a child of the field.
         let cases = [
             ("struct S(#[allow(clippy::float_cmp)] pub f64);", true),
-            (
-                "#[allow(clippy::float_cmp)]\n/// doc\nstruct S(f64);",
-                true,
-            ),
+            ("#[allow(clippy::float_cmp)]\n/// doc\nstruct S(f64);", true),
             // Boundary: the allow on the previous item does not reach this one.
             (
                 "#[allow(clippy::float_cmp)]\nstruct Other;\n/// doc\nstruct S(f64);",
@@ -12758,10 +13031,16 @@ mod tests {
         // preceding sibling. The owner branch is what a caller that starts at
         // the shorthand node itself needs.
         let cases = [
-            ("fn f() -> S { S { #[allow(clippy::float_cmp)] flag } }", true),
+            (
+                "fn f() -> S { S { #[allow(clippy::float_cmp)] flag } }",
+                true,
+            ),
             // …and it covers that field alone: the first field, read here, is
             // not reached by the second field's attribute.
-            ("fn f() -> S { S { a, #[allow(clippy::float_cmp)] b } }", false),
+            (
+                "fn f() -> S { S { a, #[allow(clippy::float_cmp)] b } }",
+                false,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -12777,8 +13056,7 @@ mod tests {
 
     #[test]
     fn cfg_gate_keywords_accept_only_real_compilation_gates() {
-        let gates_on_test =
-            |text: &str| cfg_predicate_activates(text, b"test", CFG_GATE_KEYWORDS);
+        let gates_on_test = |text: &str| cfg_predicate_activates(text, b"test", CFG_GATE_KEYWORDS);
         for gate in [
             "#[cfg(test)]",
             "#![cfg(test)]",
@@ -12806,7 +13084,9 @@ mod tests {
     fn cfg_predicate_ignores_the_test_token_inside_a_string_value() {
         // The identifier scan must not read cfg option names out of a string
         // literal: `feature = "test-util"` names a feature, not the `test` cfg.
-        assert!(!cfg_predicate_activates_test("#[cfg(feature = \"test-util\")]"));
+        assert!(!cfg_predicate_activates_test(
+            "#[cfg(feature = \"test-util\")]"
+        ));
         assert!(cfg_predicate_activates_test(
             "#[cfg(all(test, feature = \"x\"))]"
         ));
@@ -12896,7 +13176,10 @@ mod tests {
             // Co-located `<name>_tests.rs` / `<name>_test.rs` unit-test files:
             // the stem carries a delimited `tests`/`test` token once the `.rs`
             // extension is stripped (zellij-org/zellij, #7121).
-            ("zellij-server/src/panes/tiled_panes/unit/stacked_panes_tests.rs", true),
+            (
+                "zellij-server/src/panes/tiled_panes/unit/stacked_panes_tests.rs",
+                true,
+            ),
             ("zellij-server/src/tab/unit/layout_applier_tests.rs", true),
             ("zellij-server/src/unit/pty_test.rs", true),
             // Negative space: non-exact segments / file names are production.
@@ -12959,19 +13242,28 @@ mod tests {
     fn cast_operand_bit_count_max_matches_bit_count_methods_only() {
         let cases = [
             ("fn f(x: u32) -> u8 { x.leading_zeros() as u8 }", Some(128)),
-            ("fn f(x: u64) -> u16 { x.trailing_zeros() as u16 }", Some(128)),
+            (
+                "fn f(x: u64) -> u16 { x.trailing_zeros() as u16 }",
+                Some(128),
+            ),
             ("fn f(x: u128) -> u8 { x.count_ones() as u8 }", Some(128)),
             ("fn f(x: u64) -> u8 { x.count_zeros() as u8 }", Some(128)),
             ("fn f(x: u32) -> u8 { x.leading_ones() as u8 }", Some(128)),
             ("fn f(x: u32) -> u8 { x.trailing_ones() as u8 }", Some(128)),
             // A parenthesized receiver is fine — the operand is still the call.
-            ("fn f(x: u64) -> i16 { (x ^ x).leading_zeros() as i16 }", Some(128)),
+            (
+                "fn f(x: u64) -> i16 { (x ^ x).leading_zeros() as i16 }",
+                Some(128),
+            ),
             // A non-bit-count method is unbounded.
             ("fn f(v: V) -> u8 { v.some_other_method() as u8 }", None),
             // A same-named method taking arguments is not the bit-count accessor.
             ("fn f(x: u32) -> u8 { x.count_ones(2) as u8 }", None),
             // Arithmetic on the result is no longer a bare call operand.
-            ("fn f(x: u64, o: u32) -> u8 { (x.leading_zeros() + o) as u8 }", None),
+            (
+                "fn f(x: u64, o: u32) -> u8 { (x.leading_zeros() + o) as u8 }",
+                None,
+            ),
             // A bare identifier operand has no call shape.
             ("fn f(n: usize) -> u32 { n as u32 }", None),
         ];
@@ -12991,8 +13283,14 @@ mod tests {
     fn cast_operand_bit_width_reads_literal_bit_count() {
         let cases = [
             // Canonical bit-reader idioms with `?`.
-            ("fn f(bs: B) -> u8 { bs.read_bits_leq32(8)? as u8 }", Some(8)),
-            ("fn f(bs: B) -> u16 { bs.read_bits_leq32(16)? as u16 }", Some(16)),
+            (
+                "fn f(bs: B) -> u8 { bs.read_bits_leq32(8)? as u8 }",
+                Some(8),
+            ),
+            (
+                "fn f(bs: B) -> u16 { bs.read_bits_leq32(16)? as u16 }",
+                Some(16),
+            ),
             ("fn f(r: R) -> u8 { r.get_bits(2)? as u8 }", Some(2)),
             ("fn f(r: R) -> u8 { r.peek_bits(1)? as u8 }", Some(1)),
             // No `?`.
@@ -13072,11 +13370,20 @@ mod tests {
             // Identifier whose binding is annotated bool.
             ("fn f(b: bool) -> u8 { b as u8 }", true),
             // #6090: an inferred local bound to a bool comparison initializer.
-            ("fn f(lo: f64, x: f64) -> u8 { let e = lo <= x; e as u8 }", true),
+            (
+                "fn f(lo: f64, x: f64) -> u8 { let e = lo <= x; e as u8 }",
+                true,
+            ),
             // An inferred local bound to a logical expression is bool.
-            ("fn f(a: bool, b: bool) -> u8 { let e = a && b; e as u8 }", true),
+            (
+                "fn f(a: bool, b: bool) -> u8 { let e = a && b; e as u8 }",
+                true,
+            ),
             // An inferred local bound to an arithmetic expression is NOT bool.
-            ("fn f(a: u32, b: u32) -> u8 { let n = a + b; n as u8 }", false),
+            (
+                "fn f(a: u32, b: u32) -> u8 { let n = a + b; n as u8 }",
+                false,
+            ),
             // The nearest shadow decides: a later non-bool `n` masks an earlier
             // bool `n`, so the cast operand is NOT bool.
             (
@@ -13234,26 +13541,59 @@ mod tests {
         let cases = [
             // Issue #5677: relocation-patch writes — the value cast's width
             // matches the destination pointer's pointee width.
-            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }", true),
-            ("fn f() { unsafe { write_unaligned(a as *mut u16, v as u16); } }", true),
-            ("fn f() { unsafe { write_unaligned(a as *mut u32, v as u32); } }", true),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }",
+                true,
+            ),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u16, v as u16); } }",
+                true,
+            ),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u32, v as u32); } }",
+                true,
+            ),
             // `ptr::write` and `write_volatile`, any receiver path, are covered.
-            ("fn f() { unsafe { ptr::write(a as *mut u8, v as u8); } }", true),
-            ("fn f() { unsafe { core::ptr::write_volatile(a as *mut u16, v as u16); } }", true),
+            (
+                "fn f() { unsafe { ptr::write(a as *mut u8, v as u8); } }",
+                true,
+            ),
+            (
+                "fn f() { unsafe { core::ptr::write_volatile(a as *mut u16, v as u16); } }",
+                true,
+            ),
             // A `*const` destination is recognized too.
-            ("fn f() { unsafe { write(a as *const u32, v as u32); } }", true),
+            (
+                "fn f() { unsafe { write(a as *const u32, v as u32); } }",
+                true,
+            ),
             // A parenthesized wrapper around the value cast is transparent.
-            ("fn f() { unsafe { write_unaligned(a as *mut u8, (v as u8)); } }", true),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u8, (v as u8)); } }",
+                true,
+            ),
             // Width MISMATCH between pointee and value cast is NOT exempt.
-            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u16); } }", false),
-            ("fn f() { unsafe { write_unaligned(a as *mut u32, v as u8); } }", false),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u8, v as u16); } }",
+                false,
+            ),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u32, v as u8); } }",
+                false,
+            ),
             // The destination-pointer cast itself is never exempted by this
             // predicate (it is a pointer cast, not a numeric one, but guard it).
-            ("fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }", true),
+            (
+                "fn f() { unsafe { write_unaligned(a as *mut u8, v as u8); } }",
+                true,
+            ),
             // A non-write call with the same shape is not exempt.
             ("fn f() { consume(a as *mut u8, v as u8); }", false),
             // A write whose destination is not a typed pointer cast is not exempt.
-            ("fn f() { unsafe { write_unaligned(dst, v as u8); } }", false),
+            (
+                "fn f() { unsafe { write_unaligned(dst, v as u8); } }",
+                false,
+            ),
             // A bare lossy cast feeding no call still flags.
             ("fn f(x: u64) -> u8 { x as u8 }", false),
         ];
@@ -13404,43 +13744,100 @@ mod tests {
     fn cast_operand_is_range_guarded_requires_dominating_upper_bound() {
         let cases = [
             // Canonical msgpack pattern: each arm is guarded.
-            ("fn w(val: u64) -> u8 { if val < 256 { val as u8 } else { 0 } }", true),
-            ("fn w(val: u64) -> u16 { if val < 65536 { val as u16 } else { 0 } }", true),
+            (
+                "fn w(val: u64) -> u8 { if val < 256 { val as u8 } else { 0 } }",
+                true,
+            ),
+            (
+                "fn w(val: u64) -> u16 { if val < 65536 { val as u16 } else { 0 } }",
+                true,
+            ),
             // Inclusive bound at exactly T::MAX.
-            ("fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }", true),
+            (
+                "fn w(val: u64) -> u8 { if val <= 255 { val as u8 } else { 0 } }",
+                true,
+            ),
             // Symmetric `N > val` / `N >= val` forms.
-            ("fn w(val: u64) -> u8 { if 256 > val { val as u8 } else { 0 } }", true),
-            ("fn w(val: u64) -> u8 { if 255 >= val { val as u8 } else { 0 } }", true),
+            (
+                "fn w(val: u64) -> u8 { if 256 > val { val as u8 } else { 0 } }",
+                true,
+            ),
+            (
+                "fn w(val: u64) -> u8 { if 255 >= val { val as u8 } else { 0 } }",
+                true,
+            ),
             // Digit separators in the literal.
-            ("fn w(val: u64) -> u16 { if val < 65_536 { val as u16 } else { 0 } }", true),
+            (
+                "fn w(val: u64) -> u16 { if val < 65_536 { val as u16 } else { 0 } }",
+                true,
+            ),
             // No guard at all.
             ("fn f(n: u64) -> u8 { n as u8 }", false),
             // Bound exceeds the target's range.
-            ("fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }", false),
-            ("fn w(val: u64) -> u8 { if val <= 256 { val as u8 } else { 0 } }", false),
+            (
+                "fn w(val: u64) -> u8 { if val < 1000 { val as u8 } else { 0 } }",
+                false,
+            ),
+            (
+                "fn w(val: u64) -> u8 { if val <= 256 { val as u8 } else { 0 } }",
+                false,
+            ),
             // Signed source: an upper bound does not rule out a negative value.
-            ("fn w(val: i64) -> u8 { if val < 256 { val as u8 } else { 0 } }", false),
+            (
+                "fn w(val: i64) -> u8 { if val < 256 { val as u8 } else { 0 } }",
+                false,
+            ),
             // Unresolved source type: cannot prove non-negativity.
-            ("fn w(val: T) -> u8 { if val < 256 { val as u8 } else { 0 } }", false),
+            (
+                "fn w(val: T) -> u8 { if val < 256 { val as u8 } else { 0 } }",
+                false,
+            ),
             // Guard is on a different variable.
-            ("fn w(a: u64, b: u64) -> u8 { if a < 256 { b as u8 } else { 0 } }", false),
+            (
+                "fn w(a: u64, b: u64) -> u8 { if a < 256 { b as u8 } else { 0 } }",
+                false,
+            ),
             // Guard reached through the `else` branch is the condition's negation.
-            ("fn w(val: u64) -> u8 { if val < 256 { 0 } else { val as u8 } }", false),
+            (
+                "fn w(val: u64) -> u8 { if val < 256 { 0 } else { val as u8 } }",
+                false,
+            ),
             // Signed target is out of scope (lower bound not provable here).
-            ("fn w(val: u64) -> i8 { if val < 128 { val as i8 } else { 0 } }", false),
+            (
+                "fn w(val: u64) -> i8 { if val < 128 { val as i8 } else { 0 } }",
+                false,
+            ),
             // A lower-bound guard does not bound the cast from above.
-            ("fn w(val: u64) -> u8 { if val > 10 { val as u8 } else { 0 } }", false),
+            (
+                "fn w(val: u64) -> u8 { if val > 10 { val as u8 } else { 0 } }",
+                false,
+            ),
             // u128 target: the bound fits, and `2^128 - 1` must not overflow.
-            ("fn w(val: u64) -> u128 { if val < 256 { val as u128 } else { 0 } }", true),
+            (
+                "fn w(val: u64) -> u128 { if val < 256 { val as u128 } else { 0 } }",
+                true,
+            ),
             // Shadowing `let val` inside the branch: the guard bounds the OUTER
             // `val`, not the inner one the cast reads.
-            ("fn w(val: u64) -> u8 { if val < 256 { let val: u64 = q(); val as u8 } else { 0 } }", false),
+            (
+                "fn w(val: u64) -> u8 { if val < 256 { let val: u64 = q(); val as u8 } else { 0 } }",
+                false,
+            ),
             // Reassignment after the guard invalidates the proven bound.
-            ("fn w(mut val: u64) -> u8 { if val < 256 { val = 9999; val as u8 } else { 0 } }", false),
+            (
+                "fn w(mut val: u64) -> u8 { if val < 256 { val = 9999; val as u8 } else { 0 } }",
+                false,
+            ),
             // Compound assignment likewise invalidates the bound.
-            ("fn w(mut val: u64) -> u8 { if val < 256 { val += 9999; val as u8 } else { 0 } }", false),
+            (
+                "fn w(mut val: u64) -> u8 { if val < 256 { val += 9999; val as u8 } else { 0 } }",
+                false,
+            ),
             // A write AFTER the cast does not invalidate it.
-            ("fn w(mut val: u64) -> u8 { if val < 256 { let r = val as u8; val = 9999; r } else { 0 } }", true),
+            (
+                "fn w(mut val: u64) -> u8 { if val < 256 { let r = val as u8; val = 9999; r } else { 0 } }",
+                true,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -13459,24 +13856,48 @@ mod tests {
         let cases = [
             // --- `else`-branch upper bound (issue #6173) ---
             // The else is reached only when `value <= 100`, which fits u8.
-            ("fn n(value: u32) -> u8 { if value > 100 { 0 } else { value as u8 } }", true),
+            (
+                "fn n(value: u32) -> u8 { if value > 100 { 0 } else { value as u8 } }",
+                true,
+            ),
             // `>=` negates to an exclusive `< N` upper bound.
-            ("fn n(value: u32) -> u8 { if value >= 256 { 0 } else { value as u8 } }", true),
+            (
+                "fn n(value: u32) -> u8 { if value >= 256 { 0 } else { value as u8 } }",
+                true,
+            ),
             // Inclusive `>` at exactly T::MAX.
-            ("fn n(value: u32) -> u8 { if value > 255 { 0 } else { value as u8 } }", true),
+            (
+                "fn n(value: u32) -> u8 { if value > 255 { 0 } else { value as u8 } }",
+                true,
+            ),
             // Mirrored `N < val` / `N <= val` forms.
-            ("fn n(value: u32) -> u8 { if 100 < value { 0 } else { value as u8 } }", true),
-            ("fn n(value: u32) -> u8 { if 256 <= value { 0 } else { value as u8 } }", true),
+            (
+                "fn n(value: u32) -> u8 { if 100 < value { 0 } else { value as u8 } }",
+                true,
+            ),
+            (
+                "fn n(value: u32) -> u8 { if 256 <= value { 0 } else { value as u8 } }",
+                true,
+            ),
             // else-if chain: the outer `value > N` negation reaches the final else.
             (
                 "fn n(value: u32, f: bool) -> u8 { if value > 100 { 0 } else if f { 1 } else { value as u8 } }",
                 true,
             ),
             // Bound too large for the target: the else does not prove a fit.
-            ("fn n(value: u32) -> u8 { if value > 256 { 0 } else { value as u8 } }", false),
-            ("fn n(value: u32) -> u8 { if value >= 257 { 0 } else { value as u8 } }", false),
+            (
+                "fn n(value: u32) -> u8 { if value > 256 { 0 } else { value as u8 } }",
+                false,
+            ),
+            (
+                "fn n(value: u32) -> u8 { if value >= 257 { 0 } else { value as u8 } }",
+                false,
+            ),
             // An upper-bound condition leaves only a LOWER bound in the else.
-            ("fn n(value: u32) -> u8 { if value < 100 { 0 } else { value as u8 } }", false),
+            (
+                "fn n(value: u32) -> u8 { if value < 100 { 0 } else { value as u8 } }",
+                false,
+            ),
             // else-branch guard on a different variable.
             (
                 "fn n(value: u32, other: u32) -> u8 { if other > 100 { 0 } else { value as u8 } }",
@@ -13488,15 +13909,29 @@ mod tests {
                 false,
             ),
             // Signed source: an upper bound cannot rule out a negative value.
-            ("fn n(value: i32) -> u8 { if value > 100 { 0 } else { value as u8 } }", false),
-
+            (
+                "fn n(value: i32) -> u8 { if value > 100 { 0 } else { value as u8 } }",
+                false,
+            ),
             // --- preceding early-exit guard (fallthrough) ---
-            ("fn g(value: u32) -> u8 { if value > 100 { return 0; } value as u8 }", true),
-            ("fn g(value: u32) -> u8 { if value > 100 { panic!(\"too big\"); } value as u8 }", true),
+            (
+                "fn g(value: u32) -> u8 { if value > 100 { return 0; } value as u8 }",
+                true,
+            ),
+            (
+                "fn g(value: u32) -> u8 { if value > 100 { panic!(\"too big\"); } value as u8 }",
+                true,
+            ),
             // Diverging tail without a trailing `;`.
-            ("fn g(value: u32) -> u8 { if value > 100 { unreachable!() } value as u8 }", true),
+            (
+                "fn g(value: u32) -> u8 { if value > 100 { unreachable!() } value as u8 }",
+                true,
+            ),
             // Non-diverging then-branch: the large value flows through.
-            ("fn g(value: u32) -> u8 { if value > 100 { let _x = 1; } value as u8 }", false),
+            (
+                "fn g(value: u32) -> u8 { if value > 100 { let _x = 1; } value as u8 }",
+                false,
+            ),
             // A guard with an `else` is not a pure early-exit guard.
             (
                 "fn g(value: u32) -> u8 { if value > 100 { return 0; } else { } value as u8 }",
@@ -13513,9 +13948,15 @@ mod tests {
                 false,
             ),
             // Bound too large for the target.
-            ("fn g(value: u32) -> u8 { if value > 256 { return 0; } value as u8 }", false),
+            (
+                "fn g(value: u32) -> u8 { if value > 256 { return 0; } value as u8 }",
+                false,
+            ),
             // Signed source.
-            ("fn g(value: i32) -> u8 { if value > 100 { return 0; } value as u8 }", false),
+            (
+                "fn g(value: i32) -> u8 { if value > 100 { return 0; } value as u8 }",
+                false,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -13534,13 +13975,22 @@ mod tests {
         let cases = [
             // --- proof 1: unsigned-typed bound (issue #6174) ---
             // Canonical tonic pattern: `.min(u64::MAX as u128) as u64`.
-            ("fn f(x: u128) -> u64 { x.min(u64::MAX as u128) as u64 }", true),
+            (
+                "fn f(x: u128) -> u64 { x.min(u64::MAX as u128) as u64 }",
+                true,
+            ),
             // Symmetric form, bound type already matches the target.
             ("fn f(x: u64) -> u64 { x.min(u64::MAX) as u64 }", true),
             // `(n as u64).min(u32::MAX as u64) as u32`.
-            ("fn f(n: u32) -> u32 { (n as u64).min(u32::MAX as u64) as u32 }", true),
+            (
+                "fn f(n: u32) -> u32 { (n as u64).min(u32::MAX as u64) as u32 }",
+                true,
+            ),
             // Parens around the whole clamped operand are transparent.
-            ("fn f(x: u128) -> u64 { (x.min(u64::MAX as u128)) as u64 }", true),
+            (
+                "fn f(x: u128) -> u64 { (x.min(u64::MAX as u128)) as u64 }",
+                true,
+            ),
             // An unsigned-cast literal bound (`200 as u64`) is typed + in range.
             ("fn f(x: u64) -> u8 { x.min(200 as u64) as u8 }", true),
             // The unsigned-cast bound's inner value is read exactly: `1000 as u64`
@@ -13549,20 +13999,24 @@ mod tests {
             // Parens around a bare literal are not unwrapped in proof 2 (no type
             // proof); conservatively kept flagging.
             ("fn f(v: u32) -> u8 { v.min((255)) as u8 }", false),
-
             // --- proof 2: bare literal bound + provably non-negative receiver ---
             ("fn f(v: u32) -> u8 { v.min(255) as u8 }", true),
             ("fn f(v: u32) -> u8 { v.min(0xFF) as u8 }", true),
-
             // --- negative space: must keep flagging ---
             // No `.min()` clamp at all.
             ("fn f(n: u64) -> u8 { n as u8 }", false),
             // Typed bound exceeds the target's range.
-            ("fn f(x: u128) -> u8 { x.min(u64::MAX as u128) as u8 }", false),
+            (
+                "fn f(x: u128) -> u8 { x.min(u64::MAX as u128) as u8 }",
+                false,
+            ),
             // Bare-literal bound exceeds the target's range.
             ("fn f(v: u32) -> u8 { v.min(300) as u8 }", false),
             // Wrong direction: `.max()` does not bound from above.
-            ("fn f(x: u128) -> u64 { x.max(u64::MAX as u128) as u64 }", false),
+            (
+                "fn f(x: u128) -> u64 { x.max(u64::MAX as u128) as u64 }",
+                false,
+            ),
             // Signed receiver, bare literal: `.min()` cannot rule out a negative
             // value; `(-1i64).min(255) as u8` wraps to 255.
             ("fn f(x: i64) -> u8 { x.min(255) as u8 }", false),
@@ -13598,39 +14052,84 @@ mod tests {
                 true,
             ),
             // `if x >= 0` with a resolved signed source, equal-width unsigned.
-            ("fn f(x: i32) -> u32 { if x >= 0 { x as u32 } else { 0 } }", true),
+            (
+                "fn f(x: i32) -> u32 { if x >= 0 { x as u32 } else { 0 } }",
+                true,
+            ),
             // `x.is_positive()` guard, signed widening.
-            ("fn f(x: i32) -> u64 { if x.is_positive() { x as u64 } else { 0 } }", true),
+            (
+                "fn f(x: i32) -> u64 { if x.is_positive() { x as u64 } else { 0 } }",
+                true,
+            ),
             // `x > 0` and `x > -1` both prove non-negativity.
-            ("fn f(x: i32) -> u32 { if x > 0 { x as u32 } else { 0 } }", true),
-            ("fn f(x: i32) -> u32 { if x > -1 { x as u32 } else { 0 } }", true),
+            (
+                "fn f(x: i32) -> u32 { if x > 0 { x as u32 } else { 0 } }",
+                true,
+            ),
+            (
+                "fn f(x: i32) -> u32 { if x > -1 { x as u32 } else { 0 } }",
+                true,
+            ),
             // Mirrored `0 <= x` / `0 < x` / `-1 < x` (identifier on the right).
-            ("fn f(x: i32) -> u32 { if 0 <= x { x as u32 } else { 0 } }", true),
-            ("fn f(x: i32) -> u32 { if 0 < x { x as u32 } else { 0 } }", true),
-            ("fn f(x: i32) -> u32 { if -1 < x { x as u32 } else { 0 } }", true),
+            (
+                "fn f(x: i32) -> u32 { if 0 <= x { x as u32 } else { 0 } }",
+                true,
+            ),
+            (
+                "fn f(x: i32) -> u32 { if 0 < x { x as u32 } else { 0 } }",
+                true,
+            ),
+            (
+                "fn f(x: i32) -> u32 { if -1 < x { x as u32 } else { 0 } }",
+                true,
+            ),
             // `!x.is_negative()` at the if-expression site (not only match arms).
-            ("fn f(x: i32) -> u32 { if !x.is_negative() { x as u32 } else { 0 } }", true),
+            (
+                "fn f(x: i32) -> u32 { if !x.is_negative() { x as u32 } else { 0 } }",
+                true,
+            ),
             // Shadowing `let x` inside the branch reads a different binding.
-            ("fn f(x: i32) -> u32 { if x >= 0 { let x: i32 = q(); x as u32 } else { 0 } }", false),
+            (
+                "fn f(x: i32) -> u32 { if x >= 0 { let x: i32 = q(); x as u32 } else { 0 } }",
+                false,
+            ),
             // No guard at all.
             ("fn f(x: i32) -> u32 { x as u32 }", false),
             // Guarded narrowing: a non-negative i64 can still exceed u8.
-            ("fn f(x: i64) -> u8 { if x >= 0 { x as u8 } else { 0 } }", false),
+            (
+                "fn f(x: i64) -> u8 { if x >= 0 { x as u8 } else { 0 } }",
+                false,
+            ),
             // Unresolved source narrowing into u8 is not the widening idiom.
             (
                 "fn f(o: Option<i64>) -> Option<u8> { match o { Some(d) if !d.is_negative() => Some(d as u8), _ => None } }",
                 false,
             ),
             // Guard reached through the `else` branch is the condition's negation.
-            ("fn f(x: i32) -> u32 { if x >= 0 { 0 } else { x as u32 } }", false),
+            (
+                "fn f(x: i32) -> u32 { if x >= 0 { 0 } else { x as u32 } }",
+                false,
+            ),
             // Guard on a different variable.
-            ("fn f(a: i32, b: i32) -> u32 { if a >= 0 { b as u32 } else { 0 } }", false),
+            (
+                "fn f(a: i32, b: i32) -> u32 { if a >= 0 { b as u32 } else { 0 } }",
+                false,
+            ),
             // An upper-bound guard does not prove non-negativity.
-            ("fn f(x: i32) -> u32 { if x < 256 { x as u32 } else { 0 } }", false),
+            (
+                "fn f(x: i32) -> u32 { if x < 256 { x as u32 } else { 0 } }",
+                false,
+            ),
             // Reassignment after the guard invalidates the proof.
-            ("fn f(mut x: i32) -> u32 { if x >= 0 { x = -9; x as u32 } else { 0 } }", false),
+            (
+                "fn f(mut x: i32) -> u32 { if x >= 0 { x = -9; x as u32 } else { 0 } }",
+                false,
+            ),
             // Target is signed — out of scope (this predicate is signed→unsigned).
-            ("fn f(x: i32) -> i64 { if x >= 0 { x as i64 } else { 0 } }", false),
+            (
+                "fn f(x: i32) -> i64 { if x >= 0 { x as i64 } else { 0 } }",
+                false,
+            ),
         ];
         for (src, expected) in cases {
             let tree = parse(src);
@@ -13776,7 +14275,11 @@ mod tests {
         let cases = [
             ("#[track_caller]\nfn f() {}", "track_caller", true),
             ("#[core::track_caller]\nfn f() {}", "track_caller", true),
-            ("#[inline]\n#[track_caller]\nfn f() {}", "track_caller", true),
+            (
+                "#[inline]\n#[track_caller]\nfn f() {}",
+                "track_caller",
+                true,
+            ),
             // A comment between the attribute and the item must not defeat it.
             ("#[track_caller]\n// note\nfn f() {}", "track_caller", true),
             // No such attribute.
@@ -13802,7 +14305,10 @@ mod tests {
         let cases = [
             ("/// # Panics\nfn f() {}", true),
             // Heading body and blank doc lines around it.
-            ("/// Does a thing.\n///\n/// # Panics\n///\n/// when bad.\nfn f() {}", true),
+            (
+                "/// Does a thing.\n///\n/// # Panics\n///\n/// when bad.\nfn f() {}",
+                true,
+            ),
             // `## Panics` (deeper heading) also counts.
             ("/// ## Panics\nfn f() {}", true),
             // A `#[track_caller]` attribute between the doc and the fn is skipped.
@@ -13854,11 +14360,17 @@ mod tests {
     fn collect_top_level_derives_only_reads_top_level_derive() {
         let cases: [(&str, &[&str]); 6] = [
             // Plain top-level derive.
-            ("#[derive(Ord, PartialEq, Eq)]\nstruct A;", &["Ord", "PartialEq", "Eq"]),
+            (
+                "#[derive(Ord, PartialEq, Eq)]\nstruct A;",
+                &["Ord", "PartialEq", "Eq"],
+            ),
             // Several top-level derives accumulate (collected nearest-first,
             // walking preceding siblings in reverse; order is irrelevant to
             // callers, which use `.iter().any(...)`).
-            ("#[derive(Clone)]\n#[derive(Hash)]\nstruct A;", &["Hash", "Clone"]),
+            (
+                "#[derive(Clone)]\n#[derive(Hash)]\nstruct A;",
+                &["Hash", "Clone"],
+            ),
             // A nested `derive(` inside `rkyv(...)` inside `cfg_attr(...)` is
             // NOT a top-level derive on the host — issue #3944.
             (
@@ -13980,10 +14492,7 @@ mod tests {
             // No cfg gate at all — a real runtime unwrap.
             ("fn f() { foo().unwrap(); }", false),
             // A `#[cfg(feature = \"x\")]` gate is a real release path.
-            (
-                "fn f() { #[cfg(feature = \"x\")] foo().unwrap(); }",
-                false,
-            ),
+            ("fn f() { #[cfg(feature = \"x\")] foo().unwrap(); }", false),
             // `#[cfg(not(debug_assertions))]` is release-only: `debug_assertions`
             // is nested in `not(...)`, not a direct child of the `cfg` tree.
             (
@@ -14013,8 +14522,8 @@ mod tests {
         ];
         for (src, expected) in cases {
             let tree = parse(src);
-            let call = first_unwrap_call(tree.root_node(), src.as_bytes())
-                .expect("unwrap call present");
+            let call =
+                first_unwrap_call(tree.root_node(), src.as_bytes()).expect("unwrap call present");
             assert_eq!(
                 is_under_cfg_debug_assertions(call, src.as_bytes()),
                 expected,
@@ -14028,18 +14537,54 @@ mod tests {
         // Anchor on the `for_expression`, mirroring how the caller passes the
         // node whose enclosing scopes are searched for the `var` binding.
         let cases = [
-            ("fn f(src: Vec<u32>) { let v = Vec::new(); for x in src { v.push(x); } }", "v", true),
-            ("fn f(src: Vec<u32>) { let v = vec![]; for x in src { v.push(x); } }", "v", true),
-            ("fn f(src: Vec<u32>) { let v = Vec::with_capacity(4); for x in src { v.push(x); } }", "v", true),
-            ("fn f(src: Vec<u32>) { let v: Vec<u32> = make(); for x in src { v.push(x); } }", "v", true),
-            ("fn f(src: Vec<u32>) { let mut v = Vec::new(); for x in src { v.push(x); } }", "v", true),
+            (
+                "fn f(src: Vec<u32>) { let v = Vec::new(); for x in src { v.push(x); } }",
+                "v",
+                true,
+            ),
+            (
+                "fn f(src: Vec<u32>) { let v = vec![]; for x in src { v.push(x); } }",
+                "v",
+                true,
+            ),
+            (
+                "fn f(src: Vec<u32>) { let v = Vec::with_capacity(4); for x in src { v.push(x); } }",
+                "v",
+                true,
+            ),
+            (
+                "fn f(src: Vec<u32>) { let v: Vec<u32> = make(); for x in src { v.push(x); } }",
+                "v",
+                true,
+            ),
+            (
+                "fn f(src: Vec<u32>) { let mut v = Vec::new(); for x in src { v.push(x); } }",
+                "v",
+                true,
+            ),
             // A parameter binding is not confirmed here — only a `let`.
-            ("fn f(src: Vec<u32>, v: Vec<u32>) { for x in src { v.push(x); } }", "v", false),
+            (
+                "fn f(src: Vec<u32>, v: Vec<u32>) { for x in src { v.push(x); } }",
+                "v",
+                false,
+            ),
             // Non-`Vec` initializer / annotation.
-            ("fn f(src: Vec<u32>) { let v = Queue::new(); for x in src { v.push(x); } }", "v", false),
-            ("fn f(src: Vec<u32>) { let v: Queue<u32> = make(); for x in src { v.push(x); } }", "v", false),
+            (
+                "fn f(src: Vec<u32>) { let v = Queue::new(); for x in src { v.push(x); } }",
+                "v",
+                false,
+            ),
+            (
+                "fn f(src: Vec<u32>) { let v: Queue<u32> = make(); for x in src { v.push(x); } }",
+                "v",
+                false,
+            ),
             // The `let` must lexically precede the loop in its block.
-            ("fn f(src: Vec<u32>) { for x in src { v.push(x); } let v = Vec::new(); }", "v", false),
+            (
+                "fn f(src: Vec<u32>) { for x in src { v.push(x); } let v = Vec::new(); }",
+                "v",
+                false,
+            ),
         ];
         for (src, var, expected) in cases {
             let tree = parse(src);
@@ -14059,7 +14604,11 @@ mod tests {
         // identifier from where it is used. `None` is "the innermost binding of
         // this name holds something unresolvable", never "an outer one holds".
         let cases = [
-            ("fn f() { let w = S::new(); probe!(w); }", "w", Some("S::new()")),
+            (
+                "fn f() { let w = S::new(); probe!(w); }",
+                "w",
+                Some("S::new()"),
+            ),
             // The last `let` preceding the use wins over an earlier one.
             (
                 "fn f() { let w = S::new(); let w = File::create(p); probe!(w); }",
@@ -14075,11 +14624,23 @@ mod tests {
                 "w",
                 None,
             ),
-            ("fn f() { let w = S::new(); let (a, w) = t; probe!(w); }", "w", None),
+            (
+                "fn f() { let w = S::new(); let (a, w) = t; probe!(w); }",
+                "w",
+                None,
+            ),
             // A struct field in shorthand (`T { w }`) is the binding itself.
-            ("fn f() { let w = S::new(); let T { w } = t; probe!(w); }", "w", None),
+            (
+                "fn f() { let w = S::new(); let T { w } = t; probe!(w); }",
+                "w",
+                None,
+            ),
             // A `let` with no initializer resolves to nothing, and still shadows.
-            ("fn f() { let w = S::new(); let mut w; probe!(w); }", "w", None),
+            (
+                "fn f() { let w = S::new(); let mut w; probe!(w); }",
+                "w",
+                None,
+            ),
             // A path names the type matched against, not a binding — as the
             // tuple-struct `type` field, and as a bare scoped path.
             (
@@ -14116,7 +14677,11 @@ mod tests {
                 Some("S::new()"),
             ),
             // A nested `fn` captures nothing from the fn around it.
-            ("fn o() { let w = S::new(); fn i() { probe!(w); } }", "w", None),
+            (
+                "fn o() { let w = S::new(); fn i() { probe!(w); } }",
+                "w",
+                None,
+            ),
             // A seeded fold binds its closure's first parameter to its first
             // argument — but only that parameter, and only for that signature.
             (
@@ -14124,8 +14689,16 @@ mod tests {
                 "w",
                 Some("S::new()"),
             ),
-            ("fn f() { xs.fold(S::new(), |a, w| { probe!(w); }); }", "w", None),
-            ("fn f() { x.map_or(S::new(), |w| { probe!(w); }); }", "w", None),
+            (
+                "fn f() { xs.fold(S::new(), |a, w| { probe!(w); }); }",
+                "w",
+                None,
+            ),
+            (
+                "fn f() { x.map_or(S::new(), |w| { probe!(w); }); }",
+                "w",
+                None,
+            ),
             // An annotated parameter states its own type; the seed says nothing
             // stronger, so the annotation is left to speak.
             (
@@ -14134,7 +14707,11 @@ mod tests {
                 None,
             ),
             // A pattern binding shadows an outer `let` of the same name only.
-            ("fn f() { let w = S::new(); for w in ws { probe!(w); } }", "w", None),
+            (
+                "fn f() { let w = S::new(); for w in ws { probe!(w); } }",
+                "w",
+                None,
+            ),
             (
                 "fn f() { let w = S::new(); if let Some(w) = o { probe!(w); } }",
                 "w",
@@ -14265,7 +14842,10 @@ mod tests {
         let cases = [
             // Inner `as *const _` / `as *mut <int>` cast operand → pointer source.
             ("fn f() { let _ = executor as *const _ as u32; }", true),
-            ("fn f() { let _ = &mut self.table as *mut _ as *mut u32 as u32; }", true),
+            (
+                "fn f() { let _ = &mut self.table as *mut _ as *mut u32 as u32; }",
+                true,
+            ),
             // `.as_ptr()` / `.as_mut_ptr()` method call operand.
             ("fn f() { let _ = task.as_ptr() as u32; }", true),
             ("fn f() { let _ = regs.ch().cc().as_ptr() as u32; }", true),
@@ -14370,10 +14950,16 @@ mod tests {
             // A qualified path is provenance on its own, with no `use`.
             ("fn f() { sqlx::query(\"SELECT 1\"); }", true),
             ("fn f() { sqlx::query!(\"SELECT 1\"); }", true),
-            ("async fn f() { tokio_postgres::connect(url, tls).await; }", true),
+            (
+                "async fn f() { tokio_postgres::connect(url, tls).await; }",
+                true,
+            ),
             ("fn f() -> tokio_postgres::Client { todo!() }", true),
             // Non-database clients that share the receiver vocabulary.
-            ("use reqwest_middleware::ClientWithMiddleware;\nfn f() {}", false),
+            (
+                "use reqwest_middleware::ClientWithMiddleware;\nfn f() {}",
+                false,
+            ),
             ("use tonic::transport::Channel;\nfn f() {}", false),
             ("fn f() { reqwest::Client::new(); }", false),
             // A local module named after a database is not a database crate.
@@ -14381,14 +14967,29 @@ mod tests {
             ("fn f() { crate::sqlx::query(\"SELECT 1\"); }", false),
             // A reference the release build never compiles is not provenance
             // for the production code beside it.
-            ("fn f() {}\n#[cfg(test)]\nmod tests {\n    use sqlx::PgPool;\n}", false),
-            ("fn f() {}\n#[cfg(test)]\nmod tests {\n    fn t() { sqlx::query(\"SELECT 1\"); }\n}", false),
+            (
+                "fn f() {}\n#[cfg(test)]\nmod tests {\n    use sqlx::PgPool;\n}",
+                false,
+            ),
+            (
+                "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn t() { sqlx::query(\"SELECT 1\"); }\n}",
+                false,
+            ),
             ("#[cfg(test)]\nuse sqlx::PgPool;\nfn f() {}", false),
-            ("#[cfg(test)]\nstruct Harness { pool: sqlx::PgPool }\nfn f() {}", false),
+            (
+                "#[cfg(test)]\nstruct Harness { pool: sqlx::PgPool }\nfn f() {}",
+                false,
+            ),
             // A path nested behind a turbofish or a qualified-trait prefix is
             // still reached.
-            ("fn f() { let rows = Vec::<sqlx::postgres::PgRow>::new(); }", true),
-            ("async fn f() { <Pool as sqlx::Executor>::fetch(id).await; }", true),
+            (
+                "fn f() { let rows = Vec::<sqlx::postgres::PgRow>::new(); }",
+                true,
+            ),
+            (
+                "async fn f() { <Pool as sqlx::Executor>::fetch(id).await; }",
+                true,
+            ),
             ("fn f() {}", false),
         ];
         for (src, expected) in cases {

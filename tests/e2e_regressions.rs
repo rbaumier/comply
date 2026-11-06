@@ -122,11 +122,7 @@ fn comply_ignore_file_suppresses_unused_file_on_plugin_resolved_entry() {
     // so cross-file rules honour it the same way per-file rules do.
     let dir = TempDir::new().expect("failed to create temp dir");
     fs::create_dir_all(dir.path().join("src/app")).unwrap();
-    fs::write(
-        dir.path().join("index.ts"),
-        "export const ENTRY = 1;\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("index.ts"), "export const ENTRY = 1;\n").unwrap();
     fs::write(
         dir.path().join("src/app/client.tsx"),
         "// comply-ignore-file: unused-file — Vite plugin emits the import\n\
@@ -148,8 +144,7 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
     // The framework's own DDL builders must not be flagged for a missing
     // `SET lock_timeout`; a real file under `migrations/` still is.
     let dir = TempDir::new().expect("failed to create temp dir");
-    fs::create_dir_all(dir.path().join("node-pg-migrate/src/operations/tables"))
-        .unwrap();
+    fs::create_dir_all(dir.path().join("node-pg-migrate/src/operations/tables")).unwrap();
     fs::write(
         dir.path()
             .join("node-pg-migrate/src/operations/tables/addConstraint.ts"),
@@ -177,10 +172,8 @@ fn migration_lock_timeout_ignores_framework_package_dirs() {
         )
         // …while the real migration file still does.
         .stdout(
-            predicate::str::is_match(
-                r"001_add_age\.ts:\d+:\d+:.*\[migration-needs-lock-timeout\]",
-            )
-            .unwrap(),
+            predicate::str::is_match(r"001_add_age\.ts:\d+:\d+:.*\[migration-needs-lock-timeout\]")
+                .unwrap(),
         );
 }
 
@@ -322,7 +315,11 @@ fn undeclared_dependency_reports_once_per_import_site_at_the_import() {
         .assert()
         // The undeclared import, not the declared `rete-cli` on line 1.
         .stdout(predicate::str::is_match(r"rete\.config\.ts:2:1:").unwrap())
-        .stdout(predicate::str::is_match(r"rete\.config\.ts:1:").unwrap().not())
+        .stdout(
+            predicate::str::is_match(r"rete\.config\.ts:1:")
+                .unwrap()
+                .not(),
+        )
         // One report per import site, each on its own file.
         .stdout(predicate::str::is_match(r"index\.test\.ts:1:1:").unwrap())
         .stdout(predicate::str::is_match(r"perf\.ts:1:1:").unwrap())
@@ -395,11 +392,7 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
     )
     .unwrap();
     fs::create_dir(dir.path().join("src")).unwrap();
-    fs::write(
-        dir.path().join("src/index.ts"),
-        "export const one = 1;\n",
-    )
-    .unwrap();
+    fs::write(dir.path().join("src/index.ts"), "export const one = 1;\n").unwrap();
 
     // Whether `node` itself or the package is what's absent decides which
     // sentence comply prints; both are toolchain gaps and both must exit 2
@@ -408,7 +401,9 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
         .arg(dir.path())
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("comply: type-aware analysis needs"))
+        .stderr(predicate::str::contains(
+            "comply: type-aware analysis needs",
+        ))
         .stderr(predicate::str::contains("crashed unexpectedly").not())
         .stderr(predicate::str::contains("github.com/rbaumier/comply/issues").not());
 }

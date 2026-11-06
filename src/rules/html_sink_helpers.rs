@@ -43,9 +43,9 @@ fn is_provably_numeric(expr: &Expression) -> bool {
         Expression::NumericLiteral(_) => true,
         Expression::ParenthesizedExpression(p) => is_provably_numeric(&p.expression),
         Expression::UnaryExpression(u) => match u.operator {
-            UnaryOperator::UnaryNegation
-            | UnaryOperator::UnaryPlus
-            | UnaryOperator::BitwiseNot => is_provably_numeric(&u.argument),
+            UnaryOperator::UnaryNegation | UnaryOperator::UnaryPlus | UnaryOperator::BitwiseNot => {
+                is_provably_numeric(&u.argument)
+            }
             _ => false,
         },
         Expression::BinaryExpression(bin) => {
@@ -63,9 +63,7 @@ fn is_provably_numeric(expr: &Expression) -> bool {
                 | Op::ShiftRight
                 | Op::ShiftRightZeroFill => true,
                 // `a + b` is string concatenation unless both sides are numbers.
-                Op::Addition => {
-                    is_provably_numeric(&bin.left) && is_provably_numeric(&bin.right)
-                }
+                Op::Addition => is_provably_numeric(&bin.left) && is_provably_numeric(&bin.right),
                 _ => false,
             }
         }
@@ -170,7 +168,10 @@ fn binding_is_template_element(
                 return true;
             }
             decl.kind == VariableDeclarationKind::Const
-                && decl.init.as_ref().is_some_and(initializer_is_template_element)
+                && decl
+                    .init
+                    .as_ref()
+                    .is_some_and(initializer_is_template_element)
         }
         AstKind::FormalParameter(param) => param
             .type_annotation
@@ -196,9 +197,7 @@ fn initializer_is_template_element(expr: &Expression) -> bool {
                 || initializer_is_template_element(&as_expr.expression)
         }
         Expression::TSNonNullExpression(nn) => initializer_is_template_element(&nn.expression),
-        Expression::AssignmentExpression(assign) => {
-            initializer_is_template_element(&assign.right)
-        }
+        Expression::AssignmentExpression(assign) => initializer_is_template_element(&assign.right),
         _ => false,
     }
 }
@@ -219,9 +218,9 @@ fn call_creates_template_element(call: &oxc_ast::ast::CallExpression) -> bool {
     call.arguments
         .get(tag_arg_index)
         .and_then(|arg| arg.as_expression())
-        .is_some_and(|arg| {
-            matches!(arg, Expression::StringLiteral(lit) if lit.value.as_str() == "template")
-        })
+        .is_some_and(
+            |arg| matches!(arg, Expression::StringLiteral(lit) if lit.value.as_str() == "template"),
+        )
 }
 
 #[cfg(test)]

@@ -123,7 +123,15 @@ fn entry_with_filter(
         },
         backends: TS_FAMILY
             .iter()
-            .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) }))
+            .map(|&lang| {
+                (
+                    lang,
+                    Backend::Oxlint {
+                        rule: oxlint_key,
+                        post_filter: post_filter.as_ref().map(Arc::clone),
+                    },
+                )
+            })
             .collect(),
     }
 }
@@ -192,8 +200,7 @@ fn is_css_custom_prop_cast_fp(src: &str, line_1based: usize) -> bool {
     let start = line_1based - 1;
     let end = (line_1based + 14).min(lines.len());
     let window = lines[start..end].join("\n");
-    window.contains("as React.CSSProperties")
-        && (window.contains("\"--") || window.contains("'--"))
+    window.contains("as React.CSSProperties") && (window.contains("\"--") || window.contains("'--"))
 }
 
 fn is_generic_param_bridge_cast(src: &str, line_1based: usize) -> bool {
@@ -213,9 +220,12 @@ fn line_has_generic_param_bridge_cast(line: &str) -> bool {
             .unwrap_or(after_as.len());
         let after_ident = after_as[cut..].trim_start();
         if let Some(inner) = balanced_angle_inner(after_ident)
-            && split_top_level(inner).iter().any(|a| is_generic_param_name(a)) {
-                return true;
-            }
+            && split_top_level(inner)
+                .iter()
+                .any(|a| is_generic_param_name(a))
+        {
+            return true;
+        }
         from += rel + 4;
     }
     false

@@ -25,8 +25,8 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tree_sitter::Parser;
 
@@ -42,7 +42,6 @@ use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::Rul
 const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
 const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
 const ENGINE_MAX_FILE_LINES: usize = 10_000;
-
 
 /// Pre-computed per-language dispatch table. Built once in `lint_files`,
 /// shared read-only across all rayon workers.
@@ -351,7 +350,12 @@ pub(crate) fn lint_in_memory_with_dispatch(
 /// Uses the globally stored rule definitions so the returned dispatch borrows
 /// `'static` data and can be held inside an `Arc` across async tasks.
 pub(crate) fn build_dispatch_for_lsp(language: Language, config: &Config) -> LangDispatch<'static> {
-    LangDispatch::build(rules::all_rule_defs_static(), language, &ProjectCtx::empty(), config)
+    LangDispatch::build(
+        rules::all_rule_defs_static(),
+        language,
+        &ProjectCtx::empty(),
+        config,
+    )
 }
 
 /// Flatten `RuleDef[]` into `(meta, backend)` pairs that apply to `language`.
@@ -523,14 +527,11 @@ fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> b
         "i18n" => !project.has_framework("i18n"),
         "nuxt" => !project.has_framework("nuxt"),
         "tanstack" | "tanstack-start" | "tanstack-query" => {
-            !project.has_framework("tanstack-query")
-                && !project.has_framework("tanstack-router")
+            !project.has_framework("tanstack-query") && !project.has_framework("tanstack-router")
         }
         _ => false,
     })
 }
-
-
 
 fn lint_one_file_with_dispatch(
     file: &SourceFile,
@@ -725,10 +726,7 @@ mod tests {
     fn dedup_mutation_family_collapses_push_pair() {
         // no-array-sort-mutation doesn't fire on .push() — pair of
         // no-mutating-methods + no-mutation collapses to the more specific.
-        let mut diags = vec![
-            mk("no-mutation", 30, 3),
-            mk("no-mutating-methods", 30, 3),
-        ];
+        let mut diags = vec![mk("no-mutation", 30, 3), mk("no-mutating-methods", 30, 3)];
         dedup_mutation_family(&mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].rule_id, "no-mutating-methods");
@@ -746,7 +744,11 @@ mod tests {
         let ids: Vec<&str> = diags.iter().map(|d| d.rule_id.as_ref()).collect();
         assert_eq!(
             ids,
-            vec!["no-array-sort-mutation", "explicit-length-check", "no-mutation"]
+            vec![
+                "no-array-sort-mutation",
+                "explicit-length-check",
+                "no-mutation"
+            ]
         );
     }
 
@@ -1128,14 +1130,16 @@ key = "válue é 💡"
         )
         .expect("write normal");
 
-        let files = [SourceFile {
+        let files = [
+            SourceFile {
                 path: panic_path,
                 language: Language::TypeScript,
             },
             SourceFile {
                 path: normal_path.clone(),
                 language: Language::TypeScript,
-            }];
+            },
+        ];
         let refs: Vec<&SourceFile> = files.iter().collect();
         let project = Arc::new(ProjectCtx::load(&refs, default_static_config()));
 

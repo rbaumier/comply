@@ -31,11 +31,14 @@ fn is_ident_byte(byte: u8) -> bool {
 /// Find the matching closing delimiter for the opener at `open` (a `(` or `{`),
 /// returning the index of the closer. Returns `None` if unbalanced.
 fn match_delimiter(bytes: &[u8], open: usize) -> Option<usize> {
-    let (opener, closer) = (bytes[open], match bytes[open] {
-        b'(' => b')',
-        b'{' => b'}',
-        _ => return None,
-    });
+    let (opener, closer) = (
+        bytes[open],
+        match bytes[open] {
+            b'(' => b')',
+            b'{' => b'}',
+            _ => return None,
+        },
+    );
     let mut depth = 0usize;
     let mut i = open;
     while i < bytes.len() {
@@ -408,7 +411,11 @@ mod tests {
         // `obj.method` is a member expression, not a fresh binding: the `.`
         // predecessor must reject `method` as an unparenthesized arrow param.
         let src = "obj.method => {\n  return 1\n}\n";
-        assert!(collect_shadow_scopes(src).iter().all(|s| !s.params.contains("method")));
+        assert!(
+            collect_shadow_scopes(src)
+                .iter()
+                .all(|s| !s.params.contains("method"))
+        );
     }
 
     #[test]
@@ -416,7 +423,11 @@ mod tests {
         // The `async` keyword sits before the param and is not read into it, so
         // an async single-param arrow still registers its `count` param scope.
         let src = "const f = async count => {\n  return count + 1\n}\n";
-        assert!(collect_shadow_scopes(src).iter().any(|s| s.params.contains("count")));
+        assert!(
+            collect_shadow_scopes(src)
+                .iter()
+                .any(|s| s.params.contains("count"))
+        );
     }
 
     #[test]
@@ -424,6 +435,10 @@ mod tests {
         // A token that is not a valid identifier (starts with a digit) must not
         // be read as an unparenthesized arrow param.
         let src = "123 => {\n  return 1\n}\n";
-        assert!(collect_shadow_scopes(src).iter().all(|s| s.params.is_empty()));
+        assert!(
+            collect_shadow_scopes(src)
+                .iter()
+                .all(|s| s.params.is_empty())
+        );
     }
 }

@@ -9,8 +9,7 @@ pub fn register_all() -> Vec<RuleDef> {
         oxlint_delegate(
             RuleMeta {
                 id: "react-jsx-curly-brace-presence",
-                description:
-                    "Use curly braces around JSX attribute values and children consistently.",
+                description: "Use curly braces around JSX attribute values and children consistently.",
                 remediation: "Drop the curly braces when a JSX attribute value or child is a \
                               plain string literal (`prop=\"text\"`, not `prop={\"text\"}`). \
                               Unnecessary braces add noise; keep them only where an expression \

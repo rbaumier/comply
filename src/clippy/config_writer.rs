@@ -339,13 +339,26 @@ mod tests {
     fn same_config_keeps_the_same_dir_and_mtime() {
         let cfg = config_with("[clippy]\nmsrv = \"1.70\"\n");
         let first = materialize(&cfg).unwrap();
-        let mtime = fs::metadata(first.join("clippy.toml")).unwrap().modified().unwrap();
+        let mtime = fs::metadata(first.join("clippy.toml"))
+            .unwrap()
+            .modified()
+            .unwrap();
         let second = materialize(&cfg).unwrap();
         assert_eq!(first, second);
-        assert_eq!(fs::metadata(second.join("clippy.toml")).unwrap().modified().unwrap(), mtime);
+        assert_eq!(
+            fs::metadata(second.join("clippy.toml"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mtime
+        );
 
         let other = materialize(&config_with("[clippy]\nmsrv = \"1.71\"\n")).unwrap();
         assert_ne!(first, other);
-        assert!(fs::read_to_string(other.join("clippy.toml")).unwrap().contains("1.71"));
+        assert!(
+            fs::read_to_string(other.join("clippy.toml"))
+                .unwrap()
+                .contains("1.71")
+        );
     }
 }

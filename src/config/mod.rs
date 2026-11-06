@@ -290,12 +290,7 @@ impl Config {
             .get(rule_id)
             .and_then(|by_lang| by_lang.get(&lang))
             .and_then(|extras| extras.get(key))
-            .or_else(|| {
-                self.raw
-                    .rules
-                    .get(rule_id)
-                    .and_then(|r| r.extra.get(key))
-            });
+            .or_else(|| self.raw.rules.get(rule_id).and_then(|r| r.extra.get(key)));
         value
             .and_then(toml::Value::as_array)
             .map(|arr| {
@@ -421,8 +416,8 @@ fn build_lang_config(raw: &mut ComplyToml) -> Result<LangConfigMap> {
         };
         let base_id = &key[..dot_pos];
         let suffix = &key[dot_pos + 1..];
-        let glob = Glob::new(suffix)
-            .with_context(|| format!("invalid lang glob in [rules.\"{key}\"]"))?;
+        let glob =
+            Glob::new(suffix).with_context(|| format!("invalid lang glob in [rules.\"{key}\"]"))?;
         let matcher = glob.compile_matcher();
         let mut matched_any = false;
         for &lang in &ALL_LANGUAGES {
@@ -539,7 +534,6 @@ mod serialize_impl {
             state.end()
         }
     }
-
 }
 
 #[cfg(test)]
@@ -570,8 +564,14 @@ mod tests {
     #[test]
     fn default_config_returns_known_thresholds() {
         let cfg = Config::default();
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 30);
-        assert_eq!(cfg.threshold("max-file-lines", "max", Language::TypeScript), 200);
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::TypeScript),
+            30
+        );
+        assert_eq!(
+            cfg.threshold("max-file-lines", "max", Language::TypeScript),
+            200
+        );
     }
 
     #[test]
@@ -579,7 +579,11 @@ mod tests {
         // Coincidental 3-field shapes collide too often; the floor sits above them.
         let cfg = Config::default();
         assert_eq!(
-            cfg.threshold("no-duplicate-type-definition", "min_properties", Language::TypeScript),
+            cfg.threshold(
+                "no-duplicate-type-definition",
+                "min_properties",
+                Language::TypeScript
+            ),
             4
         );
     }
@@ -617,7 +621,10 @@ mod tests {
     #[test]
     fn string_list_returns_empty_when_unconfigured() {
         let cfg = Config::default();
-        assert!(cfg.string_list("does-not-exist", "patterns", Language::TypeScript).is_empty());
+        assert!(
+            cfg.string_list("does-not-exist", "patterns", Language::TypeScript)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -724,9 +731,15 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 80);
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::TypeScript),
+            80
+        );
         // Other defaults still intact.
-        assert_eq!(cfg.threshold("max-file-lines", "max", Language::TypeScript), 200);
+        assert_eq!(
+            cfg.threshold("max-file-lines", "max", Language::TypeScript),
+            200
+        );
     }
 
     #[test]
@@ -885,8 +898,14 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 50);
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 30);
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::TypeScript),
+            50
+        );
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::Rust),
+            30
+        );
     }
 
     #[test]
@@ -901,9 +920,18 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 60);
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 60);
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Sql), 30);
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::TypeScript),
+            60
+        );
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::Rust),
+            60
+        );
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::Sql),
+            30
+        );
     }
 
     #[test]
@@ -918,9 +946,18 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::TypeScript), 40);
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Tsx), 40);
-        assert_eq!(cfg.threshold("max-function-lines", "max", Language::Rust), 30);
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::TypeScript),
+            40
+        );
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::Tsx),
+            40
+        );
+        assert_eq!(
+            cfg.threshold("max-function-lines", "max", Language::Rust),
+            30
+        );
     }
 
     #[test]
@@ -952,6 +989,9 @@ mod tests {
         )
         .unwrap();
         let cfg = Config::load_from(tmp.path()).unwrap();
-        assert!(cfg.iter_rules().all(|(id, _)| id == "max-function-lines" || !id.contains(".ts")));
+        assert!(
+            cfg.iter_rules()
+                .all(|(id, _)| id == "max-function-lines" || !id.contains(".ts"))
+        );
     }
 }

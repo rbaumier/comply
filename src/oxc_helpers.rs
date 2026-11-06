@@ -128,7 +128,10 @@ pub fn cached_file_bool<F: FnOnce() -> bool>(source: &str, slot: usize, compute:
     let ptr = source.as_ptr() as usize;
     let len = source.len();
     let cur = FILE_BOOLS.with(std::cell::Cell::get)[slot];
-    if cur.ptr == ptr && cur.len == len && let Some(v) = cur.val {
+    if cur.ptr == ptr
+        && cur.len == len
+        && let Some(v) = cur.val
+    {
         return v;
     }
     let v = compute();
@@ -546,8 +549,8 @@ fn split_top_level_commas(body: &str) -> Vec<&str> {
 /// break interop. Matched case-insensitively (header names are case-insensitive
 /// per spec).
 const PROTOCOL_MANDATED_HASH_FIELDS: &[&str] = &[
-    "content-md5", // RFC 1864 — Content-MD5 entity header / trailer (MD5)
-    "sec-websocket-key", // RFC 6455 — WebSocket handshake key (SHA-1)
+    "content-md5",          // RFC 1864 — Content-MD5 entity header / trailer (MD5)
+    "sec-websocket-key",    // RFC 6455 — WebSocket handshake key (SHA-1)
     "sec-websocket-accept", // RFC 6455 — WebSocket handshake accept (SHA-1)
 ];
 
@@ -662,10 +665,7 @@ pub fn imports_vue(source: &str) -> bool {
 ///
 /// [`ProjectCtx::nearest_package_json`]: crate::project::ProjectCtx::nearest_package_json
 #[must_use]
-pub fn in_non_react_framework_package(
-    project: &crate::project::ProjectCtx,
-    path: &Path,
-) -> bool {
+pub fn in_non_react_framework_package(project: &crate::project::ProjectCtx, path: &Path) -> bool {
     let Some(pkg) = project.nearest_package_json(path) else {
         return false;
     };
@@ -694,7 +694,11 @@ pub fn in_non_react_framework_package(
 /// React API (including `className`/`htmlFor`), so a file importing it is treated
 /// as React-compatible, not as native-attribute JSX.
 #[must_use]
-pub fn is_non_react_jsx_file(source: &str, project: &crate::project::ProjectCtx, path: &Path) -> bool {
+pub fn is_non_react_jsx_file(
+    source: &str,
+    project: &crate::project::ProjectCtx,
+    path: &Path,
+) -> bool {
     // `preact/compat` is Preact's React-compatibility layer — `className`/`htmlFor`
     // are the supported props there, exactly as in React. It must win over the
     // `preact/` non-React check below, which would otherwise match the subpath.
@@ -822,9 +826,7 @@ pub fn jsx_element_name_is_component(name: &oxc_ast::ast::JSXElementName) -> boo
 /// checker cannot resolve may well be hiding nothing.
 #[must_use]
 pub fn jsx_opening_element_is_aria_hidden(opening: &oxc_ast::ast::JSXOpeningElement) -> bool {
-    use oxc_ast::ast::{
-        JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression,
-    };
+    use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXExpression};
     opening.attributes.iter().any(|attr_item| {
         let JSXAttributeItem::Attribute(attr) = attr_item else {
             return false;
@@ -978,7 +980,11 @@ pub(crate) fn identifier_is_unshadowed_global<'a>(
     semantic: &'a Semantic<'a>,
 ) -> bool {
     ident.reference_id.get().is_some_and(|ref_id| {
-        semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+        semantic
+            .scoping()
+            .get_reference(ref_id)
+            .symbol_id()
+            .is_none()
     })
 }
 
@@ -1303,7 +1309,8 @@ pub fn mask_comments(source: &str) -> String {
     // Every replacement writes an ASCII space over a byte that was already a
     // standalone ASCII byte (`/`, `*`) or one byte of a fully-masked multibyte
     // sequence, so char boundaries are never split and the buffer stays UTF-8.
-    String::from_utf8(out).expect("mask_comments only writes ASCII spaces, output stays valid UTF-8")
+    String::from_utf8(out)
+        .expect("mask_comments only writes ASCII spaces, output stays valid UTF-8")
 }
 
 /// Parse `source` with oxc_parser using the source type inferred from `path`,
@@ -1742,8 +1749,7 @@ fn local_binding_allocates(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let allocates = match &decl.id {
@@ -1854,7 +1860,10 @@ pub fn is_sole_owned_fresh_object_at(
         FreshOrigin::Foreign => return false,
         FreshOrigin::Assignment(assignment_id) => {
             let span = nodes.kind(assignment_id).span();
-            FreshObject { origin: span, owned_from: span.end }
+            FreshObject {
+                origin: span,
+                owned_from: span.end,
+            }
         }
         FreshOrigin::Declarator
         | FreshOrigin::BranchAssignment
@@ -1870,7 +1879,10 @@ pub fn is_sole_owned_fresh_object_at(
                 return false;
             }
             let span = nodes.kind(declaration_id).span();
-            FreshObject { origin: span, owned_from: span.start }
+            FreshObject {
+                origin: span,
+                owned_from: span.start,
+            }
         }
     };
 
@@ -1914,8 +1926,7 @@ fn binding_declared_without_initializer(
 
     let nodes = semantic.nodes();
     let decl_node_id = semantic.scoping().symbol_declaration(sym_id);
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             return decl.init.is_none();
@@ -2237,8 +2248,7 @@ fn reference_runs_after_mutation(
 
     let ref_span = nodes.kind(ref_node_id).span();
     let mutation_span = nodes.kind(mutation_id).span();
-    if ref_span.start < mutation_span.end
-        || runs_in_nested_call_scope(ref_node_id, scope_id, nodes)
+    if ref_span.start < mutation_span.end || runs_in_nested_call_scope(ref_node_id, scope_id, nodes)
     {
         return false;
     }
@@ -2448,8 +2458,7 @@ fn local_callee_body<'a>(
     }
     let nodes = semantic.nodes();
     let decl_node_id = scoping.symbol_declaration(sym_id);
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         match kind {
             // `async` yields a promise and `function*` an iterator — neither is
@@ -2518,13 +2527,13 @@ fn returns_fresh_object_call<'a>(
         // IS the returned value.
         if concise {
             return matches!(body.statements.first(), Some(Statement::ExpressionStatement(stmt))
-                if initializer_allocates_bounded(
-                    &stmt.expression,
-                    semantic,
-                    Allocation::Any,
-                    depth + 1,
-                    visiting,
-                ));
+            if initializer_allocates_bounded(
+                &stmt.expression,
+                semantic,
+                Allocation::Any,
+                depth + 1,
+                visiting,
+            ));
         }
         if !matches!(body.statements.last(), Some(Statement::ReturnStatement(_))) {
             return false;
@@ -2695,7 +2704,9 @@ pub fn is_array_delete_target(
             .get()
             .and_then(|ref_id| semantic.scoping().get_reference(ref_id).symbol_id())
             .map(|sym_id| {
-                semantic.nodes().kind(semantic.scoping().symbol_declaration(sym_id))
+                semantic
+                    .nodes()
+                    .kind(semantic.scoping().symbol_declaration(sym_id))
             }),
         _ => None,
     };
@@ -2756,8 +2767,17 @@ pub fn is_array_evident_initializer(expr: &oxc_ast::ast::Expression) -> bool {
             }
             matches!(
                 method,
-                "map" | "filter" | "slice" | "concat" | "split" | "flat" | "flatMap" | "toSorted"
-                    | "toReversed" | "toSpliced" | "fill"
+                "map"
+                    | "filter"
+                    | "slice"
+                    | "concat"
+                    | "split"
+                    | "flat"
+                    | "flatMap"
+                    | "toSorted"
+                    | "toReversed"
+                    | "toSpliced"
+                    | "fill"
             )
         }
         _ => false,
@@ -3157,8 +3177,7 @@ fn is_node_module_instance_binding(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(Expression::NewExpression(new_expr)) = &decl.init else {
@@ -3167,8 +3186,7 @@ fn is_node_module_instance_binding(
             let Expression::Identifier(ctor) = &new_expr.callee else {
                 return false;
             };
-            return ctor.name.as_str() == "Module"
-                && resolves_to_node_module_ctor(ctor, semantic);
+            return ctor.name.as_str() == "Module" && resolves_to_node_module_ctor(ctor, semantic);
         }
     }
     false
@@ -3198,8 +3216,7 @@ fn resolves_to_node_module_ctor(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(init) = &decl.init else {
@@ -3315,8 +3332,7 @@ fn local_fresh_array_binding(
 
     let mut is_fresh_local = false;
     let mut init_is_provably_fresh = false;
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             // `(await fn()) as T[]`, `fn()!`, `fn() satisfies T` all evaluate to
@@ -3392,7 +3408,10 @@ fn reference_escapes_only_via_return(
             | AstKind::SpreadElement(_) => child = parent,
             AstKind::ReturnStatement(ret) => {
                 let child_span = nodes.get_node(child).kind().span();
-                return ret.argument.as_ref().is_some_and(|arg| arg.span() == child_span);
+                return ret
+                    .argument
+                    .as_ref()
+                    .is_some_and(|arg| arg.span() == child_span);
             }
             _ => return false,
         }
@@ -3404,7 +3423,15 @@ fn reference_escapes_only_via_return(
 /// copy no other code can alias. Excludes the in-place mutators (`sort`,
 /// `reverse`, `splice`, `fill`), whose result is the receiver itself.
 const FRESH_ARRAY_COPY_METHODS: &[&str] = &[
-    "slice", "filter", "map", "concat", "flat", "flatMap", "toSorted", "toReversed", "with",
+    "slice",
+    "filter",
+    "map",
+    "concat",
+    "flat",
+    "flatMap",
+    "toSorted",
+    "toReversed",
+    "with",
 ];
 
 /// True when `init` provably evaluates to a freshly allocated array no other code
@@ -3489,7 +3516,10 @@ pub fn assignment_target_is_detached_text_parser(
         return false;
     };
     if decl.kind != VariableDeclarationKind::Const
-        || !decl.init.as_ref().is_some_and(initializer_is_create_element)
+        || !decl
+            .init
+            .as_ref()
+            .is_some_and(initializer_is_create_element)
     {
         return false;
     }
@@ -3566,9 +3596,27 @@ fn initializer_is_create_element(expr: &oxc_ast::ast::Expression) -> bool {
 /// `Array.from(x)`, `str.split(...)`, etc. Matched on the member/static method
 /// name of the callee.
 const ARRAY_PRODUCING_METHODS: &[&str] = &[
-    "map", "filter", "slice", "splice", "concat", "flat", "flatMap", "split", "sort", "reverse",
-    "fill", "from", "of", "keys", "values", "entries", "toSorted", "toReversed", "toSpliced",
-    "with", "getOwnPropertyNames",
+    "map",
+    "filter",
+    "slice",
+    "splice",
+    "concat",
+    "flat",
+    "flatMap",
+    "split",
+    "sort",
+    "reverse",
+    "fill",
+    "from",
+    "of",
+    "keys",
+    "values",
+    "entries",
+    "toSorted",
+    "toReversed",
+    "toSpliced",
+    "with",
+    "getOwnPropertyNames",
 ];
 
 /// Whether a type annotation denotes an array: `T[]`, `[A, B]`, `readonly T[]`,
@@ -3868,10 +3916,9 @@ fn type_is_string_array(ty: &oxc_ast::ast::TSType) -> bool {
                 &tref.type_name,
                 TSTypeName::IdentifierReference(id)
                     if matches!(id.name.as_str(), "Array" | "ReadonlyArray")
-            ) && tref
-                .type_arguments
-                .as_ref()
-                .is_some_and(|args| matches!(args.params.as_slice(), [param] if type_is_string(param)))
+            ) && tref.type_arguments.as_ref().is_some_and(
+                |args| matches!(args.params.as_slice(), [param] if type_is_string(param)),
+            )
         }
         _ => false,
     }
@@ -4455,10 +4502,7 @@ fn named_type_has_optional_property(
 
 /// True when `signatures` contains an optional, non-computed property signature
 /// named `prop`.
-fn signatures_have_optional_property(
-    signatures: &[oxc_ast::ast::TSSignature],
-    prop: &str,
-) -> bool {
+fn signatures_have_optional_property(signatures: &[oxc_ast::ast::TSSignature], prop: &str) -> bool {
     use oxc_ast::ast::{PropertyKey, TSSignature};
     signatures.iter().any(|sig| {
         let TSSignature::TSPropertySignature(p) = sig else {
@@ -4543,8 +4587,8 @@ pub fn expression_is_statically_bounded_array(
             };
             let decl_node_id = scoping.symbol_declaration(sym_id);
             let nodes = semantic.nodes();
-            for kind in std::iter::once(nodes.kind(decl_node_id))
-                .chain(nodes.ancestor_kinds(decl_node_id))
+            for kind in
+                std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
             {
                 if let AstKind::VariableDeclarator(decl) = kind {
                     // A fixed-length tuple annotation (no rest element) is the
@@ -4567,10 +4611,9 @@ pub fn expression_is_statically_bounded_array(
                     // (`arr.push(...)` in a loop). Otherwise the arity is no
                     // longer known and the spread stays flagged.
                     return decl.kind == VariableDeclarationKind::Const
-                        && decl
-                            .init
-                            .as_ref()
-                            .is_some_and(|init| expression_is_statically_bounded_array(init, semantic))
+                        && decl.init.as_ref().is_some_and(|init| {
+                            expression_is_statically_bounded_array(init, semantic)
+                        })
                         && scoping
                             .get_resolved_references(sym_id)
                             .all(|r| !reference_is_array_growth_receiver(r.node_id(), semantic));
@@ -4800,8 +4843,7 @@ pub fn expression_is_or_resolves_to_literal(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             return decl.init.as_ref().is_some_and(is_primitive_literal);
@@ -4906,8 +4948,7 @@ fn expression_reads_one_value(
         Expression::ObjectExpression(object) => {
             object.properties.iter().all(|property| match property {
                 ObjectPropertyKind::ObjectProperty(entry) => {
-                    property_key_reads_one_value(&entry.key, binding_reads)
-                        && accepts(&entry.value)
+                    property_key_reads_one_value(&entry.key, binding_reads) && accepts(&entry.value)
                 }
                 ObjectPropertyKind::SpreadProperty(spread) => accepts(&spread.argument),
             })
@@ -4916,9 +4957,7 @@ fn expression_reads_one_value(
         Expression::AwaitExpression(inner) => accepts(&inner.argument),
         Expression::UnaryExpression(unary) => accepts(&unary.argument),
         Expression::BinaryExpression(bin) => accepts(&bin.left) && accepts(&bin.right),
-        Expression::LogicalExpression(logical) => {
-            accepts(&logical.left) && accepts(&logical.right)
-        }
+        Expression::LogicalExpression(logical) => accepts(&logical.left) && accepts(&logical.right),
         Expression::ConditionalExpression(cond) => {
             accepts(&cond.test) && accepts(&cond.consequent) && accepts(&cond.alternate)
         }
@@ -5054,8 +5093,7 @@ fn use_state_setter_array_pattern<'a>(
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(Expression::CallExpression(call)) = &decl.init else {
@@ -5216,10 +5254,10 @@ pub fn is_in_sslmode_no_verify_branch(
             }
             AstKind::ConditionalExpression(cond)
                 if test_compares_no_verify(&cond.test)
-                    && span_contains(cond.consequent.span(), node_span)
-                => {
-                    return true;
-                }
+                    && span_contains(cond.consequent.span(), node_span) =>
+            {
+                return true;
+            }
             _ => {}
         }
     }
@@ -5375,10 +5413,9 @@ pub fn is_reduce_accumulator_param(
     for ancestor in nodes.ancestors(decl_node_id) {
         match ancestor.kind() {
             AstKind::FormalParameters(params) => {
-                is_first_param = params
-                    .items
-                    .first()
-                    .is_some_and(|first| first.span.start <= decl_span.start && decl_span.end <= first.span.end);
+                is_first_param = params.items.first().is_some_and(|first| {
+                    first.span.start <= decl_span.start && decl_span.end <= first.span.end
+                });
                 if !is_first_param {
                     return false;
                 }
@@ -5487,10 +5524,7 @@ fn is_unist_visit_callee(callee: &oxc_ast::ast::Expression) -> bool {
 /// `visit(...)`/`visitParents(...)` call — inline (a direct argument of the call)
 /// or by reference (a named function declaration whose name is passed as an
 /// argument to such a call anywhere in the file).
-fn fn_is_unist_visitor(
-    func: &oxc_semantic::AstNode,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
+fn fn_is_unist_visitor(func: &oxc_semantic::AstNode, semantic: &oxc_semantic::Semantic) -> bool {
     use oxc_ast::AstKind;
     use oxc_ast::ast::Expression;
     use oxc_span::GetSpan;
@@ -5521,9 +5555,10 @@ fn fn_is_unist_visitor(
         _ => None,
     }
     .or_else(|| match nodes.parent_node(func.id()).kind() {
-        AstKind::VariableDeclarator(decl) => {
-            decl.id.get_binding_identifier().map(|bid| bid.name.as_str())
-        }
+        AstKind::VariableDeclarator(decl) => decl
+            .id
+            .get_binding_identifier()
+            .map(|bid| bid.name.as_str()),
         _ => None,
     });
     let Some(name) = name else {
@@ -5701,8 +5736,7 @@ pub fn is_get_context_call_binding(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(init) = &decl.init else {
@@ -5808,7 +5842,10 @@ pub fn bound_positional_params(params: &oxc_ast::ast::FormalParameters) -> Optio
     if params.items.is_empty() {
         return Some(0);
     }
-    params.rest.is_none().then(|| u8::try_from(params.items.len()).ok())?
+    params
+        .rest
+        .is_none()
+        .then(|| u8::try_from(params.items.len()).ok())?
 }
 
 /// The positional-parameter bound a *function type* declares (see
@@ -5819,9 +5856,7 @@ pub fn function_type_bound_positional_params(ty: &oxc_ast::ast::TSType) -> Optio
     use oxc_ast::ast::TSType;
     match ty {
         TSType::TSFunctionType(f) => bound_positional_params(&f.params),
-        TSType::TSParenthesizedType(p) => {
-            function_type_bound_positional_params(&p.type_annotation)
-        }
+        TSType::TSParenthesizedType(p) => function_type_bound_positional_params(&p.type_annotation),
         _ => None,
     }
 }
@@ -6159,8 +6194,7 @@ fn is_vue_factory_binding(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(init) = &decl.init else {
@@ -6214,7 +6248,11 @@ pub fn reference_resolves_to_no_local_binding(
     let Some(ref_id) = ident.reference_id.get() else {
         return true;
     };
-    semantic.scoping().get_reference(ref_id).symbol_id().is_none()
+    semantic
+        .scoping()
+        .get_reference(ref_id)
+        .symbol_id()
+        .is_none()
 }
 
 /// The type-name identifier of a Vue ref annotation whose name is one of `names`
@@ -6282,10 +6320,7 @@ fn binding_is_writable_vue_ref_typed(
 /// `vue` (see [`is_vue_ref_type_named`]). The read-only `ComputedRef` is
 /// excluded: a `computed(getter)` value's `.value` is not assignable, so writing
 /// it stays a genuine error.
-fn is_writable_vue_ref_type(
-    ty: &oxc_ast::ast::TSType,
-    semantic: &oxc_semantic::Semantic,
-) -> bool {
+fn is_writable_vue_ref_type(ty: &oxc_ast::ast::TSType, semantic: &oxc_semantic::Semantic) -> bool {
     is_vue_ref_type_named(ty, VUE_WRITABLE_REF_TYPE_NAMES, semantic)
 }
 
@@ -6464,8 +6499,12 @@ fn named_type_member_type<'a>(
                     // A `type X = Y` alias to another named type — follow it.
                     TSType::TSTypeReference(tref) => {
                         if let TSTypeName::IdentifierReference(id) = &tref.type_name
-                            && let Some(ty) =
-                                named_type_member_type(id.name.as_str(), member, semantic, depth + 1)
+                            && let Some(ty) = named_type_member_type(
+                                id.name.as_str(),
+                                member,
+                                semantic,
+                                depth + 1,
+                            )
                         {
                             return Some(ty);
                         }
@@ -6597,15 +6636,17 @@ fn binding_resolves_to_import(
 /// True when `file` exports `name` as a Vue ref factory binding, directly or
 /// through a single `export { name } from './origin'` re-export hop (the
 /// centralized-state-module + barrel pattern common in Vue codebases).
-fn export_is_vue_ref_factory(
-    index: &crate::project::ImportIndex,
-    file: &Path,
-    name: &str,
-) -> bool {
-    let exports_ref_factory =
-        |f: &Path| index.get_exports(f).iter().any(|e| e.name == name && e.is_vue_ref_factory);
+fn export_is_vue_ref_factory(index: &crate::project::ImportIndex, file: &Path, name: &str) -> bool {
+    let exports_ref_factory = |f: &Path| {
+        index
+            .get_exports(f)
+            .iter()
+            .any(|e| e.name == name && e.is_vue_ref_factory)
+    };
     exports_ref_factory(file)
-        || index.reexport_target(file, name).is_some_and(exports_ref_factory)
+        || index
+            .reexport_target(file, name)
+            .is_some_and(exports_ref_factory)
 }
 
 /// True when `ident` denotes a Vue `Ref<T>` wrapper whose `.value` property is
@@ -6730,8 +6771,7 @@ pub fn is_call_ref_value_target(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         match kind {
             AstKind::VariableDeclarator(decl) => {
@@ -6863,9 +6903,10 @@ fn binding_is_imported_vue_reactive_object(
     let canon = index.canonical(path);
     index.get_imports(&canon).iter().any(|imp| {
         imp.local_name == name
-            && imp.source_path.as_deref().is_some_and(|src| {
-                export_is_vue_reactive_object(index, src, &imp.imported_name)
-            })
+            && imp
+                .source_path
+                .as_deref()
+                .is_some_and(|src| export_is_vue_reactive_object(index, src, &imp.imported_name))
     })
 }
 
@@ -6879,10 +6920,15 @@ fn export_is_vue_reactive_object(
     name: &str,
 ) -> bool {
     let exports_reactive_object = |f: &Path| {
-        index.get_exports(f).iter().any(|e| e.name == name && e.is_vue_reactive_object)
+        index
+            .get_exports(f)
+            .iter()
+            .any(|e| e.name == name && e.is_vue_reactive_object)
     };
     exports_reactive_object(file)
-        || index.reexport_target(file, name).is_some_and(exports_reactive_object)
+        || index
+            .reexport_target(file, name)
+            .is_some_and(exports_reactive_object)
 }
 
 /// The object literal a binding's initializer call was given as its first
@@ -6948,8 +6994,7 @@ fn store_binding_factory_callee<'a>(
     let sym_id = scoping.get_reference(ref_id).symbol_id()?;
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         match kind {
             AstKind::VariableDeclarator(decl) => {
@@ -7013,8 +7058,7 @@ fn callee_binding_is_local_define_store(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         match kind {
             AstKind::VariableDeclarator(decl) => {
@@ -7081,10 +7125,15 @@ fn export_is_pinia_store_factory(
     name: &str,
 ) -> bool {
     let exports_store_factory = |f: &Path| {
-        index.get_exports(f).iter().any(|e| e.name == name && e.is_pinia_store_factory)
+        index
+            .get_exports(f)
+            .iter()
+            .any(|e| e.name == name && e.is_pinia_store_factory)
     };
     exports_store_factory(file)
-        || index.reexport_target(file, name).is_some_and(exports_store_factory)
+        || index
+            .reexport_target(file, name)
+            .is_some_and(exports_store_factory)
 }
 
 /// True when `ident` resolves to a binding holding a Pinia store instance —
@@ -7153,8 +7202,7 @@ pub fn is_valtio_proxy_binding(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             let Some(init) = &decl.init else {
@@ -7696,7 +7744,10 @@ pub fn file_typeof_guards<'a>(
     let ptr = source.as_ptr() as usize;
     let len = source.len();
     let cur = TYPEOF_GUARDS.with(std::cell::Cell::get);
-    if cur.ptr == ptr && cur.len == len && let Some(guards) = cur.guards {
+    if cur.ptr == ptr
+        && cur.len == len
+        && let Some(guards) = cur.guards
+    {
         return guards;
     }
 
@@ -7785,9 +7836,7 @@ pub fn is_typeof_existence_guarded(
     let mut child_span = nodes.get_node(node_id).kind().span();
     for ancestor in nodes.ancestors(node_id) {
         let test: &Expression = match ancestor.kind() {
-            AstKind::IfStatement(stmt)
-                if span_contains(stmt.consequent.span(), child_span) =>
-            {
+            AstKind::IfStatement(stmt) if span_contains(stmt.consequent.span(), child_span) => {
                 &stmt.test
             }
             AstKind::ConditionalExpression(cond)
@@ -8008,9 +8057,7 @@ pub fn is_fresh_array_ctor_name(name: &str) -> bool {
 /// first non-parenthesized inner expression. Used by the cast rules so that
 /// `(x as unknown) as T` is analyzed identically to `x as unknown as T`.
 #[must_use]
-pub fn peel_parens<'a>(
-    expr: &'a oxc_ast::ast::Expression<'a>,
-) -> &'a oxc_ast::ast::Expression<'a> {
+pub fn peel_parens<'a>(expr: &'a oxc_ast::ast::Expression<'a>) -> &'a oxc_ast::ast::Expression<'a> {
     use oxc_ast::ast::Expression;
     let mut current = expr;
     while let Expression::ParenthesizedExpression(p) = current {
@@ -8241,7 +8288,11 @@ pub fn return_type_admits_void_or_undefined(
 /// Recursive core of `return_type_admits_void_or_undefined`. `depth` counts only
 /// alias-resolution hops and is bounded by `MAX_TYPE_ALIAS_DEPTH`.
 #[must_use]
-fn ty_admits_void(ty: &oxc_ast::ast::TSType, semantic: &oxc_semantic::Semantic, depth: u32) -> bool {
+fn ty_admits_void(
+    ty: &oxc_ast::ast::TSType,
+    semantic: &oxc_semantic::Semantic,
+    depth: u32,
+) -> bool {
     use oxc_ast::ast::{TSType, TSTypeName};
     match ty {
         TSType::TSVoidKeyword(_) | TSType::TSUndefinedKeyword(_) | TSType::TSAnyKeyword(_) => true,
@@ -8271,7 +8322,9 @@ fn ty_admits_void(ty: &oxc_ast::ast::TSType, semantic: &oxc_semantic::Semantic, 
             // known export from the known module.
             if VOID_ADMITTING_IMPORTED_TYPES
                 .iter()
-                .any(|&(module, export)| type_ident_is_named_import_from(id, semantic, export, module))
+                .any(|&(module, export)| {
+                    type_ident_is_named_import_from(id, semantic, export, module)
+                })
             {
                 return true;
             }
@@ -8310,7 +8363,8 @@ fn type_ident_is_named_import_from(
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
     let mut exported_name_matches = false;
-    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id)) {
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    {
         match kind {
             AstKind::ImportSpecifier(spec) => {
                 exported_name_matches = spec.imported.name().as_str() == export_name;
@@ -8700,7 +8754,10 @@ fn binds_in_value_space(
 
     const VALUE_SPACE: SymbolFlags = SymbolFlags::Value.union(SymbolFlags::Import);
 
-    semantic.scoping().symbol_flags(symbol).intersects(VALUE_SPACE)
+    semantic
+        .scoping()
+        .symbol_flags(symbol)
+        .intersects(VALUE_SPACE)
         && !declared_in_erased_signature(semantic, symbol)
 }
 
@@ -8730,7 +8787,9 @@ fn binds_in_type_space(
     let flags = semantic.scoping().symbol_flags(symbol);
     flags.intersects(TYPE_SPACE)
         || (flags.contains(SymbolFlags::Import)
-            && (semantic.symbol_references(symbol).any(oxc_semantic::Reference::is_type)
+            && (semantic
+                .symbol_references(symbol)
+                .any(oxc_semantic::Reference::is_type)
                 || import_source_exports_type_name(semantic, project, path, symbol)))
 }
 
@@ -8765,8 +8824,12 @@ fn import_source_exports_type_name(
 /// True when `file` exports `name` as a pure type (`export type` /
 /// `export interface`), following one `export { name } from './origin'` hop.
 fn export_binds_type_name(index: &crate::project::ImportIndex, file: &Path, name: &str) -> bool {
-    let exports_type =
-        |f: &Path| index.get_exports(f).iter().any(|e| e.name == name && e.is_type_only);
+    let exports_type = |f: &Path| {
+        index
+            .get_exports(f)
+            .iter()
+            .any(|e| e.name == name && e.is_type_only)
+    };
     exports_type(file) || index.reexport_target(file, name).is_some_and(exports_type)
 }
 
@@ -8842,7 +8905,8 @@ pub fn file_imports_db_library(semantic: &oxc_semantic::Semantic<'_>) -> bool {
                 if is_db_specifier(lit.value.as_str()))
         }
         AstKind::CallExpression(call) => {
-            let is_require = matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
+            let is_require =
+                matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
             is_require
                 && matches!(call.arguments.first(), Some(Argument::StringLiteral(lit))
                     if is_db_specifier(lit.value.as_str()))
@@ -8936,7 +9000,8 @@ pub fn file_imports_email_template_library(semantic: &oxc_semantic::Semantic<'_>
                 if is_email_specifier(lit.value.as_str()))
         }
         AstKind::CallExpression(call) => {
-            let is_require = matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
+            let is_require =
+                matches!(&call.callee, Expression::Identifier(id) if id.name == "require");
             is_require
                 && matches!(call.arguments.first(), Some(Argument::StringLiteral(lit))
                     if is_email_specifier(lit.value.as_str()))
@@ -9186,8 +9251,7 @@ pub fn is_typed_array_binding(
     };
     let decl_node_id = scoping.symbol_declaration(sym_id);
     let nodes = semantic.nodes();
-    for kind in
-        std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
+    for kind in std::iter::once(nodes.kind(decl_node_id)).chain(nodes.ancestor_kinds(decl_node_id))
     {
         if let AstKind::VariableDeclarator(decl) = kind {
             if decl
@@ -9244,9 +9308,7 @@ fn expression_produces_typed_array(
             };
             match &member.object {
                 // `Uint8Array.from(...)` / `Uint8Array.of(...)`
-                Expression::Identifier(obj)
-                    if TYPED_ARRAY_CTORS.contains(&obj.name.as_str()) =>
-                {
+                Expression::Identifier(obj) if TYPED_ARRAY_CTORS.contains(&obj.name.as_str()) => {
                     matches!(member.property.name.as_str(), "from" | "of")
                 }
                 // `buf.subarray(...)` / `buf.slice(...)` — a TypedArray view of a
@@ -9438,8 +9500,12 @@ mod oxc_helpers_tests {
 
     #[test]
     fn file_imports_email_template_library_detects_known_packages() {
-        assert!(imports_email("import { Button } from '@react-email/components';"));
-        assert!(imports_email("import { Button } from '@react-email/button';"));
+        assert!(imports_email(
+            "import { Button } from '@react-email/components';"
+        ));
+        assert!(imports_email(
+            "import { Button } from '@react-email/button';"
+        ));
         assert!(imports_email("import { Button } from 'jsx-email';"));
         assert!(imports_email("import mjml from 'mjml';"));
     }
@@ -9453,7 +9519,9 @@ mod oxc_helpers_tests {
 
     #[test]
     fn file_imports_db_library_detects_static_import_and_subpath() {
-        assert!(imports_db("import { drizzle } from 'drizzle-orm/node-postgres';"));
+        assert!(imports_db(
+            "import { drizzle } from 'drizzle-orm/node-postgres';"
+        ));
         assert!(imports_db("import { PrismaClient } from '@prisma/client';"));
         assert!(imports_db("import postgres from 'postgres';"));
     }
@@ -9467,7 +9535,9 @@ mod oxc_helpers_tests {
 
     #[test]
     fn file_imports_db_library_rejects_non_db_imports() {
-        assert!(!imports_db("import { ContainerClient } from '@azure/storage-blob';"));
+        assert!(!imports_db(
+            "import { ContainerClient } from '@azure/storage-blob';"
+        ));
         assert!(!imports_db("import fs from 'node:fs';"));
         assert!(!imports_db("import { foo } from './db';"));
         assert!(!imports_db("const x = 1;"));
@@ -9475,17 +9545,25 @@ mod oxc_helpers_tests {
 
     #[test]
     fn source_imports_db_library_detects_quoted_specifiers_and_subpaths() {
-        assert!(source_imports_db_library("import { drizzle } from 'drizzle-orm/node-postgres';"));
-        assert!(source_imports_db_library("import { PrismaClient } from \"@prisma/client\";"));
+        assert!(source_imports_db_library(
+            "import { drizzle } from 'drizzle-orm/node-postgres';"
+        ));
+        assert!(source_imports_db_library(
+            "import { PrismaClient } from \"@prisma/client\";"
+        ));
         assert!(source_imports_db_library("const pg = require('pg');"));
-        assert!(source_imports_db_library("const m = await import(\"mongodb\");"));
+        assert!(source_imports_db_library(
+            "const m = await import(\"mongodb\");"
+        ));
     }
 
     #[test]
     fn source_imports_db_library_rejects_non_db_specifiers() {
         // PGlite (electric-sql) is an in-browser WASM Postgres not in DB_PACKAGES,
         // so a REPL-demo component importing it is not gated as a DB-access file.
-        assert!(!source_imports_db_library("import { PGlite } from '@electric-sql/pglite';"));
+        assert!(!source_imports_db_library(
+            "import { PGlite } from '@electric-sql/pglite';"
+        ));
         assert!(!source_imports_db_library("import { ref } from 'vue';"));
         // A bare `pg` outside quotes (an identifier or prose) must not match.
         assert!(!source_imports_db_library("const pgClient = makePg();"));
@@ -9504,11 +9582,15 @@ mod oxc_helpers_tests {
         assert!(is_solid("import { createStore } from \"solid-js/store\";"));
         assert!(is_solid("import { Router } from \"@solidjs/router\";"));
         assert!(is_solid("import { StartServer } from \"@solidjs/start\";"));
-        assert!(is_solid("import { createRouteAction } from \"solid-start\";"));
+        assert!(is_solid(
+            "import { createRouteAction } from \"solid-start\";"
+        ));
         assert!(is_solid("import { redirect } from \"solid-start/server\";"));
         assert!(is_solid("import { Link } from \"@tanstack/solid-router\";"));
         assert!(is_solid("const s = require('solid-js');"));
-        assert!(is_solid("/** @jsxImportSource solid-js */\nlet C = () => <div/>;"));
+        assert!(is_solid(
+            "/** @jsxImportSource solid-js */\nlet C = () => <div/>;"
+        ));
     }
 
     #[test]
@@ -9516,8 +9598,12 @@ mod oxc_helpers_tests {
         // Issue #7075: a Solid package name that appears only inside a URL path
         // string, comment, or data literal is not an import and must not mark a
         // non-Solid (React/Next) file as Solid.
-        assert!(!is_solid("const links = [{ href: \"/docs/integrations/solid-start\" }];"));
-        assert!(!is_solid("// see the solid-js docs for @solidjs/router details"));
+        assert!(!is_solid(
+            "const links = [{ href: \"/docs/integrations/solid-start\" }];"
+        ));
+        assert!(!is_solid(
+            "// see the solid-js docs for @solidjs/router details"
+        ));
         assert!(!is_solid("const label = \"Built with solid-js\";"));
         assert!(!is_solid("import { useState } from \"react\";"));
     }
@@ -9686,9 +9772,7 @@ mod oxc_helpers_tests {
     }
 
     /// Right operand of the first `BinaryExpression` in the program.
-    fn binary_right<'a>(
-        sem: &'a oxc_semantic::Semantic<'a>,
-    ) -> &'a oxc_ast::ast::Expression<'a> {
+    fn binary_right<'a>(sem: &'a oxc_semantic::Semantic<'a>) -> &'a oxc_ast::ast::Expression<'a> {
         sem.nodes()
             .iter()
             .find_map(|n| match n.kind() {
@@ -9727,23 +9811,41 @@ mod oxc_helpers_tests {
         with_semantic(
             "const k = getSecret(); function f(a) { if (a === k) {} }",
             SourceType::ts(),
-            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+            |sem| {
+                assert!(!expression_is_or_resolves_to_literal(
+                    binary_right(sem),
+                    sem
+                ))
+            },
         );
         // Bound to a member access → not a literal.
         with_semantic(
             "const k = process.env.KEY; function f(a) { if (a === k) {} }",
             SourceType::ts(),
-            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+            |sem| {
+                assert!(!expression_is_or_resolves_to_literal(
+                    binary_right(sem),
+                    sem
+                ))
+            },
         );
         // A literal nested inside a larger expression → not a direct literal.
         with_semantic(
             "const k = \"a\" + salt; function f(a) { if (a === k) {} }",
             SourceType::ts(),
-            |sem| assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem)),
+            |sem| {
+                assert!(!expression_is_or_resolves_to_literal(
+                    binary_right(sem),
+                    sem
+                ))
+            },
         );
         // An unresolved free identifier → not a literal.
         with_semantic("x === secret;", SourceType::ts(), |sem| {
-            assert!(!expression_is_or_resolves_to_literal(binary_right(sem), sem));
+            assert!(!expression_is_or_resolves_to_literal(
+                binary_right(sem),
+                sem
+            ));
         });
     }
 
@@ -9867,7 +9969,11 @@ mod oxc_helpers_tests {
         // adjacency — the directive applies to `type Other`, not `type Dup`.
         let src = "// @ts-expect-error\ntype Other = X;\ntype Dup = Y;";
         with_semantic(src, SourceType::ts(), |sem| {
-            assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
+            assert!(!has_ts_expect_error_above(
+                sem.comments(),
+                src,
+                type_dup_start(src)
+            ));
         });
     }
 
@@ -9875,7 +9981,11 @@ mod oxc_helpers_tests {
     fn ts_expect_error_above_rejects_plain_comment() {
         let src = "// just a note\ntype Dup = X;";
         with_semantic(src, SourceType::ts(), |sem| {
-            assert!(!has_ts_expect_error_above(sem.comments(), src, type_dup_start(src)));
+            assert!(!has_ts_expect_error_above(
+                sem.comments(),
+                src,
+                type_dup_start(src)
+            ));
         });
     }
 
@@ -9904,7 +10014,11 @@ mod oxc_helpers_tests {
         // The tag is the leading comment of `other`, not of `foo` below it.
         let src = "class A { /** @deprecated */ other() {} foo() {} }";
         with_semantic(src, SourceType::ts(), |sem| {
-            assert!(!node_has_preceding_deprecated_tag(sem.comments(), src, foo_method_start(src)));
+            assert!(!node_has_preceding_deprecated_tag(
+                sem.comments(),
+                src,
+                foo_method_start(src)
+            ));
         });
     }
 
@@ -9912,7 +10026,11 @@ mod oxc_helpers_tests {
     fn deprecated_tag_above_rejects_plain_comment() {
         let src = "class A { /** does a thing */ foo() {} }";
         with_semantic(src, SourceType::ts(), |sem| {
-            assert!(!node_has_preceding_deprecated_tag(sem.comments(), src, foo_method_start(src)));
+            assert!(!node_has_preceding_deprecated_tag(
+                sem.comments(),
+                src,
+                foo_method_start(src)
+            ));
         });
     }
 
@@ -9940,17 +10058,26 @@ mod oxc_helpers_tests {
 
     #[test]
     fn groups_destructure_collects_renamed_key_not_binding() {
-        assert_eq!(destructured_keys("const { year: y } = m.groups;"), vec!["year"]);
+        assert_eq!(
+            destructured_keys("const { year: y } = m.groups;"),
+            vec!["year"]
+        );
     }
 
     #[test]
     fn groups_destructure_collects_optional_chained() {
-        assert_eq!(destructured_keys("const { a, b } = m?.groups;"), vec!["a", "b"]);
+        assert_eq!(
+            destructured_keys("const { a, b } = m?.groups;"),
+            vec!["a", "b"]
+        );
     }
 
     #[test]
     fn groups_destructure_skips_rest_property() {
-        assert_eq!(destructured_keys("const { a, ...rest } = m.groups;"), vec!["a"]);
+        assert_eq!(
+            destructured_keys("const { a, ...rest } = m.groups;"),
+            vec!["a"]
+        );
     }
 
     #[test]
@@ -9982,7 +10109,9 @@ mod oxc_helpers_tests {
 
     #[test]
     fn imported_from_react_rejects_other_sources_and_local() {
-        assert!(!use_imported_from_react("import { use } from '../../hooks';"));
+        assert!(!use_imported_from_react(
+            "import { use } from '../../hooks';"
+        ));
         assert!(!use_imported_from_react("import { use } from 'preact';"));
         assert!(!use_imported_from_react("function use(p) {}"));
         assert!(!use_imported_from_react("const x = 1;"));

@@ -200,7 +200,9 @@ fn has_exported_migration_hook(source: &str, name: &str) -> bool {
         "export let ",
         "exports.",
     ];
-    PREFIXES.iter().any(|prefix| matches_hook_after_prefix(source, prefix, name))
+    PREFIXES
+        .iter()
+        .any(|prefix| matches_hook_after_prefix(source, prefix, name))
 }
 
 /// True when `source` contains `prefix` immediately followed by `name` as a
@@ -387,7 +389,9 @@ pub(crate) fn is_generated_content(source: &str) -> bool {
         // extensively). That rule list is a codegen signature, not a
         // hand-written suppression.
         if let Some(rules) = inner.strip_prefix("eslint-disable ")
-            && rules.split(',').any(|r| r.trim() == "no-prototype-builtins")
+            && rules
+                .split(',')
+                .any(|r| r.trim() == "no-prototype-builtins")
         {
             return true;
         }
@@ -468,7 +472,9 @@ fn is_generated_filename(path: &Path) -> bool {
         return false;
     };
     let lower = name.to_ascii_lowercase();
-    GENERATED_FILENAME_SUFFIXES.iter().any(|suffix| lower.ends_with(suffix))
+    GENERATED_FILENAME_SUFFIXES
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
 }
 
 /// A `generated/` directory anywhere in the path — matched as an exact path
@@ -515,7 +521,11 @@ pub(crate) fn scan_minified(path: &Path, source: &str) -> bool {
     // often keep a few short header lines above a single multi-KB payload line.
     if source.len() > MINIFIED_MIN_BYTES {
         let line_count = source.bytes().filter(|&b| b == b'\n').count() + 1;
-        if line_count <= 3 || source.split('\n').any(|line| line.len() > MINIFIED_LONG_LINE) {
+        if line_count <= 3
+            || source
+                .split('\n')
+                .any(|line| line.len() > MINIFIED_LONG_LINE)
+        {
             return true;
         }
         // Name-agnostic bundle catch: an esbuild/VitePress documentation bundle
@@ -557,7 +567,9 @@ const VENDORED_SEGMENTS: &[&str] = &[
 ];
 
 fn has_vendored_segment(normalized: &str) -> bool {
-    normalized.split('/').any(|seg| VENDORED_SEGMENTS.contains(&seg))
+    normalized
+        .split('/')
+        .any(|seg| VENDORED_SEGMENTS.contains(&seg))
 }
 
 /// Storybook directory names — matched as exact path segments (between `/`
@@ -570,7 +582,9 @@ fn has_vendored_segment(normalized: &str) -> bool {
 const STORYBOOK_SEGMENTS: &[&str] = &["stories", "storybook", ".storybook"];
 
 fn has_storybook_segment(normalized: &str) -> bool {
-    normalized.split('/').any(|seg| STORYBOOK_SEGMENTS.contains(&seg))
+    normalized
+        .split('/')
+        .any(|seg| STORYBOOK_SEGMENTS.contains(&seg))
 }
 
 /// Relaxed directory names — matched as exact path segments (between `/`
@@ -597,7 +611,9 @@ const RELAXED_SEGMENTS: &[&str] = &[
 ];
 
 fn has_relaxed_segment(normalized: &str) -> bool {
-    normalized.split('/').any(|seg| RELAXED_SEGMENTS.contains(&seg))
+    normalized
+        .split('/')
+        .any(|seg| RELAXED_SEGMENTS.contains(&seg))
 }
 
 /// Conventional file stems for test-runner setup/teardown hooks that the
@@ -852,7 +868,10 @@ mod tests {
         // bundle that keeps header lines above the minified body.
         let long = "a".repeat(5000);
         let src = format!("// header\nconst x = 1;\nconst data = \"{long}\";\n");
-        assert!(scan_minified(&PathBuf::from("dist/assets/index-abc123.js"), &src));
+        assert!(scan_minified(
+            &PathBuf::from("dist/assets/index-abc123.js"),
+            &src
+        ));
     }
 
     #[test]
@@ -880,7 +899,10 @@ mod tests {
     fn minified_dot_min_underscore_version_filename() {
         // `name.min_<version>.js` convention (e.g. `docsearch.min_2.6.3.js`).
         let src = "const a = 1;\nconst b = 2;\n";
-        assert!(scan_minified(&PathBuf::from("site/public/docsearch.min_2.6.3.js"), src));
+        assert!(scan_minified(
+            &PathBuf::from("site/public/docsearch.min_2.6.3.js"),
+            src
+        ));
     }
 
     #[test]
@@ -904,7 +926,10 @@ mod tests {
         let src = format!(
             "var Module=typeof DracoEncoderModule!=\"undefined\"?DracoEncoderModule:{{}};\nvar b={payload};\nvar c={payload};\n"
         );
-        assert!(scan_minified(&PathBuf::from("modules/draco/src/libs/draco_encoder.js"), &src));
+        assert!(scan_minified(
+            &PathBuf::from("modules/draco/src/libs/draco_encoder.js"),
+            &src
+        ));
     }
 
     #[test]
@@ -966,7 +991,9 @@ mod tests {
         // hyphen-suffixed `foo-spec.ts` files have no `.spec.` infix, so the
         // directory segment is what marks them as tests.
         assert!(scan_path(&PathBuf::from("spec/operators/foo-spec.ts")).in_test_dir);
-        assert!(scan_path(&PathBuf::from("packages/rxjs/spec/operators/first-spec.ts")).in_test_dir);
+        assert!(
+            scan_path(&PathBuf::from("packages/rxjs/spec/operators/first-spec.ts")).in_test_dir
+        );
         // Segment match — `respec/`, a `myspec.ts` file, or a file literally
         // named `spec.ts` are not a `spec/` directory.
         assert!(!scan_path(&PathBuf::from("respec/x.ts")).in_test_dir);
@@ -990,8 +1017,10 @@ mod tests {
         assert!(scan_path(&PathBuf::from("dtslint/Array.ts")).in_test_dir);
         // dtslint-style `__tests_dts__/` type-test directory (issue #1660).
         assert!(
-            scan_path(&PathBuf::from("packages/vite/src/node/__tests_dts__/config.ts"))
-                .in_test_dir
+            scan_path(&PathBuf::from(
+                "packages/vite/src/node/__tests_dts__/config.ts"
+            ))
+            .in_test_dir
         );
         assert!(scan_path(&PathBuf::from("__tests_dts__/config.ts")).in_test_dir);
         // Segment match — a substring like `my__tests_dts__data/` is not a dir.
@@ -1038,8 +1067,10 @@ mod tests {
             .in_test_dir
         );
         assert!(
-            scan_path(&PathBuf::from("packages/foo/integration/graphql/src/cats/cats.resolver.ts"))
-                .in_test_dir
+            scan_path(&PathBuf::from(
+                "packages/foo/integration/graphql/src/cats/cats.resolver.ts"
+            ))
+            .in_test_dir
         );
         // A production `src/integration/` module (no nested `src/` after the
         // `integration/` segment) is not the fixture-app shape.
@@ -1050,7 +1081,10 @@ mod tests {
         assert!(scan_path(&PathBuf::from("integration/helpers/rsc-vite/server.js")).in_test_dir);
         assert!(scan_path(&PathBuf::from("integration/helpers/create-fixture.ts")).in_test_dir);
         assert!(
-            scan_path(&PathBuf::from("integration/helpers/rsc-vite-framework/start.js")).in_test_dir
+            scan_path(&PathBuf::from(
+                "integration/helpers/rsc-vite-framework/start.js"
+            ))
+            .in_test_dir
         );
         // The `integration/` segment after a monorepo package path is still
         // test infra, even without a nested `src/`.
@@ -1267,7 +1301,9 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/parse-bench.rs")).in_benchmark_dir);
         assert!(scan_path(&PathBuf::from("src/parse.bench.ts")).in_benchmark_dir);
         // `bench`/`benchmark`/`benchmarks` directory segments (JS/general convention).
-        assert!(scan_path(&PathBuf::from("packages/bench/discriminated-union.ts")).in_benchmark_dir);
+        assert!(
+            scan_path(&PathBuf::from("packages/bench/discriminated-union.ts")).in_benchmark_dir
+        );
         assert!(scan_path(&PathBuf::from("benchmark/x.ts")).in_benchmark_dir);
         assert!(scan_path(&PathBuf::from("benchmarks/perf/y.ts")).in_benchmark_dir);
         // Exact `bench`/`benchmark` stem at the package root (Turf convention,
@@ -1333,8 +1369,10 @@ mod tests {
     fn hyphenated_plural_tests_dirs_are_test_dirs() {
         // `*-tests/` segments such as integration-tests/ or type-tests/ (issue #979).
         assert!(
-            scan_path(&PathBuf::from("integration-tests/type-tests/join-nodenext/mysql.ts"))
-                .in_test_dir
+            scan_path(&PathBuf::from(
+                "integration-tests/type-tests/join-nodenext/mysql.ts"
+            ))
+            .in_test_dir
         );
         // Singular `*-test/` stays a feature dir (e.g. A/B testing), not a test dir.
         assert!(!scan_path(&PathBuf::from("src/ab-test/widget.ts")).in_test_dir);
@@ -1352,8 +1390,10 @@ mod tests {
         // meilisearch's patched async-openai fork (issue #6947). `external` does
         // not cover it because matching is exact-segment, not prefix.
         assert!(
-            scan_path(&PathBuf::from("external-crates/async-openai/src/types/message.rs"))
-                .is_vendored
+            scan_path(&PathBuf::from(
+                "external-crates/async-openai/src/types/message.rs"
+            ))
+            .is_vendored
         );
     }
 
@@ -1438,9 +1478,7 @@ mod tests {
         assert!(scan_path(&PathBuf::from("src/Button.stories.tsx")).in_storybook);
         // Helper/story files inside a `stories/` directory without a
         // `.stories.` name (issue #1982).
-        assert!(
-            scan_path(&PathBuf::from("storybook/stories/internal/KeyLogger.tsx")).in_storybook
-        );
+        assert!(scan_path(&PathBuf::from("storybook/stories/internal/KeyLogger.tsx")).in_storybook);
         assert!(scan_path(&PathBuf::from("src/stories/Header.tsx")).in_storybook);
         // A top-level `storybook/` package directory.
         assert!(scan_path(&PathBuf::from("storybook/preview.tsx")).in_storybook);
@@ -1481,7 +1519,9 @@ mod tests {
 
         assert!(!scan_path(&helper).in_storybook);
         assert!(
-            FileCtx::build(&helper, "", Language::Vue, &project).path_segments.in_storybook
+            FileCtx::build(&helper, "", Language::Vue, &project)
+                .path_segments
+                .in_storybook
         );
     }
 
@@ -1500,7 +1540,9 @@ mod tests {
         assert!(is_generated_filename(&PathBuf::from(
             "examples/vue/basic-file-based-jsx/src/routeTree.gen.ts"
         )));
-        assert!(is_generated_filename(&PathBuf::from("src/api/foo.generated.ts")));
+        assert!(is_generated_filename(&PathBuf::from(
+            "src/api/foo.generated.ts"
+        )));
     }
 
     #[test]
@@ -1523,7 +1565,9 @@ mod tests {
 
     #[test]
     fn targeted_eslint_disable_is_not_generated() {
-        assert!(!is_generated_content("/* eslint-disable no-console */\nconst x = 1;\n"));
+        assert!(!is_generated_content(
+            "/* eslint-disable no-console */\nconst x = 1;\n"
+        ));
     }
 
     #[test]
@@ -1539,7 +1583,9 @@ mod tests {
     fn unrelated_targeted_eslint_disable_is_not_generated_issue1144() {
         // A hand-written targeted disable without `no-prototype-builtins` stays
         // non-generated.
-        assert!(!is_generated_content("/* eslint-disable no-console, no-shadow */\nconst x = 1;\n"));
+        assert!(!is_generated_content(
+            "/* eslint-disable no-console, no-shadow */\nconst x = 1;\n"
+        ));
     }
 
     #[test]
@@ -1679,7 +1725,9 @@ mod tests {
 
     #[test]
     fn generated_dir_segment_is_generated_issue1144() {
-        assert!(is_in_generated_dir(&PathBuf::from("src/generated/clientProto.js")));
+        assert!(is_in_generated_dir(&PathBuf::from(
+            "src/generated/clientProto.js"
+        )));
         assert!(is_in_generated_dir(&PathBuf::from(
             "sdk/web-pubsub/web-pubsub-client-protobuf/src/generated/clientProto.js"
         )));
@@ -1687,8 +1735,12 @@ mod tests {
 
     #[test]
     fn generated_dir_does_not_match_substrings_issue1144() {
-        assert!(!is_in_generated_dir(&PathBuf::from("src/generated-utils/foo.ts")));
-        assert!(!is_in_generated_dir(&PathBuf::from("src/regenerated/foo.ts")));
+        assert!(!is_in_generated_dir(&PathBuf::from(
+            "src/generated-utils/foo.ts"
+        )));
+        assert!(!is_in_generated_dir(&PathBuf::from(
+            "src/regenerated/foo.ts"
+        )));
         assert!(!is_in_generated_dir(&PathBuf::from("src/app.ts")));
     }
 
@@ -1715,7 +1767,8 @@ mod tests {
 
     #[test]
     fn wasm_bindgen_glue_is_generated_issue4799() {
-        let src = "let wasm;\nexport function __wbindgen_throw(ptr, len) {\n  throw new Error('x');\n}\n";
+        let src =
+            "let wasm;\nexport function __wbindgen_throw(ptr, len) {\n  throw new Error('x');\n}\n";
         assert!(is_generated_content(src));
     }
 
@@ -1834,10 +1887,7 @@ mod tests {
         // older heuristics miss it. Average line length far exceeds hand-written
         // source. The name carries no `.min.`/`.bundle.` marker.
         let payload_line = format!("var x={};\n", "Object.create(null),".repeat(40));
-        let bundle_src = format!(
-            "\"use strict\";(()=>{{{}}})();\n",
-            payload_line.repeat(20)
-        );
+        let bundle_src = format!("\"use strict\";(()=>{{{}}})();\n", payload_line.repeat(20));
         assert!(bundle_src.len() > 4096);
         assert!(bundle_src.split('\n').all(|l| l.len() <= 4096));
         assert!(bundle_src.bytes().filter(|&b| b == b'\n').count() + 1 > 3);
@@ -1947,7 +1997,11 @@ mod tests {
         }
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let project = ProjectCtx::load(&refs, &Config::default());
-        assert_eq!(project.framework, Framework::NextJs, "fixture must detect Next.js");
+        assert_eq!(
+            project.framework,
+            Framework::NextJs,
+            "fixture must detect Next.js"
+        );
         let target = dir.path().join(target_rel);
         let source = std::fs::read_to_string(&target).unwrap();
         let language = Language::from_path(&target).unwrap();

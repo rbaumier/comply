@@ -309,7 +309,15 @@ fn merge_and_emit(
             has_enough_distinct_texts(ft, rstart, last_rstart, min_tokens, min_distinct_trigrams)
         });
         if keep {
-            spans.push(Span { rfi, rstart, last_rstart, rline, cfi, last_cstart, cline });
+            spans.push(Span {
+                rfi,
+                rstart,
+                last_rstart,
+                rline,
+                cfi,
+                last_cstart,
+                cline,
+            });
         }
         i = j;
     }
@@ -429,8 +437,7 @@ fn merge_and_emit(
         // Criterion K: re-parsed Rust trees for the test-context check, memoized
         // per file index — a file recurs across many pairs, so it is parsed once.
         let mut rust_parser = Parser::new();
-        let mut rust_tree_memo: FxHashMap<usize, Option<tree_sitter::Tree>> =
-            FxHashMap::default();
+        let mut rust_tree_memo: FxHashMap<usize, Option<tree_sitter::Tree>> = FxHashMap::default();
         for ((rfi, cfi), idxs) in &by_pair {
             let total = file_data[*rfi].as_ref().map_or(0, |ft| ft.tokens.len());
             let covered: usize = idxs
@@ -444,24 +451,18 @@ fn merge_and_emit(
                 .sum();
             let gap = total.saturating_sub(covered);
             let small_gap = gap > 0 && gap <= sibling_gap_max;
-            let name_siblings = gap > 0
-                && are_symmetric_name_pair(&files[*rfi].path, &files[*cfi].path);
-            let locale_variants =
-                are_locale_variant_pair(&files[*rfi].path, &files[*cfi].path);
+            let name_siblings =
+                gap > 0 && are_symmetric_name_pair(&files[*rfi].path, &files[*cfi].path);
+            let locale_variants = are_locale_variant_pair(&files[*rfi].path, &files[*cfi].path);
             let scaffold_variants =
                 are_scaffold_template_pair(&files[*rfi].path, &files[*cfi].path);
-            let test_spec_siblings =
-                are_test_spec_siblings(&files[*rfi].path, &files[*cfi].path);
-            let theme_variants =
-                are_theme_palette_pair(&files[*rfi].path, &files[*cfi].path);
+            let test_spec_siblings = are_test_spec_siblings(&files[*rfi].path, &files[*cfi].path);
+            let theme_variants = are_theme_palette_pair(&files[*rfi].path, &files[*cfi].path);
             let complete_streaming_variants =
                 are_complete_streaming_pair(&files[*rfi].path, &files[*cfi].path);
-            let arch_siblings =
-                are_arch_sibling_pair(&files[*rfi].path, &files[*cfi].path);
-            let cross_crate =
-                is_cross_cargo_crate_pair(*rfi, *cfi, files, &mut crate_root_memo);
-            let cross_npm =
-                is_cross_npm_package_pair(*rfi, *cfi, files, &mut package_root_memo);
+            let arch_siblings = are_arch_sibling_pair(&files[*rfi].path, &files[*cfi].path);
+            let cross_crate = is_cross_cargo_crate_pair(*rfi, *cfi, files, &mut crate_root_memo);
+            let cross_npm = is_cross_npm_package_pair(*rfi, *cfi, files, &mut package_root_memo);
             if small_gap
                 || name_siblings
                 || locale_variants
@@ -679,8 +680,8 @@ const LOCALE_CONTEXT_SEGMENTS: &[&str] = &["locale", "locales", "i18n", "transla
 /// subtag, lowercased.
 fn locale_base_language(segment: &str) -> Option<String> {
     let first = segment.split(['-', '_']).next()?;
-    let is_language_code = (2..=3).contains(&first.len())
-        && first.bytes().all(|b| b.is_ascii_alphabetic());
+    let is_language_code =
+        (2..=3).contains(&first.len()) && first.bytes().all(|b| b.is_ascii_alphabetic());
     if is_language_code {
         Some(first.to_ascii_lowercase())
     } else {
@@ -745,7 +746,9 @@ fn are_locale_variant_pair(a: &std::path::Path, b: &std::path::Path) -> bool {
     let code = |segs: &[&str], pos: usize| -> String {
         let seg = segs[pos];
         if pos + 1 == segs.len() {
-            seg.rsplit_once('.').map_or(seg, |(stem, _)| stem).to_string()
+            seg.rsplit_once('.')
+                .map_or(seg, |(stem, _)| stem)
+                .to_string()
         } else {
             seg.to_string()
         }
@@ -924,8 +927,15 @@ pub(crate) fn are_test_spec_siblings(a: &std::path::Path, b: &std::path::Path) -
 // --- Theme/palette-variant detection ---
 
 /// Directory names that hold a collection of parallel theme/palette variant files.
-const THEME_COLLECTION_DIRS: &[&str] =
-    &["theme", "themes", "palette", "palettes", "colorscheme", "colorschemes", "colors"];
+const THEME_COLLECTION_DIRS: &[&str] = &[
+    "theme",
+    "themes",
+    "palette",
+    "palettes",
+    "colorscheme",
+    "colorschemes",
+    "colors",
+];
 
 /// Data/config extensions a color-theme file uses.
 const THEME_DATA_EXTS: &[&str] = &["yml", "yaml", "toml", "json", "ron"];
@@ -1519,8 +1529,14 @@ mod tests {
         std::fs::write(&pa, content_a).unwrap();
         std::fs::write(&pb, content_b).unwrap();
         (
-            SourceFile { path: pa, language: Language::Rust },
-            SourceFile { path: pb, language: Language::Rust },
+            SourceFile {
+                path: pa,
+                language: Language::Rust,
+            },
+            SourceFile {
+                path: pb,
+                language: Language::Rust,
+            },
         )
     }
 
@@ -1581,7 +1597,10 @@ mod tests {
         // `tokenize_file` can drop them — clone detection bypasses the engine
         // gate that already honors this.
         let dir = tempfile::tempdir().unwrap();
-        let block = format!("/* eslint-disable */\n// @generated\n{}", large_ts_block(20));
+        let block = format!(
+            "/* eslint-disable */\n// @generated\n{}",
+            large_ts_block(20)
+        );
         let pa = dir.path().join("src/a.ts");
         let pb = dir.path().join("src/b.ts");
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
@@ -1883,8 +1902,14 @@ mod tests {
         let pb = dir.path().join("b.gen.ts");
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert!(lint_files(&[&fa, &fb]).is_empty());
     }
 
@@ -1955,8 +1980,14 @@ mod tests {
         let pb = dir.path().join("reactivate-product.ts");
         std::fs::write(&pa, &deactivate_content).unwrap();
         std::fs::write(&pb, &reactivate_content).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "symmetric suffix siblings (deactivate/reactivate) must not be flagged as clones"
@@ -1990,8 +2021,14 @@ mod tests {
         let pb = dir.path().join("reactivate.ts");
         std::fs::write(&pa, &deactivate).unwrap();
         std::fs::write(&pb, &reactivate).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "symmetric sibling handlers should not be flagged as clones"
@@ -2088,10 +2125,14 @@ mod tests {
         // (A) does not apply and criterion K is what does the suppression.
         let dir = tempfile::tempdir().unwrap();
         let shared = rust_test_macro(30);
-        let content_a =
-            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
-        let content_b =
-            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let content_a = format!(
+            "{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n",
+            distinct_prod_fn("colorops", 14)
+        );
+        let content_b = format!(
+            "{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n",
+            distinct_prod_fn("affine", 14)
+        );
         let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
         let diags = lint_files(&[&fa, &fb]);
         assert!(
@@ -2109,10 +2150,14 @@ mod tests {
         // test's silence is due to criterion K, not non-detection.
         let dir = tempfile::tempdir().unwrap();
         let shared = rust_test_macro(30);
-        let content_a =
-            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
-        let content_b =
-            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let content_a = format!(
+            "{}\n\nmod shared_helpers {{\n{shared}\n}}\n",
+            distinct_prod_fn("colorops", 14)
+        );
+        let content_b = format!(
+            "{}\n\nmod shared_helpers {{\n{shared}\n}}\n",
+            distinct_prod_fn("affine", 14)
+        );
         let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
         let diags = lint_files(&[&fa, &fb]);
         assert_eq!(
@@ -2131,10 +2176,14 @@ mod tests {
         // requires BOTH endpoints in test context.
         let dir = tempfile::tempdir().unwrap();
         let shared = rust_test_macro(30);
-        let content_a =
-            format!("{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n", distinct_prod_fn("colorops", 14));
-        let content_b =
-            format!("{}\n\nmod shared_helpers {{\n{shared}\n}}\n", distinct_prod_fn("affine", 14));
+        let content_a = format!(
+            "{}\n\n#[cfg(test)]\nmod test {{\n{shared}\n}}\n",
+            distinct_prod_fn("colorops", 14)
+        );
+        let content_b = format!(
+            "{}\n\nmod shared_helpers {{\n{shared}\n}}\n",
+            distinct_prod_fn("affine", 14)
+        );
         let (fa, fb) = write_rust_pair(&dir, &content_a, &content_b);
         let diags = lint_files(&[&fa, &fb]);
         assert_eq!(
@@ -2153,7 +2202,9 @@ mod tests {
         // `pnpm-lock.yaml` files with identical content must NOT be flagged.
         let dir = tempfile::tempdir().unwrap();
         let block: String = (1..=40)
-            .map(|i| format!("  package_{i}@1.0.0:\n    resolution: {{integrity: sha512-deadbeef{i}}}"))
+            .map(|i| {
+                format!("  package_{i}@1.0.0:\n    resolution: {{integrity: sha512-deadbeef{i}}}")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let content = format!("lockfileVersion: '9.0'\n\npackages:\n{block}\n");
@@ -2165,8 +2216,14 @@ mod tests {
         let pb = dir_b.join("pnpm-lock.yaml");
         std::fs::write(&pa, &content).unwrap();
         std::fs::write(&pb, &content).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Yaml };
-        let fb = SourceFile { path: pb, language: Language::Yaml };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Yaml,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Yaml,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "generated lockfiles must not be flagged as clones"
@@ -2186,8 +2243,14 @@ mod tests {
         let pb = dir.path().join("b.yaml");
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Yaml };
-        let fb = SourceFile { path: pb, language: Language::Yaml };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Yaml,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Yaml,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2227,8 +2290,14 @@ mod tests {
         std::fs::write(&pa, &content_a).unwrap();
         std::fs::write(&pb, &content_b).unwrap();
         (
-            SourceFile { path: pa, language: Language::TypeScript },
-            SourceFile { path: pb, language: Language::TypeScript },
+            SourceFile {
+                path: pa,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: pb,
+                language: Language::TypeScript,
+            },
         )
     }
 
@@ -2284,8 +2353,14 @@ mod tests {
         std::fs::write(&pa, &content_a).unwrap();
         std::fs::write(&pb, &content_b).unwrap();
         (
-            SourceFile { path: pa, language: Language::TypeScript },
-            SourceFile { path: pb, language: Language::TypeScript },
+            SourceFile {
+                path: pa,
+                language: Language::TypeScript,
+            },
+            SourceFile {
+                path: pb,
+                language: Language::TypeScript,
+            },
         )
     }
 
@@ -2318,8 +2393,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &dup).unwrap();
         std::fs::write(&pb, &dup).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2341,8 +2422,14 @@ mod tests {
         std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
         std::fs::write(&pa, &dup).unwrap();
         std::fs::write(&pb, &dup).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2375,17 +2462,22 @@ mod tests {
             .map(|i| format!("  group_{i}:\n    foreground: color_role_{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let palette = |hex: &str| -> String {
-            format!("colors:\n{}\ncore:\n{skeleton}\n", differing(hex))
-        };
+        let palette =
+            |hex: &str| -> String { format!("colors:\n{}\ncore:\n{skeleton}\n", differing(hex)) };
         let pa = dir.path().join(format!("{sub}/{stem_a}.yml"));
         let pb = dir.path().join(format!("{sub}/{stem_b}.yml"));
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, palette("1e1e2e")).unwrap();
         std::fs::write(&pb, palette("24273a")).unwrap();
         (
-            SourceFile { path: pa, language: Language::Yaml },
-            SourceFile { path: pb, language: Language::Yaml },
+            SourceFile {
+                path: pa,
+                language: Language::Yaml,
+            },
+            SourceFile {
+                path: pb,
+                language: Language::Yaml,
+            },
         )
     }
 
@@ -2434,8 +2526,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &dup).unwrap();
         std::fs::write(&pb, &dup).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2523,8 +2621,14 @@ mod tests {
             Language::TypeScript
         };
         (
-            SourceFile { path: pa, language: lang },
-            SourceFile { path: pb, language: lang },
+            SourceFile {
+                path: pa,
+                language: lang,
+            },
+            SourceFile {
+                path: pb,
+                language: lang,
+            },
         )
     }
 
@@ -2637,8 +2741,14 @@ mod tests {
         let pb = dir.path().join("laboratories-page.test.tsx");
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Tsx };
-        let fb = SourceFile { path: pb, language: Language::Tsx };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Tsx,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Tsx,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "shared test-spec scaffolding across sibling specs must not be flagged as clones"
@@ -2657,8 +2767,14 @@ mod tests {
         let pb = dir.path().join("categories-page.tsx");
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Tsx };
-        let fb = SourceFile { path: pb, language: Language::Tsx };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Tsx,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Tsx,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2679,8 +2795,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2882,8 +3004,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "complete/streaming sibling modules must not be flagged as clones"
@@ -2903,8 +3031,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -2964,8 +3098,14 @@ mod tests {
         std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert!(
             lint_files(&[&fa, &fb]).is_empty(),
             "ISA-sibling files across arch/<isa>/ subtrees must not be flagged as clones"
@@ -2985,8 +3125,14 @@ mod tests {
         std::fs::create_dir_all(pa.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -3008,8 +3154,14 @@ mod tests {
         std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::Rust };
-        let fb = SourceFile { path: pb, language: Language::Rust };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::Rust,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::Rust,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,
@@ -3035,7 +3187,10 @@ mod tests {
         .unwrap();
         let path = src.join(file);
         std::fs::write(&path, content).unwrap();
-        SourceFile { path, language: Language::Rust }
+        SourceFile {
+            path,
+            language: Language::Rust,
+        }
     }
 
     #[test]
@@ -3092,7 +3247,10 @@ mod tests {
         let path = pkg_dir.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, content).unwrap();
-        SourceFile { path, language: Language::TypeScript }
+        SourceFile {
+            path,
+            language: Language::TypeScript,
+        }
     }
 
     #[test]
@@ -3165,8 +3323,14 @@ mod tests {
         std::fs::create_dir_all(pb.parent().unwrap()).unwrap();
         std::fs::write(&pa, &block).unwrap();
         std::fs::write(&pb, &block).unwrap();
-        let fa = SourceFile { path: pa, language: Language::TypeScript };
-        let fb = SourceFile { path: pb, language: Language::TypeScript };
+        let fa = SourceFile {
+            path: pa,
+            language: Language::TypeScript,
+        };
+        let fb = SourceFile {
+            path: pb,
+            language: Language::TypeScript,
+        };
         assert_eq!(
             lint_files(&[&fa, &fb]).len(),
             1,

@@ -38,9 +38,7 @@ pub fn lookup(rule_id: &str) -> Option<RuleMeta> {
 fn build_upstream_eslint() -> FxHashMap<&'static str, &'static str> {
     crate::rules::all_rule_defs_static()
         .iter()
-        .filter_map(|r| {
-            upstream_eslint_name(&r.meta, &r.backends).map(|name| (r.meta.id, name))
-        })
+        .filter_map(|r| upstream_eslint_name(&r.meta, &r.backends).map(|name| (r.meta.id, name)))
         .collect()
 }
 
@@ -70,10 +68,7 @@ pub fn upstream_eslint_rule(rule_id: &str) -> Option<&'static str> {
 /// which comply also registers as its own rule. The id must therefore end in
 /// the derived name, on a segment boundary, for the link to count as an
 /// identity claim.
-fn upstream_eslint_name(
-    meta: &RuleMeta,
-    backends: &[(Language, Backend)],
-) -> Option<&'static str> {
+fn upstream_eslint_name(meta: &RuleMeta, backends: &[(Language, Backend)]) -> Option<&'static str> {
     meta.doc_url
         .and_then(eslint_rule_from_doc_url)
         .filter(|name| {
@@ -145,10 +140,22 @@ mod tests {
     #[test]
     fn doc_url_yields_bare_eslint_rule_name() {
         let cases = [
-            ("https://typescript-eslint.io/rules/no-empty-function/", "no-empty-function"),
-            ("https://typescript-eslint.io/rules/no-unused-expressions", "no-unused-expressions"),
-            ("https://eslint.org/docs/latest/rules/no-else-return", "no-else-return"),
-            ("https://eslint.vuejs.org/rules/no-ref-as-operand.html", "no-ref-as-operand"),
+            (
+                "https://typescript-eslint.io/rules/no-empty-function/",
+                "no-empty-function",
+            ),
+            (
+                "https://typescript-eslint.io/rules/no-unused-expressions",
+                "no-unused-expressions",
+            ),
+            (
+                "https://eslint.org/docs/latest/rules/no-else-return",
+                "no-else-return",
+            ),
+            (
+                "https://eslint.vuejs.org/rules/no-ref-as-operand.html",
+                "no-ref-as-operand",
+            ),
             (
                 "https://github.com/eslint-community/eslint-plugin-promise/blob/main/docs/rules/prefer-await-to-then.md",
                 "prefer-await-to-then",
@@ -181,26 +188,41 @@ mod tests {
 
     #[test]
     fn unprefixed_rule_name_drops_the_plugin_scope() {
-        assert_eq!(unprefixed_rule_name("no-empty-function"), "no-empty-function");
+        assert_eq!(
+            unprefixed_rule_name("no-empty-function"),
+            "no-empty-function"
+        );
         assert_eq!(unprefixed_rule_name("typescript/array-type"), "array-type");
         assert_eq!(
             unprefixed_rule_name("@typescript-eslint/no-explicit-any"),
             "no-explicit-any"
         );
-        assert_eq!(unprefixed_rule_name("@next/next/no-img-element"), "no-img-element");
+        assert_eq!(
+            unprefixed_rule_name("@next/next/no-img-element"),
+            "no-img-element"
+        );
     }
 
     #[test]
     fn registered_rules_expose_their_upstream_eslint_name() {
         // Native rule → derived from doc_url; oxlint-delegated rule → derived
         // from the oxlint key even though it carries no doc_url.
-        assert_eq!(upstream_eslint_rule("ts-no-empty-function"), Some("no-empty-function"));
-        assert_eq!(upstream_eslint_rule("ts-no-explicit-any"), Some("no-explicit-any"));
+        assert_eq!(
+            upstream_eslint_rule("ts-no-empty-function"),
+            Some("no-empty-function")
+        );
+        assert_eq!(
+            upstream_eslint_rule("ts-no-explicit-any"),
+            Some("no-explicit-any")
+        );
         assert_eq!(
             upstream_eslint_rule("ts-no-inferrable-types"),
             Some("no-inferrable-types")
         );
-        assert_eq!(upstream_eslint_rule("typescript/array-type"), Some("array-type"));
+        assert_eq!(
+            upstream_eslint_rule("typescript/array-type"),
+            Some("array-type")
+        );
         assert_eq!(
             upstream_eslint_rule("consistent-type-imports"),
             Some("consistent-type-imports")
@@ -221,7 +243,10 @@ mod tests {
         // `detect-pseudoRandomBytes` page it cites. Neither may inherit the
         // cited name, or a directive would suppress the wrong finding.
         assert_eq!(upstream_eslint_rule("prefer-early-return"), None);
-        assert_eq!(upstream_eslint_rule("security-detect-insecure-randomness"), None);
+        assert_eq!(
+            upstream_eslint_rule("security-detect-insecure-randomness"),
+            None
+        );
     }
 
     #[test]

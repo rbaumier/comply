@@ -297,7 +297,10 @@ mod tests {
         let shape = index
             .covering(&field_set(&["id", "email"]))
             .expect("the row covers both fields");
-        assert_eq!(shape.access, "Database['public']['Tables']['profiles']['Row']");
+        assert_eq!(
+            shape.access,
+            "Database['public']['Tables']['profiles']['Row']"
+        );
         assert_eq!(shape.origin, "database.types.ts");
     }
 
@@ -362,7 +365,11 @@ mod tests {
     fn ignores_a_generator_config_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("openapi-ts.config.ts");
-        std::fs::write(&path, "export interface Options { input: string; output: string }").unwrap();
+        std::fs::write(
+            &path,
+            "export interface Options { input: string; output: string }",
+        )
+        .unwrap();
         let index =
             GeneratedShapeIndex::build(&[path], &["**/openapi*.ts".to_string()], Some(dir.path()));
         assert!(index.is_empty());

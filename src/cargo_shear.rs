@@ -22,8 +22,8 @@
 //! Workspaces are de-duplicated so we don't shell out twice for the same
 //! manifest when many `.rs` files share a parent crate.
 
-use rustc_hash::FxHashSet;
 use anyhow::{Context, Result};
+use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -92,10 +92,7 @@ fn lint_workspace(workspace: &Path) -> Result<Vec<Diagnostic>> {
 /// by design — flagging them as unused is noise because cargo-shear
 /// only sees the default feature set.
 fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
-    let dep_name = message
-        .split('`')
-        .nth(1)
-        .unwrap_or("");
+    let dep_name = message.split('`').nth(1).unwrap_or("");
     if dep_name.is_empty() {
         return false;
     }
@@ -108,13 +105,13 @@ fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
     for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(deps) = toml.get(section).and_then(|d| d.as_table())
             && let Some(entry) = deps.get(dep_name)
-                && entry
-                    .get("optional")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    return true;
-                }
+            && entry
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            return true;
+        }
     }
     false
 }

@@ -63,7 +63,6 @@ mod tests {
     use crate::rules::backend::AstType;
     use oxc_semantic::AstNode;
     use std::path::Path;
-    
 
     /// Dummy rule that flags every `CatchClause` it sees.
     struct FlagCatch;

@@ -9,7 +9,6 @@ pub fn handle_event(app: &mut App) -> Result<bool> {
     }
 
     while let Event::Key(key) = event::read()? {
-
         if key.kind != KeyEventKind::Press {
             if !event::poll(std::time::Duration::from_millis(0))? {
                 break;
