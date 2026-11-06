@@ -169,11 +169,10 @@ fn canonical_label(cats: &[&str]) -> String {
     // Normalize and dedup, preserving first-seen order.
     let mut toks: Vec<&str> = Vec::new();
     for c in cats {
-        if let Some(n) = normalize(c) {
-            if !toks.contains(&n) {
+        if let Some(n) = normalize(c)
+            && !toks.contains(&n) {
                 toks.push(n);
             }
-        }
     }
     if toks.is_empty() {
         return "uncategorized".to_string();

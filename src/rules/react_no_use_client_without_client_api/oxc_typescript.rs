@@ -163,11 +163,10 @@ impl OxcCheck for Check {
                         }
                     }
                 }
-                AstKind::ExportAllDeclaration(export) => {
-                    if is_relative_specifier(export.source.value.as_str()) {
+                AstKind::ExportAllDeclaration(export)
+                    if is_relative_specifier(export.source.value.as_str()) => {
                         return Vec::new();
                     }
-                }
                 _ => {}
             }
         }
@@ -289,7 +288,7 @@ impl OxcCheck for Check {
                 // is legitimate. `const` is excluded (immutable, safe in RSC),
                 // and a `let`/`var` inside a function body is ordinary local
                 // state, not module state, so it carries no signal.
-                AstKind::VariableDeclaration(decl) => {
+                AstKind::VariableDeclaration(decl)
                     if matches!(
                         decl.kind,
                         VariableDeclarationKind::Let | VariableDeclarationKind::Var
@@ -298,11 +297,10 @@ impl OxcCheck for Check {
                             a.kind(),
                             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
                         )
-                    }) {
+                    }) => {
                         found_client_api = true;
                         break;
                     }
-                }
                 _ => {}
             }
         }

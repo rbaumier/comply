@@ -87,11 +87,10 @@ impl OxcCheck for Check {
         // `Object.create(proto)` installs, so there is no equivalent
         // non-mutating alternative. An arbitrary call (`makeThing()`) does
         // *not* qualify — its return value may be a shared object.
-        if let oxc_ast::ast::Argument::CallExpression(target_call) = first {
-            if is_object_create_call(target_call) {
+        if let oxc_ast::ast::Argument::CallExpression(target_call) = first
+            && is_object_create_call(target_call) {
                 return;
             }
-        }
 
         // Allow `Object.assign(fn, { ...literal })` — attaching a static
         // property to a function. JS has no immutable alternative:

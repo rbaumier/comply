@@ -1128,16 +1128,14 @@ key = "válue é 💡"
         )
         .expect("write normal");
 
-        let files = vec![
-            SourceFile {
+        let files = [SourceFile {
                 path: panic_path,
                 language: Language::TypeScript,
             },
             SourceFile {
                 path: normal_path.clone(),
                 language: Language::TypeScript,
-            },
-        ];
+            }];
         let refs: Vec<&SourceFile> = files.iter().collect();
         let project = Arc::new(ProjectCtx::load(&refs, default_static_config()));
 

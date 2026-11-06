@@ -61,11 +61,10 @@ fn children_have_fallback(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bo
                         return true;
                     }
             }
-            JSXChild::Fragment(frag) => {
-                if children_have_fallback(&frag.children) {
+            JSXChild::Fragment(frag)
+                if children_have_fallback(&frag.children) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

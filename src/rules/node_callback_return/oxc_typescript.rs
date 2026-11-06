@@ -181,14 +181,13 @@ impl OxcCheck for Check {
                                         return;
                                     }
                                 }
-                                AstKind::IfStatement(_) => {
+                                AstKind::IfStatement(_)
                                     if is_in_terminal_position(
                                         great_grandparent,
                                         semantic,
-                                    ) {
+                                    ) => {
                                         return;
                                     }
-                                }
                                 _ => {}
                             }
                         }

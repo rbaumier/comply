@@ -106,6 +106,18 @@ fn split_alternatives(pattern: &str) -> Vec<&str> {
     alternatives
 }
 
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod helper_tests {
     use super::*;
@@ -185,17 +197,5 @@ mod helper_tests {
     fn keeps_an_escaped_dollar_out_of_the_anchor() {
         assert!(is_literal_pattern("costs 100\\$"));
         assert!(is_literal_pattern("^costs 100\\$$"));
-    }
-}
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (Language::TypeScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::JavaScript, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::Tsx, Backend::Oxc(Box::new(oxc_typescript::Check))),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
-        ],
     }
 }

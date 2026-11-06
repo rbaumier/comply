@@ -82,7 +82,7 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::ProjectCtx;
+    
 
     fn run_ts(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule_with_ctx(&Check, source, "app.test.ts", &crate::project::ProjectCtx::for_test_with_framework("playwright"), crate::rules::file_ctx::default_static_file_ctx())

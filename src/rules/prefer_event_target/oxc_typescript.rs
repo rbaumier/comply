@@ -203,11 +203,10 @@ fn imports_event_emitter_from_ignored(program: &oxc_ast::ast::Program) -> bool {
                         return true;
                     }
                 }
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(def) => {
-                    if def.local.name.as_str() == "EventEmitter" {
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(def)
+                    if def.local.name.as_str() == "EventEmitter" => {
                         return true;
                     }
-                }
                 _ => {}
             }
         }

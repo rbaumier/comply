@@ -117,41 +117,6 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
-
-    fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
-    }
-
-    #[test]
-    fn flags_standalone_expect() {
-        let d = run_ts("expect(1).toBe(1);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn allows_expect_in_test() {
-        let d = run_ts("test('ok', () => { expect(1).toBe(1); });");
-        assert!(d.is_empty());
-    }
-
-    #[test]
-    fn allows_expect_in_helper_called_from_test() {
-        let d = run_ts(r#"
-function assertUrl(page) {
-  expect(page).toHaveURL(/\/dashboard/);
-}
-test('my test', () => {
-  assertUrl(page);
-});
-"#);
-        assert!(d.is_empty(), "expect in helper called from test should be allowed");
-    }
-}
 
 impl OxcCheck for Check {
     fn interested_kinds(&self) -> &'static [AstType] {
@@ -197,5 +162,40 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
+    }
+
+    #[test]
+    fn flags_standalone_expect() {
+        let d = run_ts("expect(1).toBe(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_test() {
+        let d = run_ts("test('ok', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_helper_called_from_test() {
+        let d = run_ts(r#"
+function assertUrl(page) {
+  expect(page).toHaveURL(/\/dashboard/);
+}
+test('my test', () => {
+  assertUrl(page);
+});
+"#);
+        assert!(d.is_empty(), "expect in helper called from test should be allowed");
     }
 }

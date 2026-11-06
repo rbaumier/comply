@@ -36,82 +36,6 @@
 //! plus `block_comment` in Rust), so callers pass the kinds they care
 //! about as a slice parameter.
 
-#[cfg(test)]
-use crate::diagnostic::{Diagnostic, Severity};
-#[cfg(test)]
-use crate::rules::backend::CheckCtx;
-#[cfg(test)]
-use crate::rules::walker::walk_tree;
-
-/// Scan `tree` for single-line statements whose stripped source line
-/// crosses both the `min_line_length` and `min_ops` thresholds.
-///
-/// `target_kinds` is the set of tree-sitter node kinds to consider as
-/// candidate statements (`expression_statement` / `variable_declarator`
-/// for TS, `let_declaration` / `expression_statement` for Rust).
-///
-/// `comment_kinds` is the set of node kinds the grammar uses for
-/// comments (`comment` for TS, `line_comment` + `block_comment` for
-/// Rust). Their byte ranges are stripped from candidate lines before
-/// the operator count and length check.
-#[cfg(test)]
-#[must_use]
-pub fn scan_dense_lines(
-    ctx: &CheckCtx,
-    tree: &tree_sitter::Tree,
-    target_kinds: &[&str],
-    comment_kinds: &[&str],
-) -> Vec<Diagnostic> {
-    let min_ops = ctx.config.threshold("no-multi-op-oneliner", "min_ops", ctx.lang);
-    let min_line_length = ctx
-        .config
-        .threshold("no-multi-op-oneliner", "min_line_length", ctx.lang);
-
-    let line_offsets = compute_line_offsets(ctx.source);
-    let comment_ranges = collect_comment_ranges(tree, comment_kinds);
-
-    let mut reported_lines = rustc_hash::FxHashSet::default();
-    let mut diagnostics = Vec::new();
-
-    walk_tree(tree, |node| {
-        if !target_kinds.contains(&node.kind()) {
-            return;
-        }
-        let start = node.start_position();
-        let end = node.end_position();
-        if start.row != end.row {
-            return; // multi-line, probably already formatted well
-        }
-        if reported_lines.contains(&start.row) {
-            return;
-        }
-        let Some(&(line_start_byte, line_text)) = line_offsets.get(start.row) else {
-            return;
-        };
-        let stripped = strip_comments(line_text, line_start_byte, &comment_ranges);
-        if stripped.len() < min_line_length {
-            return;
-        }
-        let ops = count_operators(&stripped);
-        if ops < min_ops {
-            return;
-        }
-        reported_lines.insert(start.row);
-        diagnostics.push(Diagnostic {
-            path: std::sync::Arc::clone(&ctx.path_arc),
-            line: start.row + 1,
-            column: 1,
-            rule_id: "no-multi-op-oneliner".into(),
-            message: format!(
-                "Line has {ops} chained operations — extract intermediate \
-                 named bindings so each step's purpose is visible."
-            ),
-            severity: Severity::Error,
-            span: None,
-        });
-    });
-    diagnostics
-}
 
 /// Walk the file once and split it into `(line_start_byte, line_text)`
 /// tuples. `line_text` excludes the trailing `\n` / `\r\n` so that
@@ -126,17 +50,6 @@ pub(super) fn compute_line_offsets(source: &str) -> Vec<(usize, &str)> {
         byte_offset += chunk.len();
     }
     out
-}
-
-/// Collect `(start_byte, end_byte)` ranges for every comment node in
-/// the tree. Delegates the cursor walk to `walker::collect_nodes_of_kinds`
-/// and maps each node to its byte range.
-#[cfg(test)]
-fn collect_comment_ranges(tree: &tree_sitter::Tree, comment_kinds: &[&str]) -> Vec<(usize, usize)> {
-    crate::rules::walker::collect_nodes_of_kinds(tree, comment_kinds)
-        .into_iter()
-        .map(|n| (n.start_byte(), n.end_byte()))
-        .collect()
 }
 
 /// Return a copy of `line_text` with every byte that falls inside any

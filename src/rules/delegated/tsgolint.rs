@@ -1492,8 +1492,7 @@ fn nuc_extract_comparison_lhs(line: &str) -> Option<String> {
     let start = raw
         .char_indices()
         .rev()
-        .skip_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '$' || *c == '.')
-        .next()
+        .find(|(_, c)| !(c.is_alphanumeric() || *c == '_' || *c == '$' || *c == '.'))
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
     Some(raw[start..].to_owned())
@@ -1976,19 +1975,17 @@ fn ep_has_unit_conditional_expr(line: &str) -> bool {
         if &bytes[i..i + 7] == b"extends"
             && (i == 0 || !ep_is_ident_byte(bytes[i - 1]))
             && (i + 7 == bytes.len() || !ep_is_ident_byte(bytes[i + 7]))
-        {
-            if let Some((q_pos, c_pos)) = ep_find_ternary_after(line, i + 7) {
+            && let Some((q_pos, c_pos)) = ep_find_ternary_after(line, i + 7) {
                 let arm1 = line[q_pos + 1..c_pos].trim();
                 let rest = &line[c_pos + 1..];
                 let end = rest
-                    .find(|c: char| c == ')' || c == ',' || c == ';')
+                    .find([')', ',', ';'])
                     .unwrap_or(rest.len());
                 let arm2 = rest[..end].trim();
                 if ep_is_unit_literal(arm1) && ep_is_unit_literal(arm2) {
                     return true;
                 }
             }
-        }
         i += 1;
     }
     false

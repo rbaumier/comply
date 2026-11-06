@@ -85,15 +85,6 @@ impl OxcCheck for Check {
             _ => return,
         };
 
-        // Match TreeSitter: >= 0 is not flagged (only >= -1, > -1)
-        if matches!(
-            op,
-            BinaryOperator::GreaterEqualThan
-        ) && compare_text == Some("-1")
-        {
-            "includes()";
-        }
-
         let (line, column) = byte_offset_to_line_col(ctx.source, bin.span.start as usize);
         diagnostics.push(Diagnostic {
             path: Arc::clone(&ctx.path_arc),

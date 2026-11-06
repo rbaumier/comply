@@ -473,7 +473,8 @@ impl ImportIndex {
         // the rayon pool. The resolvers it reads (`rust_graph`, `known_paths`,
         // `path_resolver`) are immutable and `Sync`. Map insertion below stays
         // sequential: it's pure in-memory work and would only contend on locks.
-        let resolved: Vec<(PathBuf, FileExtract, Vec<PathBuf>, Vec<(PathBuf, Vec<String>)>)> = per_file
+        type Resolved = (PathBuf, FileExtract, Vec<PathBuf>, Vec<(PathBuf, Vec<String>)>);
+        let resolved: Vec<Resolved> = per_file
             .into_par_iter()
             .map(|(path, mut extract)| {
                 let is_rust = matches!(path.extension().and_then(|e| e.to_str()), Some("rs"));
@@ -1676,11 +1677,10 @@ fn compute_client_reachable(
     while let Some(file) = stack.pop() {
         if let Some(imps) = imports.get(&file) {
             for imp in imps {
-                if let Some(src) = &imp.source_path {
-                    if reachable.insert(src.clone()) {
+                if let Some(src) = &imp.source_path
+                    && reachable.insert(src.clone()) {
                         stack.push(src.clone());
                     }
-                }
             }
         }
         if let Some(targets) = reexport_edges.get(&file) {
@@ -5136,8 +5136,8 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
             }
         }
     } else {
-        if raw.extension().is_some() {
-            if let Some(raw_str) = raw.to_str() {
+        if raw.extension().is_some()
+            && let Some(raw_str) = raw.to_str() {
                 for ext in EXTS {
                     let n = lexical_normalize(&PathBuf::from(format!("{raw_str}.{ext}")));
                     if known.contains(&n) {
@@ -5145,7 +5145,6 @@ fn probe_path(raw: &Path, known: &FxHashSet<PathBuf>) -> Option<PathBuf> {
                     }
                 }
             }
-        }
         for ext in EXTS {
             let n = lexical_normalize(&raw.with_extension(ext));
             if known.contains(&n) {
@@ -5340,7 +5339,7 @@ impl OxcPathResolver {
         // specifier could match either.
         let mut workspace_packages: Vec<(String, PathBuf)> =
             workspace_packages.into_iter().collect();
-        workspace_packages.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        workspace_packages.sort_by_key(|p| std::cmp::Reverse(p.0.len()));
 
         let mut resolvers: Vec<TsconfigResolver> = tsconfig_dirs
             .into_iter()
@@ -5385,7 +5384,7 @@ impl OxcPathResolver {
             resolvers.push(TsconfigResolver { dir: dir.clone(), aliases, oxc });
         }
 
-        resolvers.sort_by(|a, b| b.dir.as_os_str().len().cmp(&a.dir.as_os_str().len()));
+        resolvers.sort_by_key(|r| std::cmp::Reverse(r.dir.as_os_str().len()));
 
         let fallback = Some(Self::make_oxc(None));
 

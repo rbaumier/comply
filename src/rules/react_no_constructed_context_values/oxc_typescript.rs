@@ -66,10 +66,10 @@ impl OxcCheck for Check {
                 continue;
             };
 
-            let is_inline = match &container.expression {
-                JSXExpression::ObjectExpression(_) | JSXExpression::ArrayExpression(_) => true,
-                _ => false,
-            };
+            let is_inline = matches!(
+                &container.expression,
+                JSXExpression::ObjectExpression(_) | JSXExpression::ArrayExpression(_)
+            );
 
             if is_inline {
                 let (line, column) =

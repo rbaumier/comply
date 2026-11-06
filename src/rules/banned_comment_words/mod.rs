@@ -262,6 +262,28 @@ fn bare_word(token: &str) -> &str {
     token.trim_matches(|c: char| !c.is_ascii_alphabetic() && c != '\'')
 }
 
+pub fn register() -> RuleDef {
+    RuleDef {
+        meta: META,
+        backends: vec![
+            (
+                Language::TypeScript,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (
+                Language::Tsx,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (
+                Language::JavaScript,
+                Backend::Oxc(Box::new(oxc_typescript::Check)),
+            ),
+            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
+            (Language::Vue, Backend::Text(Box::new(text::Check))),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::find_banned_word;
@@ -380,27 +402,5 @@ mod tests {
             find_banned_word("just call foo and it will not fail"),
             Some(("just", 0))
         );
-    }
-}
-
-pub fn register() -> RuleDef {
-    RuleDef {
-        meta: META,
-        backends: vec![
-            (
-                Language::TypeScript,
-                Backend::Oxc(Box::new(oxc_typescript::Check)),
-            ),
-            (
-                Language::Tsx,
-                Backend::Oxc(Box::new(oxc_typescript::Check)),
-            ),
-            (
-                Language::JavaScript,
-                Backend::Oxc(Box::new(oxc_typescript::Check)),
-            ),
-            (Language::Rust, Backend::TreeSitter(Box::new(rust::Check))),
-            (Language::Vue, Backend::Text(Box::new(text::Check))),
-        ],
     }
 }

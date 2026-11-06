@@ -47,11 +47,10 @@ impl OxcCheck for Check {
                 has_target = true;
             }
 
-            if attr_name == "href" {
-                if let Some(JSXAttributeValue::StringLiteral(s)) = &attr.value {
+            if attr_name == "href"
+                && let Some(JSXAttributeValue::StringLiteral(s)) = &attr.value {
                     href_value = Some(s.value.as_str());
                 }
-            }
         }
 
         if has_target {

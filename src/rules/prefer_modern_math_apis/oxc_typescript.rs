@@ -113,7 +113,7 @@ fn is_self_mul<'a>(expr: &'a Expression<'a>, source: &str) -> bool {
 }
 
 /// Collect `+`-joined terms from a binary expression tree.
-fn collect_plus_terms<'a, 'b>(
+fn collect_plus_terms<'a>(
     expr: &'a Expression<'a>,
     out: &mut Vec<&'a Expression<'a>>,
 ) {

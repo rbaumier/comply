@@ -69,13 +69,11 @@ fn inside_query_hook<'a>(
             first = false;
             continue;
         }
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let oxc_ast::ast::Expression::Identifier(ident) = &call.callee {
-                if QUERY_HOOKS.contains(&ident.name.as_str()) {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let oxc_ast::ast::Expression::Identifier(ident) = &call.callee
+                && QUERY_HOOKS.contains(&ident.name.as_str()) {
                     return true;
                 }
-            }
-        }
     }
     false
 }

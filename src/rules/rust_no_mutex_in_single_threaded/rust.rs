@@ -133,11 +133,10 @@ crate::ast_check! { on ["generic_type"] => |node, source, ctx, diagnostics|
             // so the return position can't be wrapped here. A `Mutex<T>` in the
             // function body (e.g. a `let` annotation) is reached through `body`,
             // not `return_type`, and stays flagged.
-            "function_item" | "function_signature_item" => {
-                if ancestor.child_by_field_name("return_type") == Some(child) {
+            "function_item" | "function_signature_item"
+                if ancestor.child_by_field_name("return_type") == Some(child) => {
                     return;
                 }
-            }
             _ => {}
         }
         child = ancestor;

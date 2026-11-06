@@ -365,6 +365,7 @@ fn is_infallible_nonzero_new(field_expr: tree_sitter::Node, source: &[u8]) -> bo
 ///     unchanged;
 ///   - `as char` cast: `p.get() as char` where `p: NonZeroU8` — `as char` is valid
 ///     only from `u8`, is total, and maps every non-zero `u8` to a non-zero `char`.
+///
 /// Any other `as` cast (`as u8`/`as u16`/…) can truncate to zero, and a `.get()` on
 /// a non-`NonZero*` receiver has no non-zero guarantee, so both still flag.
 fn is_nonzero_param_get(arg: tree_sitter::Node, source: &[u8]) -> bool {
@@ -760,7 +761,7 @@ fn arm_discriminates_scrutinee(
 /// True when an arm `pattern` matches a specific variant rather than every value.
 /// `_` (wildcard) and a plain binding identifier match anything and so do not
 /// discriminate; a tuple-struct/struct/path/reference variant pattern does.
-fn pattern_discriminates(pattern: tree_sitter::Node, source: &[u8]) -> bool {
+fn pattern_discriminates(pattern: tree_sitter::Node, _source: &[u8]) -> bool {
     // Unwrap the `match_pattern` wrapper (seq(_pattern, optional("if" guard))).
     // `_` surfaces as an unnamed token, so the wrapper has no named child.
     let inner = if pattern.kind() == "match_pattern" {

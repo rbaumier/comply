@@ -162,11 +162,7 @@ fn is_route_component(path: &Path, project: &ProjectCtx) -> bool {
 fn declared_ref_name(line: &str) -> Option<&str> {
     let rest = if let Some(r) = line.strip_prefix("const ") {
         r
-    } else if let Some(r) = line.strip_prefix("let ") {
-        r
-    } else {
-        return None;
-    };
+    } else { line.strip_prefix("let ")? };
     let rest = rest.trim_start();
     // Destructuring is not supported.
     if rest.starts_with('{') || rest.starts_with('[') {

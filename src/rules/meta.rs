@@ -66,8 +66,8 @@ impl RuleMeta {
     /// Use this only when `is_rule_enabled` has already been checked (e.g. the
     /// oxc fast path that pre-computes config-enabled flags once per run).
     pub fn applies_to_file(&self, file_ctx: &FileCtx) -> bool {
-        !(self.skip_in_test_dir && file_ctx.path_segments.in_test_dir)
-            && !(self.skip_in_relaxed_dir && file_ctx.path_segments.is_relaxed_dir)
+        (!self.skip_in_test_dir || !file_ctx.path_segments.in_test_dir)
+            && (!self.skip_in_relaxed_dir || !file_ctx.path_segments.is_relaxed_dir)
     }
 }
 

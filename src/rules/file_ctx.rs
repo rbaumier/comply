@@ -640,7 +640,7 @@ fn has_integration_fixture_app_shape(normalized: &str) -> bool {
     let Some(integration_idx) = segments.iter().position(|seg| *seg == "integration") else {
         return false;
     };
-    segments[integration_idx + 1..].iter().any(|seg| *seg == "src")
+    segments[integration_idx + 1..].contains(&"src")
 }
 
 /// True for a file under a top-level `integration/` directory — the flat

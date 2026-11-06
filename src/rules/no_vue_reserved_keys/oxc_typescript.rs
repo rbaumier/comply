@@ -217,13 +217,11 @@ fn data_return_keys<'a>(value: &'a Expression<'a>) -> Vec<(&'a str, u32)> {
 /// Keys of the object in the first `return <object>;` of a statement list.
 fn returned_object_keys<'a>(statements: &'a [Statement<'a>]) -> Vec<(&'a str, u32)> {
     for stmt in statements {
-        if let Statement::ReturnStatement(ret) = stmt {
-            if let Some(arg) = &ret.argument {
-                if let Some(obj) = object_expression(arg) {
+        if let Statement::ReturnStatement(ret) = stmt
+            && let Some(arg) = &ret.argument
+                && let Some(obj) = object_expression(arg) {
                     return object_keys(obj);
                 }
-            }
-        }
     }
     Vec::new()
 }

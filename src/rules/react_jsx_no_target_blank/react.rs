@@ -47,11 +47,10 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_element"] => |node, sou
                     has_target_blank = true;
                 }
             }
-            "rel" => {
-                if super::rel_is_safe(value_text) {
+            "rel"
+                if super::rel_is_safe(value_text) => {
                     has_safe_rel = true;
                 }
-            }
             _ => {}
         }
     }

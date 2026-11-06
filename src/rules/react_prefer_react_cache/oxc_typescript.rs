@@ -268,7 +268,7 @@ mod tests {
     use oxc_semantic::SemanticBuilder;
     use oxc_span::SourceType;
     use std::fs;
-    use std::path::Path;
+    
     use tempfile::TempDir;
 
     /// Run the OXC check against source in a simulated Next.js app-router

@@ -120,13 +120,12 @@ fn is_in_component_render(
             AstKind::ArrowFunctionExpression(_) => {
                 // Check if this arrow is the direct init of a PascalCase variable
                 // declarator (i.e., it IS the component, not a callback argument).
-                if let Some(parent) = ancestors.get(idx + 1) {
-                    if let AstKind::VariableDeclarator(decl) = parent.kind() {
+                if let Some(parent) = ancestors.get(idx + 1)
+                    && let AstKind::VariableDeclarator(decl) = parent.kind() {
                         let name =
                             &source[decl.id.span().start as usize..decl.id.span().end as usize];
                         return starts_uppercase(name);
                     }
-                }
                 // Arrow not directly in a variable declarator — it's a callback
                 // or lazy initialiser, not the component itself.
                 return false;

@@ -435,6 +435,7 @@ fn is_rust_primitive_type_name(name: &str) -> bool {
 ///   - `slice::get_disjoint_mut` — multiple disjoint mutable indices
 ///   - `Option::get_or_insert` / `get_or_insert_with` / `get_or_insert_default` —
 ///     read-or-initialize accessors
+///
 /// A custom type implementing the same contract must reuse these exact names, so
 /// the `get_` prefix is part of the convention, not a dispensable accessor prefix.
 /// (`get_mut` is already exempt via the reserved-keyword guard, `mut`.)

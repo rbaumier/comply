@@ -36,13 +36,12 @@ fn is_io_callee(callee: &Expression, source: &str, semantic: &oxc_semantic::Sema
 
     // Bare identifier: `fetch(...)`
     if IO_CALLEE_BASES.contains(&text) {
-        if let Expression::Identifier(ident) = callee {
-            if ident.name.as_str() == "fetch"
+        if let Expression::Identifier(ident) = callee
+            && ident.name.as_str() == "fetch"
                 && !semantic.is_reference_to_global_variable(ident)
             {
                 return false;
             }
-        }
         return true;
     }
 

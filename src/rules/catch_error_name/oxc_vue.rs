@@ -30,7 +30,7 @@ impl AstCheck for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::files::Language;
+    
     use crate::rules::backend::CheckCtx;
     use std::path::PathBuf;
 

@@ -197,6 +197,7 @@ fn is_numeric_data_array_leaf(
 ///   - an operand of an arithmetic `BinaryExpression` whose other side is a
 ///     genuine fractional float or a `Math.*` term (`20.0 * Math.log10(x)`);
 ///   - assigned to a `Float32Array`/`Float64Array` element (`buf[i] = 1.0`).
+///
 /// A lone `N.0` with none of these (`const count = 1.0`, `setTimeout(fn, 1000.0)`,
 /// `arr[1.0]`, `{ x: 1.0, y: 2.0 }`) still flags.
 fn is_in_float_math_context(

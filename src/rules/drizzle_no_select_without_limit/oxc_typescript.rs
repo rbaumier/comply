@@ -110,7 +110,7 @@ fn is_insert_returning_definition(var_name: &str, source: &str, before_pos: usiz
         let Some(idx) = preceding[pos..].find(var_name) else { break };
         let abs = pos + idx;
         let rest = &preceding[abs + var_name.len()..];
-        let trimmed = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
+        let trimmed = rest.trim_start_matches([' ', '\t']);
         if trimmed.starts_with('=') && !trimmed.starts_with("==") && !trimmed.starts_with("=>") {
             let end = (abs + 1000).min(preceding.len());
             let window = &preceding[abs..end];

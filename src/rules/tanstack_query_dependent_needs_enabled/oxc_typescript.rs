@@ -22,11 +22,10 @@ fn find_prop_value<'a>(
                     return Some(&p.value);
                 }
             }
-            oxc_ast::ast::PropertyKey::StringLiteral(s) => {
-                if s.value.as_str() == needle {
+            oxc_ast::ast::PropertyKey::StringLiteral(s)
+                if s.value.as_str() == needle => {
                     return Some(&p.value);
                 }
-            }
             _ => {}
         }
     }

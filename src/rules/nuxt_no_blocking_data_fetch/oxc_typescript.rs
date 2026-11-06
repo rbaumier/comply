@@ -44,14 +44,12 @@ impl OxcCheck for Check {
         // Walk ancestors to see if inside defineNuxtRouteMiddleware.
         let mut in_middleware = false;
         for ancestor in semantic.nodes().ancestors(node.id()) {
-            if let AstKind::CallExpression(parent_call) = ancestor.kind() {
-                if let Expression::Identifier(id) = &parent_call.callee {
-                    if id.name.as_str() == "defineNuxtRouteMiddleware" {
+            if let AstKind::CallExpression(parent_call) = ancestor.kind()
+                && let Expression::Identifier(id) = &parent_call.callee
+                    && id.name.as_str() == "defineNuxtRouteMiddleware" {
                         in_middleware = true;
                         break;
                     }
-                }
-            }
         }
         if !in_middleware {
             return;

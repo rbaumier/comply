@@ -56,8 +56,8 @@ fn extract_string_arg_len(call_text: &str) -> usize {
     if let Some(rest) = after_paren.strip_prefix("r#\"") {
         return rest.find("\"#").unwrap_or(0);
     }
-    if after_paren.starts_with('"') {
-        return after_paren[1..].find('"').unwrap_or(0);
+    if let Some(rest) = after_paren.strip_prefix('"') {
+        return rest.find('"').unwrap_or(0);
     }
     0
 }

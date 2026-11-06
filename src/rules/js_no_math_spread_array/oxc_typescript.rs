@@ -105,6 +105,7 @@ fn spread_operand_is_length_guarded(
 ///   - an `IfStatement` consequent (gated by the `if` test),
 ///   - a `ConditionalExpression` consequent (gated by the ternary test), or
 ///   - the right operand of a logical `&&` (gated by the left operand).
+///
 /// A length check in an unrelated sibling branch or a `||` alternative does not
 /// dominate the call and is ignored.
 fn nearest_guard_caps_length(
@@ -129,14 +130,13 @@ fn nearest_guard_caps_length(
                     return true;
                 }
             }
-            AstKind::LogicalExpression(logical) => {
+            AstKind::LogicalExpression(logical)
                 if logical.operator == LogicalOperator::And
                     && span_contains(logical.right.span(), call_span)
                     && condition_caps_length(&logical.left, semantic, target)
-                {
+                => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

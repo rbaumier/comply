@@ -49,11 +49,10 @@ const CANONICAL_UNIT_SUFFIXES: &[&str] = &[
 fn is_canonical_unit_value(value: &str) -> bool {
     let digits = value.strip_prefix('-').unwrap_or(value);
     for suffix in CANONICAL_UNIT_SUFFIXES {
-        if let Some(numeric) = digits.strip_suffix(suffix) {
-            if numeric.parse::<f64>().is_ok() {
+        if let Some(numeric) = digits.strip_suffix(suffix)
+            && numeric.parse::<f64>().is_ok() {
                 return true;
             }
-        }
     }
     false
 }

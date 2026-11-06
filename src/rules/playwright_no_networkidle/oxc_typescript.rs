@@ -52,9 +52,9 @@ impl OxcCheck for Check {
                         span: None,
                     });
                 }
-                oxc_ast::AstKind::TemplateLiteral(tpl) if tpl.expressions.is_empty() => {
+                oxc_ast::AstKind::TemplateLiteral(tpl) if tpl.expressions.is_empty()
                     // Template with no substitutions: `networkidle`
-                    if tpl.quasis.len() == 1 && tpl.quasis[0].value.raw.as_str() == "networkidle" {
+                    && tpl.quasis.len() == 1 && tpl.quasis[0].value.raw.as_str() == "networkidle" => {
                         let (line, column) = byte_offset_to_line_col(ctx.source, tpl.span.start as usize);
                         diagnostics.push(Diagnostic {
                             path: Arc::clone(&ctx.path_arc),
@@ -66,7 +66,6 @@ impl OxcCheck for Check {
                             span: None,
                         });
                     }
-                }
                 _ => {}
             }
         }

@@ -28,8 +28,8 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                     install_seen = true;
                 }
             }
-            "copy_instruction" => {
-                if !install_seen && copy_is_dot(child, source) {
+            "copy_instruction"
+                if !install_seen && copy_is_dot(child, source) => {
                     let pos = child.start_position();
                     diagnostics.push(Diagnostic {
                         path: std::sync::Arc::clone(&ctx.path_arc),
@@ -41,7 +41,6 @@ crate::ast_check! { on ["source_file"] => |node, source, ctx, diagnostics|
                         span: None,
                     });
                 }
-            }
             _ => {}
         }
     }

@@ -6,23 +6,19 @@ fn content_disables_zoom(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     for part in lower.split(',') {
         let trimmed = part.trim();
-        if trimmed.starts_with("user-scalable") {
-            if let Some((_, v)) = trimmed.split_once('=') {
+        if trimmed.starts_with("user-scalable")
+            && let Some((_, v)) = trimmed.split_once('=') {
                 let val = v.trim();
                 if val == "no" || val == "0" {
                     return true;
                 }
             }
-        }
-        if trimmed.starts_with("maximum-scale") {
-            if let Some((_, v)) = trimmed.split_once('=') {
-                if let Ok(scale) = v.trim().parse::<f64>() {
-                    if scale <= 1.0 {
+        if trimmed.starts_with("maximum-scale")
+            && let Some((_, v)) = trimmed.split_once('=')
+                && let Ok(scale) = v.trim().parse::<f64>()
+                    && scale <= 1.0 {
                         return true;
                     }
-                }
-            }
-        }
     }
     false
 }
@@ -45,7 +41,7 @@ crate::ast_check! { on ["jsx_self_closing_element", "jsx_opening_element"] => |n
         let Some(attr_name) = crate::rules::jsx::jsx_attribute_name(child, source) else {
             continue;
         };
-        match attr_name.as_ref() {
+        match attr_name {
             "name" => {
                 if let Some(val) = crate::rules::jsx::jsx_attribute_value(child) {
                     let text = val.utf8_text(source).ok().unwrap_or("");

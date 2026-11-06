@@ -38,14 +38,13 @@ impl OxcCheck for Check {
         // `z.unknown().transform(...)`: the transform body narrows the output
         // type, so the schema is doing real work — skip it.
         let parent = semantic.nodes().parent_node(node.id());
-        if let AstKind::StaticMemberExpression(member) = parent.kind() {
-            if member.property.name.as_str() == "transform" {
+        if let AstKind::StaticMemberExpression(member) = parent.kind()
+            && member.property.name.as_str() == "transform" {
                 let grand = semantic.nodes().parent_node(parent.id());
                 if matches!(grand.kind(), AstKind::CallExpression(_)) {
                     return;
                 }
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, call.span.start as usize);
         diagnostics.push(Diagnostic {

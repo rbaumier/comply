@@ -41,55 +41,53 @@ impl OxcCheck for Check {
         }
 
         for node in semantic.nodes().iter() {
-            match node.kind() {
-                // TSTypeReference with a single identifier name matching banned types.
-                AstKind::TSTypeReference(type_ref) => {
-                    let name = type_ref.type_name.to_string();
-                    if let Some(&(_, msg)) = BANNED_TYPES.iter().find(|&&(t, _)| t == name.as_str())
-                    {
-                        // `Function` as the `extends` operand of a conditional
-                        // type (`T extends Function ? A : B`) is the idiomatic
-                        // "is this callable?" predicate, not a value-type
-                        // annotation, and has no narrower replacement in that
-                        // position. Exempt only that constraint slot; `Function`
-                        // in parameter/return/property annotations still flags.
-                        if let AstKind::TSConditionalType(cond) =
-                            semantic.nodes().parent_node(node.id()).kind()
-                            && cond.extends_type.span() == type_ref.span
-                        {
-                            continue;
-                        }
-                        // `value is Function` / `asserts value is Function`: when
-                        // `Function` is the narrowed type of a type predicate it
-                        // asserts only that the value is callable with an unknown
-                        // signature, so no narrower call signature can replace it.
-                        // The predicate wraps its type in a `TSTypeAnnotation`, so the
-                        // direct slot is parent = `TSTypeAnnotation`, grandparent =
-                        // `TSTypePredicate`; `Function` nested deeper (e.g.
-                        // `value is Function[]`) stays flagged.
-                        let nodes = semantic.nodes();
-                        if matches!(nodes.parent_kind(node.id()), AstKind::TSTypeAnnotation(_))
-                            && matches!(
-                                nodes.parent_kind(nodes.parent_id(node.id())),
-                                AstKind::TSTypePredicate(_)
-                            )
-                        {
-                            continue;
-                        }
-                        let (line, column) =
-                            byte_offset_to_line_col(ctx.source, type_ref.span.start as usize);
-                        diagnostics.push(Diagnostic {
-                            path: Arc::clone(&ctx.path_arc),
-                            line,
-                            column,
-                            rule_id: "ts-no-restricted-types".into(),
-                            message: msg.to_string(),
-                            severity: Severity::Error,
-                            span: None,
-                        });
-                    }
+            // TSTypeReference with a single identifier name matching banned types.
+            let AstKind::TSTypeReference(type_ref) = node.kind() else {
+                continue;
+            };
+            let name = type_ref.type_name.to_string();
+            if let Some(&(_, msg)) = BANNED_TYPES.iter().find(|&&(t, _)| t == name.as_str())
+            {
+                // `Function` as the `extends` operand of a conditional
+                // type (`T extends Function ? A : B`) is the idiomatic
+                // "is this callable?" predicate, not a value-type
+                // annotation, and has no narrower replacement in that
+                // position. Exempt only that constraint slot; `Function`
+                // in parameter/return/property annotations still flags.
+                if let AstKind::TSConditionalType(cond) =
+                    semantic.nodes().parent_node(node.id()).kind()
+                    && cond.extends_type.span() == type_ref.span
+                {
+                    continue;
                 }
-                _ => {}
+                // `value is Function` / `asserts value is Function`: when
+                // `Function` is the narrowed type of a type predicate it
+                // asserts only that the value is callable with an unknown
+                // signature, so no narrower call signature can replace it.
+                // The predicate wraps its type in a `TSTypeAnnotation`, so the
+                // direct slot is parent = `TSTypeAnnotation`, grandparent =
+                // `TSTypePredicate`; `Function` nested deeper (e.g.
+                // `value is Function[]`) stays flagged.
+                let nodes = semantic.nodes();
+                if matches!(nodes.parent_kind(node.id()), AstKind::TSTypeAnnotation(_))
+                    && matches!(
+                        nodes.parent_kind(nodes.parent_id(node.id())),
+                        AstKind::TSTypePredicate(_)
+                    )
+                {
+                    continue;
+                }
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, type_ref.span.start as usize);
+                diagnostics.push(Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: "ts-no-restricted-types".into(),
+                    message: msg.to_string(),
+                    severity: Severity::Error,
+                    span: None,
+                });
             }
         }
 

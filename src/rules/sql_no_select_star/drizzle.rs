@@ -76,11 +76,10 @@ fn chain_has_from(start: tree_sitter::Node, source: &[u8]) -> bool {
             if grand.kind() == "call_expression"
                 && grand.child_by_field_name("function").map(|f| f.id()) == Some(parent.id())
             {
-                if let Some(prop) = parent.child_by_field_name("property") {
-                    if prop.utf8_text(source).unwrap_or("") == "from" {
+                if let Some(prop) = parent.child_by_field_name("property")
+                    && prop.utf8_text(source).unwrap_or("") == "from" {
                         return true;
                     }
-                }
                 current = grand;
                 continue;
             }

@@ -341,14 +341,12 @@ impl Check {
                 }
                 if let Some(ancestor_pkg) =
                     ctx.project.nearest_package_json(&ancestor_dir.join("_"))
-                {
-                    if ancestor_pkg.has_dep_or_engine(root)
+                    && (ancestor_pkg.has_dep_or_engine(root)
                         || ancestor_pkg.has_dep_or_engine(&types_root)
-                        || ancestor_pkg.is_self_name(root)
+                        || ancestor_pkg.is_self_name(root))
                     {
                         return;
                     }
-                }
                 pkg_dir = ancestor_dir;
             }
         }

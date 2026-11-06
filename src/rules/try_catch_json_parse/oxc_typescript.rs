@@ -77,11 +77,9 @@ impl OxcCheck for Check {
         // flagged (`.as_expression()` yields `None` for a spread).
         if let Some(Expression::CallExpression(arg_call)) =
             call.arguments.first().and_then(|arg| arg.as_expression())
-        {
-            if is_json_method_call(arg_call, "stringify") {
+            && is_json_method_call(arg_call, "stringify") {
                 return;
             }
-        }
 
         if is_inside_try_body(node, semantic) {
             return;

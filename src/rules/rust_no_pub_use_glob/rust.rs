@@ -115,17 +115,16 @@ impl AstCheck for Check {
         // The same first segment also identifies a proc-macro companion crate
         // (`pub use thiserror_impl::*;`), the only way a parent crate can expose
         // a `proc-macro = true` crate's derive macro — see the helper below.
-        if let Some(seg) = first_use_segment(trimmed) {
-            if declares_submodule(node, seg, source_bytes)
+        if let Some(seg) = first_use_segment(trimmed)
+            && (declares_submodule(node, seg, source_bytes)
                 || is_proc_macro_companion_crate(seg)
                 || ctx
                     .project
                     .nearest_cargo_manifest(ctx.path)
-                    .is_some_and(|m| m.is_own_family_subcrate(seg))
+                    .is_some_and(|m| m.is_own_family_subcrate(seg)))
             {
                 return;
             }
-        }
         // A file whose only top-level item (ignoring comments and attributes) is
         // this `pub use ...::*;` is a deliberate single-statement re-export
         // facade: its entire public API IS the wholesale re-export (e.g. a shared

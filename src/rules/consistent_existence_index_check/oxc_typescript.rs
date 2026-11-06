@@ -94,15 +94,10 @@ impl OxcCheck for Check {
         let AstKind::BinaryExpression(bin) = node.kind() else { return };
 
         let op = bin.operator;
-        let is_bad = if (op == BinaryOperator::LessThan || op == BinaryOperator::GreaterEqualThan)
-            && is_zero(&bin.right)
-        {
-            is_index_expr(&bin.left, semantic)
-        } else if op == BinaryOperator::GreaterThan && is_negative_one(&bin.right) {
-            is_index_expr(&bin.left, semantic)
-        } else {
-            false
-        };
+        let is_bad = (((op == BinaryOperator::LessThan || op == BinaryOperator::GreaterEqualThan)
+            && is_zero(&bin.right))
+            || (op == BinaryOperator::GreaterThan && is_negative_one(&bin.right)))
+            && is_index_expr(&bin.left, semantic);
 
         if !is_bad {
             return;

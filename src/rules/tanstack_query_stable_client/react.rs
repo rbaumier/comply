@@ -31,8 +31,8 @@ fn inside_stable_wrapper(
         if a.id() == boundary.id() {
             return false;
         }
-        if a.kind() == "call_expression" {
-            if let Some(callee) = a.child_by_field_name("function") {
+        if a.kind() == "call_expression"
+            && let Some(callee) = a.child_by_field_name("function") {
                 let name = match callee.kind() {
                     "identifier" => callee.utf8_text(source).ok(),
                     "member_expression" => {
@@ -46,13 +46,11 @@ fn inside_stable_wrapper(
                     }
                     _ => None,
                 };
-                if let Some(n) = name {
-                    if STABLE_WRAPPERS.contains(&n) {
+                if let Some(n) = name
+                    && STABLE_WRAPPERS.contains(&n) {
                         return true;
                     }
-                }
             }
-        }
         current = a.parent();
     }
     false

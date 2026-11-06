@@ -142,13 +142,11 @@ fn manual_impl_delegates(
     let mut cursor = node.walk();
     let mut stack = vec![root_of(node)];
     while let Some(n) = stack.pop() {
-        if n.kind() == "impl_item" && impl_trait_on(n, source, type_name) == Some(manual_trait) {
-            if let Some(tail) = method_block(n, source, method_name).and_then(tail_expr) {
-                if expr_delegates_to_self(tail, source, counterpart) {
+        if n.kind() == "impl_item" && impl_trait_on(n, source, type_name) == Some(manual_trait)
+            && let Some(tail) = method_block(n, source, method_name).and_then(tail_expr)
+                && expr_delegates_to_self(tail, source, counterpart) {
                     return true;
                 }
-            }
-        }
         for child in n.children(&mut cursor) {
             stack.push(child);
         }

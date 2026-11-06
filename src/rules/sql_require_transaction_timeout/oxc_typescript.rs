@@ -27,118 +27,6 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rules::file_ctx::{FileCtx, PathSegments};
-
-    fn run(src: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &FileCtx::default())
-    }
-
-    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
-        let file = FileCtx {
-            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
-            ..Default::default()
-        };
-        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
-    }
-
-    #[test]
-    fn flags_drizzle_without_timeout() {
-        assert_eq!(run("const db = drizzle({ connectionString: url });").len(), 1);
-    }
-
-    #[test]
-    fn no_fp_drizzle_in_test_file() {
-        // Regression: drizzle() wrapping a proxied test connection — issue #546
-        let src = r#"const legacyDb = drizzle({
-  client: legacyClient,
-  relations: legacySchema.relations,
-});"#;
-        assert!(run_in_test_file(src).is_empty());
-    }
-
-    #[test]
-    fn no_fp_libsql_sqlite_driver() {
-        // Regression: issue #1750 — libsql/SQLite has no `statement_timeout`.
-        let src = r#"import { createClient, type Client } from "@libsql/client";
-import { drizzle } from "drizzle-orm/libsql";
-
-export const client =
-  globalForDb.client ?? createClient({ url: env.DATABASE_URL });
-
-export const db = drizzle(client, { schema });"#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn no_fp_planetscale_serverless_driver() {
-        // Regression: issue #1750 — PlanetScale serverless has no `statement_timeout`.
-        let src = r#"import { Client } from "@planetscale/database";
-import { drizzle } from "drizzle-orm/planetscale-serverless";
-
-export const db = drizzle(new Client({ url: env.DATABASE_URL }), { schema });"#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_postgres_drizzle_without_timeout() {
-        // A standard node-postgres drizzle() with no timeout must still flag.
-        let src = r#"import { drizzle } from "drizzle-orm/node-postgres";
-const db = drizzle({ connectionString: url });"#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn no_fp_non_db_pool_class() {
-        // Regression: issue #3326 — `Pool` imported from a non-database module
-        // (vitest's own worker process pool) must not flag.
-        let src = r#"import { Pool } from '../pool/pool-class';
-
-export function createPool(ctx) {
-  return new Pool({ distPath: ctx.distPath, teardownTimeout: ctx.config.teardownTimeout, state: ctx.state }, ctx.logger);
-}"#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_pg_pool_without_timeout() {
-        // A real node-postgres Pool with no statement_timeout must still flag.
-        let src = r#"import { Pool } from "pg";
-const pool = new Pool({ host: "localhost", database: "app" });"#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn still_flags_mysql2_pool_without_timeout() {
-        // mysql2 Pool with no statement_timeout must still flag.
-        let src = r#"import { Pool } from 'mysql2/promise';
-const pool = new Pool({ host: "localhost" });"#;
-        assert_eq!(run(src).len(), 1);
-    }
-
-    #[test]
-    fn no_fp_game_engine_object_pool_create_pool() {
-        // Regression: issue #4884 — `createPool` imported from a game-engine
-        // object-pooling utility (melonJS) is not a DB pool and must not flag.
-        let src = r#"import { createPool } from "../system/pooling.ts";
-
-export const vector2dPool = createPool<Vector2d, [x?: number, y?: number]>((x, y) => {
-  const vector = new Vector2d(x, y);
-  return { instance: vector, reset(x = 0, y = 0) {} };
-});"#;
-        assert!(run(src).is_empty());
-    }
-
-    #[test]
-    fn still_flags_mysql2_create_pool_without_timeout() {
-        // A real mysql2 `createPool` with no statement_timeout must still flag.
-        let src = r#"import { createPool } from "mysql2/promise";
-const pool = createPool({ host: "localhost", database: "app", connectionLimit: 10 });"#;
-        assert_eq!(run(src).len(), 1);
-    }
-}
 
 pub struct Check;
 
@@ -263,5 +151,117 @@ impl OxcCheck for Check {
             }
             _ => {}
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::file_ctx::{FileCtx, PathSegments};
+
+    fn run(src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &FileCtx::default())
+    }
+
+    fn run_in_test_file(src: &str) -> Vec<Diagnostic> {
+        let file = FileCtx {
+            path_segments: PathSegments { in_test_dir: true, ..PathSegments::default() },
+            ..Default::default()
+        };
+        crate::rules::test_helpers::run_rule_with_ctx(&Check, src, "t.tsx", crate::project::default_static_project_ctx(), &file)
+    }
+
+    #[test]
+    fn flags_drizzle_without_timeout() {
+        assert_eq!(run("const db = drizzle({ connectionString: url });").len(), 1);
+    }
+
+    #[test]
+    fn no_fp_drizzle_in_test_file() {
+        // Regression: drizzle() wrapping a proxied test connection — issue #546
+        let src = r#"const legacyDb = drizzle({
+  client: legacyClient,
+  relations: legacySchema.relations,
+});"#;
+        assert!(run_in_test_file(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_libsql_sqlite_driver() {
+        // Regression: issue #1750 — libsql/SQLite has no `statement_timeout`.
+        let src = r#"import { createClient, type Client } from "@libsql/client";
+import { drizzle } from "drizzle-orm/libsql";
+
+export const client =
+  globalForDb.client ?? createClient({ url: env.DATABASE_URL });
+
+export const db = drizzle(client, { schema });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn no_fp_planetscale_serverless_driver() {
+        // Regression: issue #1750 — PlanetScale serverless has no `statement_timeout`.
+        let src = r#"import { Client } from "@planetscale/database";
+import { drizzle } from "drizzle-orm/planetscale-serverless";
+
+export const db = drizzle(new Client({ url: env.DATABASE_URL }), { schema });"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_postgres_drizzle_without_timeout() {
+        // A standard node-postgres drizzle() with no timeout must still flag.
+        let src = r#"import { drizzle } from "drizzle-orm/node-postgres";
+const db = drizzle({ connectionString: url });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_non_db_pool_class() {
+        // Regression: issue #3326 — `Pool` imported from a non-database module
+        // (vitest's own worker process pool) must not flag.
+        let src = r#"import { Pool } from '../pool/pool-class';
+
+export function createPool(ctx) {
+  return new Pool({ distPath: ctx.distPath, teardownTimeout: ctx.config.teardownTimeout, state: ctx.state }, ctx.logger);
+}"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_pg_pool_without_timeout() {
+        // A real node-postgres Pool with no statement_timeout must still flag.
+        let src = r#"import { Pool } from "pg";
+const pool = new Pool({ host: "localhost", database: "app" });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn still_flags_mysql2_pool_without_timeout() {
+        // mysql2 Pool with no statement_timeout must still flag.
+        let src = r#"import { Pool } from 'mysql2/promise';
+const pool = new Pool({ host: "localhost" });"#;
+        assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn no_fp_game_engine_object_pool_create_pool() {
+        // Regression: issue #4884 — `createPool` imported from a game-engine
+        // object-pooling utility (melonJS) is not a DB pool and must not flag.
+        let src = r#"import { createPool } from "../system/pooling.ts";
+
+export const vector2dPool = createPool<Vector2d, [x?: number, y?: number]>((x, y) => {
+  const vector = new Vector2d(x, y);
+  return { instance: vector, reset(x = 0, y = 0) {} };
+});"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn still_flags_mysql2_create_pool_without_timeout() {
+        // A real mysql2 `createPool` with no statement_timeout must still flag.
+        let src = r#"import { createPool } from "mysql2/promise";
+const pool = createPool({ host: "localhost", database: "app", connectionLimit: 10 });"#;
+        assert_eq!(run(src).len(), 1);
     }
 }

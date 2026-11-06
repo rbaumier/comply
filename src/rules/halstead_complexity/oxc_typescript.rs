@@ -336,7 +336,7 @@ fn visit_expr(expr: &Expression, source: &str, counts: &mut Counts) {
             counts.add_operand("null");
         }
         Expression::BinaryExpression(bin) => {
-            counts.add_op(&bin.operator.as_str().to_string());
+            counts.add_op(bin.operator.as_str());
             visit_expr(&bin.left, source, counts);
             visit_expr(&bin.right, source, counts);
         }
