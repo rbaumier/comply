@@ -9,9 +9,12 @@
 //!    workspace root, and for each workspace runs:
 //!
 //!        cargo clippy <--workspace | -p <owning package>...> \
-//!            --all-targets --message-format=json --quiet \
+//!            --all-targets --all-features --message-format=json --quiet \
 //!            --manifest-path <workspace>/Cargo.toml \
 //!            -- -W clippy::lint1 -W clippy::lint2 ...
+//!
+//!    `--all-features` compiles every feature-gated item, so a test target
+//!    that calls one still builds and gets linted.
 //!
 //!    Cargo emits one JSON object per line. We parse the stream,
 //!    keep only `compiler-message` rows, filter to spans inside the
@@ -238,6 +241,7 @@ fn invoke_clippy(
     cmd.arg("clippy").args(packages);
     cmd.args([
         "--all-targets",
+        "--all-features",
         "--message-format=json",
         "--quiet",
         "--manifest-path",
