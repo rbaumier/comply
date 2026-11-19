@@ -87,10 +87,12 @@ fn is_inside_test_or_hook<'a>(
                             }
                     }
                 }
-                // A named function declared at module level is a test helper —
-                // expect() inside it will run in a test context when called.
-                if matches!(parent.kind(), AstKind::Function(_))
-                    && is_module_level_function(parent_id, semantic)
+                // A module-level function kept for later (declaration, constant,
+                // table row) is a helper; one passed to a call runs now.
+                if !matches!(
+                    semantic.nodes().ancestor_kinds(parent_id).next(),
+                    Some(AstKind::CallExpression(_))
+                ) && is_module_level_function(parent_id, semantic)
                 {
                     return true;
                 }
@@ -197,5 +199,39 @@ test('my test', () => {
 });
 "#);
         assert!(d.is_empty(), "expect in helper called from test should be allowed");
+    }
+
+    #[test]
+    fn allows_expect_in_module_level_arrow_constant() {
+        let d = run_ts(r#"
+const check = async (page) => {
+  expect(page).toHaveURL(/\/dashboard/);
+};
+test('my test', async () => {
+  await check(page);
+});
+"#);
+        assert!(d.is_empty(), "a module-level arrow constant is a helper: {d:?}");
+    }
+
+    #[test]
+    fn allows_expect_in_module_level_table_row_arrow() {
+        let d = run_ts(r#"
+const ROWS = [
+  { action: "add_contact", check: async (answer) => { expect(answer).toContain("ok"); } },
+];
+for (const row of ROWS) {
+  test(row.action, async () => {
+    await row.check("ok");
+  });
+}
+"#);
+        assert!(d.is_empty(), "a module-level table row's arrow is a helper: {d:?}");
+    }
+
+    #[test]
+    fn flags_expect_in_arrow_passed_to_non_test_call() {
+        let d = run_ts("[1, 2].forEach((n) => { expect(n).toBe(n); });");
+        assert_eq!(d.len(), 1, "a callback passed to a module-level call runs outside any test");
     }
 }
