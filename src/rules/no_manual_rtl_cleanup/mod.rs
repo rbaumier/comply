@@ -1,6 +1,7 @@
-//! no-manual-rtl-cleanup — `cleanup()` is automatic with Vitest.
+//! no-manual-rtl-cleanup — `cleanup()` is automatic under Vitest globals.
 
 mod oxc_typescript;
+mod vitest_config;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -10,11 +11,12 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-manual-rtl-cleanup",
-    description: "Importing `cleanup` from `@testing-library/react` in Vitest causes double cleanup.",
+    description: "Importing `cleanup` from `@testing-library/react` when Vitest already runs it causes double cleanup.",
     remediation: "Remove the `cleanup` import and any `afterEach(cleanup)` \
-                  call. Vitest with `@testing-library/react` runs cleanup \
-                  automatically after each test. Manual cleanup causes \
-                  double cleanup which can mask unmount bugs.",
+                  call. `@testing-library/react` runs cleanup after each test \
+                  when `test.globals` is true or a setup file registers it. \
+                  Manual cleanup then runs twice and can mask unmount bugs. \
+                  With `globals: false`, keep the manual cleanup.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],

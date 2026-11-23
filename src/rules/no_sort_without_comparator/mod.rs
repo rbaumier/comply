@@ -9,7 +9,7 @@ use crate::rules::{RuleDef, TS_FAMILY};
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-sort-without-comparator",
-    description: "`.sort()` without comparator sorts lexicographically.",
+    description: "`.sort()` or `.toSorted()` without comparator sorts lexicographically.",
     remediation: "Pass an explicit comparator: `arr.sort((a, b) => a - b)` for numbers. Default `.sort()` converts to strings, so `[10, 2, 1].sort()` yields `[1, 10, 2]`.",
     severity: Severity::Error,
     doc_url: None,

@@ -29,8 +29,22 @@ const ITERABLE_TYPE_NAMES: &[&str] = &[
 
 /// Member-call names whose result is always a fresh array.
 const ARRAY_PRODUCING_METHODS: &[&str] = &[
-    "map", "filter", "slice", "concat", "flat", "flatMap", "splice", "fill", "reverse", "sort",
-    "split", "from", "of",
+    "map",
+    "filter",
+    "slice",
+    "concat",
+    "flat",
+    "flatMap",
+    "splice",
+    "fill",
+    "reverse",
+    "sort",
+    "toSorted",
+    "toReversed",
+    "toSpliced",
+    "split",
+    "from",
+    "of",
 ];
 
 /// True when `ty` is an array type (`T[]`, `readonly T[]`) or a reference to a

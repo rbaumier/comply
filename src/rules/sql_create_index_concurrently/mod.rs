@@ -13,7 +13,7 @@ use crate::rules::meta::RuleMeta;
 pub const META: RuleMeta = RuleMeta {
     id: "sql-create-index-concurrently",
     description: "`CREATE INDEX` without `CONCURRENTLY` takes an `ACCESS EXCLUSIVE` lock, blocking all table access.",
-    remediation: "Use `CREATE INDEX CONCURRENTLY` for production migrations. Run outside a transaction block.",
+    remediation: "Use `CREATE INDEX CONCURRENTLY` for production migrations. Run outside a transaction block. An index on a table created earlier in the same migration transaction is exempt: that table is still empty and invisible to other sessions.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["database", "sql", "migrations"],
