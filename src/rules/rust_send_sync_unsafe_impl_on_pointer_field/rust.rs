@@ -166,11 +166,10 @@ fn struct_has_unsync_field(struct_node: tree_sitter::Node, source: &[u8]) -> boo
                     return true;
                 }
             }
-            "ordered_field_declaration_list" => {
-                if ordered_has_unsync_field(child, source) {
+            "ordered_field_declaration_list"
+                if ordered_has_unsync_field(child, source) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }
@@ -192,11 +191,10 @@ fn struct_has_atomic_field(struct_node: tree_sitter::Node, source: &[u8]) -> boo
                     return true;
                 }
             }
-            "ordered_field_declaration_list" => {
-                if ordered_has_atomic_field(child, source) {
+            "ordered_field_declaration_list"
+                if ordered_has_atomic_field(child, source) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

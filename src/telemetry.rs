@@ -183,7 +183,10 @@ fn epoch_seconds() -> u64 {
 fn current_repo_name() -> String {
     changed_lines::git_repo_root()
         .or_else(|| std::env::current_dir().ok())
-        .and_then(|root| root.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -305,7 +308,10 @@ fn aggregate(runs: &[RunRecord], false_positives: &[FalsePositiveRecord]) -> Sta
     let mut false_positives_per_rule: FxHashMap<&str, usize> = FxHashMap::default();
     let mut false_positives_per_model: FxHashMap<&str, usize> = FxHashMap::default();
     for false_positive in false_positives {
-        increment(&mut false_positives_per_rule, false_positive.rule_id.as_str());
+        increment(
+            &mut false_positives_per_rule,
+            false_positive.rule_id.as_str(),
+        );
         increment(
             &mut false_positives_per_model,
             false_positive.model.as_deref().unwrap_or("unspecified"),
@@ -332,17 +338,27 @@ fn aggregate(runs: &[RunRecord], false_positives: &[FalsePositiveRecord]) -> Sta
             }
         })
         .collect();
-    rules.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.rule_id.cmp(&b.rule_id)));
+    rules.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.rule_id.cmp(&b.rule_id))
+    });
 
     let mut files: Vec<FileStat> = diagnostics_per_file
         .into_iter()
-        .map(|(path, count)| FileStat { path: path.to_string(), count })
+        .map(|(path, count)| FileStat {
+            path: path.to_string(),
+            count,
+        })
         .collect();
     files.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.path.cmp(&b.path)));
 
     let mut models: Vec<ModelStat> = false_positives_per_model
         .into_iter()
-        .map(|(model, count)| ModelStat { model: model.to_string(), count })
+        .map(|(model, count)| ModelStat {
+            model: model.to_string(),
+            count,
+        })
         .collect();
     models.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.model.cmp(&b.model)));
 
@@ -390,7 +406,11 @@ fn render_stats(stats: &Stats) -> String {
             .max()
             .unwrap_or(0);
         let _ = write!(out, "\ntop rules\n");
-        let _ = writeln!(out, "  {:<width$}  {:>7}  {:>4}  {:>6}", "rule", "count", "fp", "fp%");
+        let _ = writeln!(
+            out,
+            "  {:<width$}  {:>7}  {:>4}  {:>6}",
+            "rule", "count", "fp", "fp%"
+        );
         for rule in top_rules {
             let _ = writeln!(
                 out,

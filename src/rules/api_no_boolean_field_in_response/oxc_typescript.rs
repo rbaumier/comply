@@ -240,6 +240,40 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        if is_excluded_path(ctx.path) {
+            return;
+        }
+        match node.kind() {
+            AstKind::TSInterfaceDeclaration(decl) => {
+                let m = classify_response_type(decl.id.name.as_str());
+                if should_check(m, &decl.body.body, decl.type_parameters.as_deref()) {
+                    check_members(&decl.body.body, ctx, diagnostics);
+                }
+            }
+            AstKind::TSTypeAliasDeclaration(decl) => {
+                let m = classify_response_type(decl.id.name.as_str());
+                if let TSType::TSTypeLiteral(obj) = &decl.type_annotation
+                    && should_check(m, &obj.members, decl.type_parameters.as_deref()) {
+                        check_members(&obj.members, ctx, diagnostics);
+                    }
+            }
+            _ => {}
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,40 +442,5 @@ mod tests {
             "src/api/user.ts",
         );
         assert_eq!(d.len(), 1, "strong response suffix flags regardless of generic-param fields: {d:?}");
-    }
-}
-
-impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::TSInterfaceDeclaration, AstType::TSTypeAliasDeclaration]
-    }
-
-    fn run<'a>(
-        &self,
-        node: &oxc_semantic::AstNode<'a>,
-        ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        if is_excluded_path(ctx.path) {
-            return;
-        }
-        match node.kind() {
-            AstKind::TSInterfaceDeclaration(decl) => {
-                let m = classify_response_type(decl.id.name.as_str());
-                if should_check(m, &decl.body.body, decl.type_parameters.as_deref()) {
-                    check_members(&decl.body.body, ctx, diagnostics);
-                }
-            }
-            AstKind::TSTypeAliasDeclaration(decl) => {
-                let m = classify_response_type(decl.id.name.as_str());
-                if let TSType::TSTypeLiteral(obj) = &decl.type_annotation {
-                    if should_check(m, &obj.members, decl.type_parameters.as_deref()) {
-                        check_members(&obj.members, ctx, diagnostics);
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 }

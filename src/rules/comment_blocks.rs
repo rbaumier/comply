@@ -389,7 +389,9 @@ fn build_block(run: &[RawComment]) -> CommentBlock {
     let mut lines: Vec<BlockLine> = Vec::new();
     let mut reading = Reading::default();
     for comment in run {
-        let gap = lines.last().map_or(0..0, |last| last.line + 1..comment.line);
+        let gap = lines
+            .last()
+            .map_or(0..0, |last| last.line + 1..comment.line);
         for line in gap {
             let kind = classify("", &mut reading);
             lines.push(BlockLine {
@@ -495,7 +497,10 @@ fn leading_rule_len(mut chars: impl Iterator<Item = char>) -> usize {
 /// True for a character comment banners draw their rule with.
 /// Sentence punctuation is left out, so a trailing `...` stays prose.
 fn is_rule_char(c: char) -> bool {
-    matches!(c, '-' | '=' | '_' | '*' | '#' | '~' | '+' | '\u{2500}'..='\u{259f}')
+    matches!(
+        c,
+        '-' | '=' | '_' | '*' | '#' | '~' | '+' | '\u{2500}'..='\u{259f}'
+    )
 }
 
 /// Lay `comments` back out as the file they were read from, gaps left blank.
@@ -681,7 +686,10 @@ mod tests {
             ],
             "/// Example follows.\n/// ```\n/// let value = compute(one, two);\n/// ```",
         );
-        assert_eq!(blocks[0].text(), "Example follows. ``` let value = compute(one, two); ```");
+        assert_eq!(
+            blocks[0].text(),
+            "Example follows. ``` let value = compute(one, two); ```"
+        );
         let kinds: Vec<LineKind> = blocks[0].lines.iter().map(|line| line.kind).collect();
         assert_eq!(
             kinds,
@@ -842,24 +850,46 @@ mod tests {
     #[test]
     fn tool_directives_are_recognized_at_the_body_start() {
         assert!(is_tool_directive("eslint-disable-next-line no-console"));
-        assert!(is_tool_directive("@ts-expect-error the upstream types are wrong"));
+        assert!(is_tool_directive(
+            "@ts-expect-error the upstream types are wrong"
+        ));
         assert!(is_tool_directive("Prettier-Ignore"));
         assert!(!is_tool_directive("the eslint-disable above is temporary"));
     }
 
     #[test]
     fn punctuation_runs_and_markup_are_not_words() {
-        for token in ["«", "»", "—", "───", "|", "<div", "class=\"palette\"", "{width:2rem}"] {
+        for token in [
+            "«",
+            "»",
+            "—",
+            "───",
+            "|",
+            "<div",
+            "class=\"palette\"",
+            "{width:2rem}",
+        ] {
             assert!(!is_word(token), "counted as a word: {token}");
         }
-        for token in ["Report", "vide", "docs/agents/frontend-patterns.md", "register()"] {
+        for token in [
+            "Report",
+            "vide",
+            "docs/agents/frontend-patterns.md",
+            "register()",
+        ] {
             assert!(is_word(token), "not counted as a word: {token}");
         }
     }
 
     #[test]
     fn numeric_literals_are_not_words() {
-        for token in ["0x00010000", "0x0001000a,", "0b1010_0110", "0o777", "1024u32."] {
+        for token in [
+            "0x00010000",
+            "0x0001000a,",
+            "0b1010_0110",
+            "0o777",
+            "1024u32.",
+        ] {
             assert!(!is_word(token), "counted as a word: {token}");
         }
         for token in ["64-bit", "u32", "x86"] {

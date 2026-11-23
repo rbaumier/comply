@@ -128,7 +128,7 @@ fn opening_has_overflow_hidden(attrs: &oxc_allocator::Vec<'_, JSXAttributeItem>)
 /// call arguments / conditional branches by recursing through string and
 /// template parts. Identifier-only / fully dynamic parts are skipped.
 fn expression_has_target(expr: &JSXExpression) -> bool {
-    use oxc_ast::ast::Expression;
+    
     match expr {
         JSXExpression::StringLiteral(lit) => class_str_has_target(lit.value.as_str()),
         JSXExpression::TemplateLiteral(tpl) => tpl

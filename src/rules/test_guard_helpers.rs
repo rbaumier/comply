@@ -57,7 +57,8 @@ pub fn is_type_narrowing(expr: &Expression) -> bool {
             matches!(bin.operator, BinaryOperator::Instanceof) || is_nullish_check(bin)
         }
         Expression::UnaryExpression(unary) => {
-            matches!(unary.operator, UnaryOperator::LogicalNot) && is_type_narrowing(&unary.argument)
+            matches!(unary.operator, UnaryOperator::LogicalNot)
+                && is_type_narrowing(&unary.argument)
         }
         _ => false,
     }
@@ -249,7 +250,8 @@ fn property_value<'a>(
     ) {
         return None;
     }
-    let Some(Expression::ObjectExpression(obj)) = assertion.value.map(Expression::without_parentheses)
+    let Some(Expression::ObjectExpression(obj)) =
+        assertion.value.map(Expression::without_parentheses)
     else {
         return None;
     };
@@ -326,11 +328,13 @@ fn callee_root_name<'a>(callee: &'a Expression<'a>) -> Option<&'a str> {
 /// Statement list of the last function/arrow argument — the callback a test
 /// framework entry point runs.
 fn callback_body<'a>(args: &'a [Argument<'a>]) -> Option<&'a [Statement<'a>]> {
-    args.iter().rev().find_map(|arg| match arg.as_expression()? {
-        Expression::ArrowFunctionExpression(arrow) => Some(&arrow.body.statements[..]),
-        Expression::FunctionExpression(func) => Some(&func.body.as_ref()?.statements[..]),
-        _ => None,
-    })
+    args.iter()
+        .rev()
+        .find_map(|arg| match arg.as_expression()? {
+            Expression::ArrowFunctionExpression(arrow) => Some(&arrow.body.statements[..]),
+            Expression::FunctionExpression(func) => Some(&func.body.as_ref()?.statements[..]),
+            _ => None,
+        })
 }
 
 /// Flattens every statement reachable inside the test scope, descending into
@@ -341,7 +345,9 @@ fn collect_statements<'a>(stmts: &'a [Statement<'a>], out: &mut Vec<&'a Statemen
         out.push(stmt);
         match stmt {
             Statement::BlockStatement(b) => collect_statements(&b.body, out),
-            Statement::LabeledStatement(l) => collect_statements(std::slice::from_ref(&l.body), out),
+            Statement::LabeledStatement(l) => {
+                collect_statements(std::slice::from_ref(&l.body), out)
+            }
             Statement::IfStatement(s) => {
                 collect_statements(std::slice::from_ref(&s.consequent), out);
                 if let Some(alternate) = &s.alternate {
@@ -352,7 +358,9 @@ fn collect_statements<'a>(stmts: &'a [Statement<'a>], out: &mut Vec<&'a Statemen
             Statement::ForInStatement(s) => collect_statements(std::slice::from_ref(&s.body), out),
             Statement::ForOfStatement(s) => collect_statements(std::slice::from_ref(&s.body), out),
             Statement::WhileStatement(s) => collect_statements(std::slice::from_ref(&s.body), out),
-            Statement::DoWhileStatement(s) => collect_statements(std::slice::from_ref(&s.body), out),
+            Statement::DoWhileStatement(s) => {
+                collect_statements(std::slice::from_ref(&s.body), out)
+            }
             Statement::SwitchStatement(s) => {
                 for case in &s.cases {
                     collect_statements(&case.consequent, out);

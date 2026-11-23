@@ -56,7 +56,7 @@ impl OxcCheck for Check {
                         .first()
                         .map(|s| !matches!(s, Statement::ExpressionStatement(_)))
                         .unwrap_or(false)
-                        || a.body.statements.first().is_some()
+                        || !a.body.statements.is_empty()
                 } else {
                     body_returns_value(&a.body)
                 }

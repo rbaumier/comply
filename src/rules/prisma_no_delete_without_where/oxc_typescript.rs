@@ -73,8 +73,8 @@ impl OxcCheck for Check {
         // Check if any object argument has a `where` key.
         for arg in &call.arguments {
             let Some(expr) = arg.as_expression() else { continue };
-            if let Expression::ObjectExpression(_) = expr {
-                if !object_has_where(expr) {
+            if let Expression::ObjectExpression(_) = expr
+                && !object_has_where(expr) {
                     let (line, column) =
                         byte_offset_to_line_col(ctx.source, call.span.start as usize);
                     diagnostics.push(Diagnostic {
@@ -89,7 +89,6 @@ impl OxcCheck for Check {
                     });
                     return;
                 }
-            }
         }
     }
 }

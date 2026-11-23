@@ -216,8 +216,8 @@ fn extract_watch_call(lines: &[&str], start: usize) -> Option<WatchCall> {
                         depth += 1;
                     }
                 }
-                '}' => {
-                    if in_body && !after_body {
+                '}'
+                    if in_body && !after_body => {
                         if depth == 0 {
                             // Strip the closing brace we just pushed; the body
                             // is complete. Keep scanning the trailing options.
@@ -227,7 +227,6 @@ fn extract_watch_call(lines: &[&str], start: usize) -> Option<WatchCall> {
                         }
                         depth -= 1;
                     }
-                }
                 _ => {}
             }
         }

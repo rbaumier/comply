@@ -79,13 +79,11 @@ impl AstCheck for Check {
         // 1 arg: could be timestamp('col') OR timestamp({ withTimezone: true }).
         // If the single arg is an object, the user passed options directly
         // (Drizzle infers column name from the JS property key).
-        if arg_count == 1 {
-            if let Some(arg) = args.named_child(0) {
-                if arg.kind() == "object" {
+        if arg_count == 1
+            && let Some(arg) = args.named_child(0)
+                && arg.kind() == "object" {
                     return;
                 }
-            }
-        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),

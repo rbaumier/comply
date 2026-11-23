@@ -186,7 +186,10 @@ pub fn is_monadic_gen_generator(code: &str) -> bool {
     while let Some(rel) = code[start..].find(".gen(") {
         let after = start + rel + ".gen(".len();
         let tail = code[after..].trim_start();
-        let tail = tail.strip_prefix("async").map(str::trim_start).unwrap_or(tail);
+        let tail = tail
+            .strip_prefix("async")
+            .map(str::trim_start)
+            .unwrap_or(tail);
         if tail.starts_with("function*") || tail.starts_with("function *") {
             return true;
         }

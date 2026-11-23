@@ -92,6 +92,7 @@ fn is_file_based_route_segment(path: &std::path::Path, file_name: &str) -> bool 
 /// - flat-route style: the first dot-segment of the file name ends with `_`
 ///   (`posts_.$postId.tsx`), the trailing-`_` marker for a layout route that
 ///   contributes no path segment.
+///
 /// See https://tanstack.com/router/latest/docs/framework/react/routing/file-based-routing#pathless-layout-routes.
 fn is_tanstack_pathless_route(path: &std::path::Path, file_name: &str) -> bool {
     let stem = file_name.split('.').next().unwrap_or(file_name);

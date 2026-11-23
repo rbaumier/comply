@@ -30,13 +30,11 @@ impl OxcCheck for Check {
         }
 
         // Look for an object argument.
-        let Some(obj_arg) = call.arguments.iter().find_map(|arg| {
-            if let Some(Expression::ObjectExpression(_)) = arg.as_expression() {
-                Some(arg)
-            } else {
-                None
-            }
-        }) else {
+        let Some(obj_arg) = call
+            .arguments
+            .iter()
+            .find(|arg| matches!(arg.as_expression(), Some(Expression::ObjectExpression(_))))
+        else {
             return;
         };
 

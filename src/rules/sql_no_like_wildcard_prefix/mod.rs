@@ -123,11 +123,10 @@ fn leading_wildcard_like_at(bytes: &[u8], i: usize) -> Option<usize> {
 fn occurrence_is_filter(bytes: &[u8], like_start: usize, quote_pos: usize) -> bool {
     // `LIKE '%...' AS alias` can only be a computed projection column — an
     // aliased predicate is a syntax error in a filter clause.
-    if let Some(after) = string_literal_end(bytes, quote_pos) {
-        if is_as_alias(bytes, after) {
+    if let Some(after) = string_literal_end(bytes, quote_pos)
+        && is_as_alias(bytes, after) {
             return false;
         }
-    }
     matches!(nearest_preceding_clause(bytes, like_start), Some(Clause::Filter))
 }
 

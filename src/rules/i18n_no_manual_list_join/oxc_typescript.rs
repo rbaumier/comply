@@ -159,11 +159,10 @@ fn is_developer_script_path(path: &Path) -> bool {
 
 /// True when `call` is a `console.X(...)` invocation.
 fn is_console_call_expr(call: &oxc_ast::ast::CallExpression) -> bool {
-    if let Expression::StaticMemberExpression(member) = &call.callee {
-        if let Expression::Identifier(obj) = &member.object {
+    if let Expression::StaticMemberExpression(member) = &call.callee
+        && let Expression::Identifier(obj) = &member.object {
             return obj.name.as_str() == "console";
         }
-    }
     false
 }
 
@@ -262,11 +261,10 @@ fn enclosing_fn_name<'a>(
                         Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
                     )
                 });
-                if is_func {
-                    if let BindingPattern::BindingIdentifier(id) = &decl.id {
+                if is_func
+                    && let BindingPattern::BindingIdentifier(id) = &decl.id {
                         return Some(id.name.as_str().to_string());
                     }
-                }
             }
             AstKind::MethodDefinition(method) => {
                 if let PropertyKey::StaticIdentifier(id) = &method.key {
@@ -315,11 +313,10 @@ impl OxcCheck for Check {
         if is_developer_script_path(ctx.path) {
             return;
         }
-        if let Some(name) = enclosing_fn_name(node, semantic) {
-            if is_wire_format_fn_name(&name) {
+        if let Some(name) = enclosing_fn_name(node, semantic)
+            && is_wire_format_fn_name(&name) {
                 return;
             }
-        }
         if is_css_media_join(node, semantic) {
             return;
         }

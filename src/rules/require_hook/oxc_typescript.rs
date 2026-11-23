@@ -652,6 +652,68 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[]
+    }
+
+    fn run_on_semantic<'a>(
+        &self,
+        semantic: &'a oxc_semantic::Semantic<'a>,
+        ctx: &CheckCtx,
+    ) -> Vec<Diagnostic> {
+        if !is_test_file(ctx.path) {
+            return Vec::new();
+        }
+
+        let program = semantic.nodes().program();
+        // k6 load-test scripts declare top-level config at module scope by design
+        // (`let endpoint = __ENV.URL || ...`, `export let options`); the k6 CLI
+        // reads them, so the top-level-side-effect check does not apply.
+        if is_k6_script(program) {
+            return Vec::new();
+        }
+        let node_test_mode = imports_node_test(program);
+        let package_bindings = package_import_bindings(program);
+        // A file with no test-framework hook context (no `describe`/`it`/`test`/
+        // hook/`Deno.test`/fixture-runner call, no `node:test` import) is a
+        // script-mode `*.test.ts`, not a hook-based suite. There is nowhere to
+        // move setup into, so the rule does not apply.
+        if !node_test_mode && !file_has_test_framework_context(program, &package_bindings) {
+            return Vec::new();
+        }
+        let wrapper_decl_ids = local_test_suite_wrapper_decl_ids(semantic);
+        let mut diagnostics = Vec::new();
+
+        for stmt in &program.body {
+            if top_level_is_allowed(
+                stmt,
+                node_test_mode,
+                &package_bindings,
+                &wrapper_decl_ids,
+                semantic,
+            ) {
+                continue;
+            }
+            let span = stmt.span();
+            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
+            diagnostics.push(Diagnostic {
+                path: Arc::clone(&ctx.path_arc),
+                line,
+                column,
+                rule_id: super::META.id.into(),
+                message:
+                    "Top-level side effect in a test file — move it into a `beforeEach` or `beforeAll` hook."
+                        .into(),
+                severity: Severity::Error,
+                span: Some((span.start as usize, (span.end - span.start) as usize)),
+            });
+        }
+
+        diagnostics
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1952,67 +2014,5 @@ describe("x", () => { it("works", () => {}); });
             1,
             "a module-scope for...of loop doing genuine setup (no test registration) must still be flagged: {d:?}"
         );
-    }
-}
-
-impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[]
-    }
-
-    fn run_on_semantic<'a>(
-        &self,
-        semantic: &'a oxc_semantic::Semantic<'a>,
-        ctx: &CheckCtx,
-    ) -> Vec<Diagnostic> {
-        if !is_test_file(ctx.path) {
-            return Vec::new();
-        }
-
-        let program = semantic.nodes().program();
-        // k6 load-test scripts declare top-level config at module scope by design
-        // (`let endpoint = __ENV.URL || ...`, `export let options`); the k6 CLI
-        // reads them, so the top-level-side-effect check does not apply.
-        if is_k6_script(program) {
-            return Vec::new();
-        }
-        let node_test_mode = imports_node_test(program);
-        let package_bindings = package_import_bindings(program);
-        // A file with no test-framework hook context (no `describe`/`it`/`test`/
-        // hook/`Deno.test`/fixture-runner call, no `node:test` import) is a
-        // script-mode `*.test.ts`, not a hook-based suite. There is nowhere to
-        // move setup into, so the rule does not apply.
-        if !node_test_mode && !file_has_test_framework_context(program, &package_bindings) {
-            return Vec::new();
-        }
-        let wrapper_decl_ids = local_test_suite_wrapper_decl_ids(semantic);
-        let mut diagnostics = Vec::new();
-
-        for stmt in &program.body {
-            if top_level_is_allowed(
-                stmt,
-                node_test_mode,
-                &package_bindings,
-                &wrapper_decl_ids,
-                semantic,
-            ) {
-                continue;
-            }
-            let span = stmt.span();
-            let (line, column) = byte_offset_to_line_col(ctx.source, span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message:
-                    "Top-level side effect in a test file — move it into a `beforeEach` or `beforeAll` hook."
-                        .into(),
-                severity: Severity::Error,
-                span: Some((span.start as usize, (span.end - span.start) as usize)),
-            });
-        }
-
-        diagnostics
     }
 }

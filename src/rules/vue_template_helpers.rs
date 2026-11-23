@@ -470,9 +470,35 @@ pub fn is_vue_builtin_element(tag: &str) -> bool {
 /// spellings; HTML tag names are case-insensitive, so [`is_obsolete_html_tag`]
 /// compares case-insensitively.
 const OBSOLETE_HTML_TAGS: &[&str] = &[
-    "acronym", "applet", "basefont", "bgsound", "big", "blink", "center", "dir", "font", "frame",
-    "frameset", "isindex", "keygen", "listing", "marquee", "menuitem", "multicol", "nextid", "nobr",
-    "noembed", "noframes", "param", "plaintext", "rb", "rtc", "spacer", "strike", "tt", "xmp",
+    "acronym",
+    "applet",
+    "basefont",
+    "bgsound",
+    "big",
+    "blink",
+    "center",
+    "dir",
+    "font",
+    "frame",
+    "frameset",
+    "isindex",
+    "keygen",
+    "listing",
+    "marquee",
+    "menuitem",
+    "multicol",
+    "nextid",
+    "nobr",
+    "noembed",
+    "noframes",
+    "param",
+    "plaintext",
+    "rb",
+    "rtc",
+    "spacer",
+    "strike",
+    "tt",
+    "xmp",
 ];
 
 /// True when `tag` names an obsolete/deprecated native HTML element (see
@@ -706,7 +732,10 @@ mod tests {
 
     #[test]
     fn template_lang_none_when_absent() {
-        assert_eq!(template_lang("<template>\n  <div></div>\n</template>"), None);
+        assert_eq!(
+            template_lang("<template>\n  <div></div>\n</template>"),
+            None
+        );
     }
 
     #[test]
@@ -844,7 +873,8 @@ mod tests {
     fn element_line_is_the_tag_s_own_line() {
         // The `<input>` opening tag spans three lines, so a `line` taken from
         // the terminating `>` would report 5 instead of 3.
-        let source = "<template>\n  <div>\n    <input\n      type=\"text\"\n    >\n  </div>\n</template>";
+        let source =
+            "<template>\n  <div>\n    <input\n      type=\"text\"\n    >\n  </div>\n</template>";
         let lines: Vec<usize> = extract_elements(source).iter().map(|e| e.line).collect();
         assert_eq!(lines, vec![2, 3]);
     }
@@ -1115,7 +1145,8 @@ mod tests {
     #[test]
     fn enclosing_label_handles_multiline_attrs() {
         // The wrapping tag's `>` is several lines down; the scan still finds it.
-        let src = "<label\n  class=\"a\"\n  @click.stop=\"t\"\n>\n  <input :checked=\"f\" />\n</label>";
+        let src =
+            "<label\n  class=\"a\"\n  @click.stop=\"t\"\n>\n  <input :checked=\"f\" />\n</label>";
         let pos = src.find("/>").unwrap();
         assert!(enclosing_label(src, pos).is_some_and(|a| a.contains("@click.stop")));
     }

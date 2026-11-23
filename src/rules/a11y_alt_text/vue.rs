@@ -45,8 +45,8 @@ impl TextCheck for Check {
                         ));
                     }
                 }
-                "input" => {
-                    if elem.attrs.contains("type=\"image\"") && !has_attr(elem.attrs, "alt") {
+                "input"
+                    if elem.attrs.contains("type=\"image\"") && !has_attr(elem.attrs, "alt") => {
                         diagnostics.push(Diagnostic::at_offset(
                             std::sync::Arc::clone(&ctx.path_arc),
                             ctx.source,
@@ -57,7 +57,6 @@ impl TextCheck for Check {
                             Severity::Error,
                         ));
                     }
-                }
                 _ => {}
             }
         }

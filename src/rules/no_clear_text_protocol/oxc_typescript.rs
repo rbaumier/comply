@@ -22,6 +22,7 @@ const STRING_MATCHING_METHODS: &[&str] = &["startsWith", "endsWith", "includes",
 ///   - an argument of `x.startsWith/endsWith/includes/match("http://…")`, or
 ///   - an operand of an equality `BinaryExpression` (`===`/`!==`/`==`/`!=`),
 ///     e.g. `ns === "http://…"`.
+///
 /// Connection contexts — `fetch("http://…")`, `new URL("http://…")`,
 /// `el.src = "http://…"` — are not matched here and still flag.
 fn is_string_matching_context<'a>(

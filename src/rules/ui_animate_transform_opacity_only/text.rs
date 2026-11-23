@@ -209,8 +209,8 @@ fn pinned_ends(offsets: &str) -> Pins {
     let mut pins = Pins::default();
     for offset in offsets.split(',') {
         match offset_percent(offset) {
-            Some(percent) if percent == 0.0 => pins.start = true,
-            Some(percent) if percent == 100.0 => pins.end = true,
+            Some(0.0) => pins.start = true,
+            Some(100.0) => pins.end = true,
             _ => {}
         }
     }

@@ -30,8 +30,7 @@ fn chain_methods<'a>(call: &'a oxc_ast::ast::CallExpression<'a>) -> Vec<(&'a str
     out.push((member.property.name.as_str(), call.span));
 
     let mut cur = &member.object;
-    loop {
-        let Expression::CallExpression(inner) = cur else { break };
+    while let Expression::CallExpression(inner) = cur {
         let Expression::StaticMemberExpression(m) = &inner.callee else { break };
         out.push((m.property.name.as_str(), inner.span));
         cur = &m.object;

@@ -442,9 +442,9 @@ mod tests {
             is_string_literal_const: false,
         };
         // Pure re-export hub → barrel.
-        assert!(target_is_genuine_barrel(&[reexport.clone()]));
+        assert!(target_is_genuine_barrel(std::slice::from_ref(&reexport)));
         // Own implementation present → not a barrel.
-        assert!(!target_is_genuine_barrel(&[own.clone()]));
+        assert!(!target_is_genuine_barrel(std::slice::from_ref(&own)));
         assert!(!target_is_genuine_barrel(&[reexport, own]));
         // No exports at all → not classifiable as a barrel.
         assert!(!target_is_genuine_barrel(&[]));

@@ -135,13 +135,12 @@ fn is_inside_mutation_hook_method<'a>(
             }
             // Object property whose value is the hook callback:
             // `{ onBeforeCompile: (shader) => {} }` / `{ onBeforeCompile() {} }`.
-            AstKind::ObjectProperty(prop) => {
+            AstKind::ObjectProperty(prop)
                 if static_key_name(&prop.key)
                     .is_some_and(|name| MUTATION_HOOK_METHODS.contains(&name))
-                {
+                => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

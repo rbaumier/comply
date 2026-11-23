@@ -212,8 +212,8 @@ mod tests {
         );
     }
 
-    /// Counterpart of #7295: a `pub *Error` enum that *does* hand-roll `Display`
-    /// + `impl std::error::Error` (typst's `path.rs` error types) still has the
+    /// Counterpart of #7295: a `pub *Error` enum that *does* hand-roll
+    /// `Display` + `impl std::error::Error` (typst's `path.rs` error types) still has the
     /// boilerplate the derive replaces, so it stays flagged.
     #[test]
     fn still_flags_pub_error_enum_with_hand_rolled_display_and_error() {

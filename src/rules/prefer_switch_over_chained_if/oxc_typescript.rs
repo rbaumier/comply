@@ -71,14 +71,9 @@ impl OxcCheck for Check {
 fn count_chained_arms(stmt: &oxc_ast::ast::IfStatement) -> usize {
     let mut arms = 1;
     let mut current = stmt;
-    loop {
-        match &current.alternate {
-            Some(Statement::IfStatement(next)) => {
-                arms += 1;
-                current = next;
-            }
-            _ => break,
-        }
+    while let Some(Statement::IfStatement(next)) = &current.alternate {
+        arms += 1;
+        current = next;
     }
     arms
 }

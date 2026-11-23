@@ -101,7 +101,7 @@ pub(super) fn declares_pg_enum(text: &str) -> bool {
 /// values are always single-quoted string literals; a DDL builder interpolates
 /// them, so its literal text carries none.
 fn enum_value_list_has_literal(after_enum: &[u8]) -> bool {
-    after_enum.iter().any(|&b| b == b'\'')
+    after_enum.contains(&b'\'')
 }
 
 #[cfg(test)]

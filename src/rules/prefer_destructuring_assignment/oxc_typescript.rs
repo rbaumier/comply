@@ -17,7 +17,7 @@ fn extract_object_name<'a>(stmt: &'a Statement<'a>, source: &'a str) -> Option<&
         return None;
     }
     let declarator = &decl.declarations[0];
-    let Some(ref init) = declarator.init else { return None };
+    let init = declarator.init.as_ref()?;
     let Expression::StaticMemberExpression(member) = init else { return None };
     let Expression::Identifier(obj) = &member.object else { return None };
     let name = obj.name.as_str();

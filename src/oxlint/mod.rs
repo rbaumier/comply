@@ -85,7 +85,12 @@ pub fn lint_files(
 
     let mut all = Vec::new();
     if !standard_oxlint.is_empty() {
-        all.extend(lint_files_with_bindings(files, config, &standard_oxlint, false)?);
+        all.extend(lint_files_with_bindings(
+            files,
+            config,
+            &standard_oxlint,
+            false,
+        )?);
     }
 
     let type_aware_ts = type_aware_files(files);
@@ -105,7 +110,11 @@ pub fn lint_files(
                 let output = invoke_oxlint(&program_ts, Some(oxlint_config.path()), true)?;
                 let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
                 let changed = changed_path_set(&type_aware_ts);
-                all.extend(all_diags.into_iter().filter(|d| changed.contains(d.path.as_ref())));
+                all.extend(
+                    all_diags
+                        .into_iter()
+                        .filter(|d| changed.contains(d.path.as_ref())),
+                );
             }
         } else {
             all.extend(lint_files_with_bindings(
@@ -141,7 +150,11 @@ pub fn lint_files(
                 let output = invoke_oxlint(&program_esm, Some(oxlint_config.path()), true)?;
                 let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
                 let changed = changed_path_set(&type_aware_esm);
-                all.extend(all_diags.into_iter().filter(|d| changed.contains(d.path.as_ref())));
+                all.extend(
+                    all_diags
+                        .into_iter()
+                        .filter(|d| changed.contains(d.path.as_ref())),
+                );
             }
         } else {
             all.extend(lint_files_with_bindings(
@@ -189,7 +202,9 @@ pub fn lint_files(
                 .entry(d.path.to_path_buf())
                 .or_insert_with(|| std::fs::read_to_string(d.path.as_ref()).ok())
                 .as_deref();
-            filter_vec.iter().all(|f| f.keep_with_project(d, source, project))
+            filter_vec
+                .iter()
+                .all(|f| f.keep_with_project(d, source, project))
         });
     }
 
@@ -543,7 +558,9 @@ fn tsgolint_panic_summary(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     let stdout = String::from_utf8_lossy(stdout);
     let stderr = String::from_utf8_lossy(stderr);
     let combined = format!("{stdout}\n{stderr}");
-    let panic_line = combined.lines().find(|l| l.trim_start().starts_with("panic:"))?;
+    let panic_line = combined
+        .lines()
+        .find(|l| l.trim_start().starts_with("panic:"))?;
     let is_go_panic = combined.contains("goroutine ")
         && (combined.contains("typescript-go") || combined.contains("tsgolint"));
     if !is_go_panic {
@@ -718,7 +735,10 @@ mod tests {
         // retry rewrites nothing and cannot turn this into a false recovery.
         let remap = FxHashMap::default();
         let result = parse_json_bytes(b"{ not json", b"some unrelated stderr", &remap);
-        assert!(result.is_err(), "a non-panic parse failure must still error");
+        assert!(
+            result.is_err(),
+            "a non-panic parse failure must still error"
+        );
     }
 
     #[test]
@@ -768,7 +788,10 @@ mod tests {
             \"filename\": \"/tmp/x.ts\", \"labels\": [{\"span\": {\"line\": 2, \"column\": 3}}]}] }";
         let result = parse_json_bytes(json, b"", &remap).expect("must parse");
         assert_eq!(result.len(), 1);
-        assert!(result[0].message.contains('"'), "the quote is kept verbatim");
+        assert!(
+            result[0].message.contains('"'),
+            "the quote is kept verbatim"
+        );
         assert!(!result[0].message.chars().any(char::is_control));
     }
 
@@ -870,8 +893,16 @@ mod tests {
         let type_aware = type_aware_files(&files);
 
         assert_eq!(type_aware.len(), 2);
-        assert!(type_aware.iter().any(|file| file.path.ends_with("server.ts")));
-        assert!(type_aware.iter().any(|file| file.path.ends_with("view.tsx")));
+        assert!(
+            type_aware
+                .iter()
+                .any(|file| file.path.ends_with("server.ts"))
+        );
+        assert!(
+            type_aware
+                .iter()
+                .any(|file| file.path.ends_with("view.tsx"))
+        );
     }
 
     #[test]
@@ -919,7 +950,10 @@ mod tests {
             }
             std::fs::write(&p, content).unwrap();
             let lang = crate::files::Language::from_path(&p).unwrap();
-            source_files.push(SourceFile { path: p, language: lang });
+            source_files.push(SourceFile {
+                path: p,
+                language: lang,
+            });
         }
         let refs: Vec<&SourceFile> = source_files.iter().collect();
         let project = ProjectCtx::load(&refs, &Config::default());

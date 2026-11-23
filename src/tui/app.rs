@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::Arc;
@@ -470,10 +470,11 @@ impl App {
             return;
         }
         if let Row::Group { ref key, expanded } = self.visible_rows[self.cursor]
-            && !expanded {
-                self.expanded_groups.insert(key.clone());
-                self.rebuild();
-            }
+            && !expanded
+        {
+            self.expanded_groups.insert(key.clone());
+            self.rebuild();
+        }
     }
 
     pub fn collapse(&mut self) {

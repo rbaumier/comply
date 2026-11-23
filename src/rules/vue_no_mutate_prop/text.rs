@@ -164,9 +164,9 @@ fn prop_mutation_column(line: &str) -> Option<usize> {
                         return Some(start);
                     }
                 }
-                '<' | '>' => {
+                '<' | '>'
                     // `<<=`, `>>=`, `>>>=` are assignments.
-                    if next == Some(c) {
+                    if next == Some(c) => {
                         // Look ahead for `=`.
                         let mut q = p + 2;
                         if c == '>' && q < bytes.len() && bytes[q] as char == '>' {
@@ -176,7 +176,6 @@ fn prop_mutation_column(line: &str) -> Option<usize> {
                             return Some(start);
                         }
                     }
-                }
                 _ => {}
             }
         }

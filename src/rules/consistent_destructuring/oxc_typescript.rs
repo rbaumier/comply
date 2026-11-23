@@ -368,6 +368,42 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
+/// Resolve `expr` to the symbol of its binding when it is a plain identifier
+/// reference. Returns `None` for `this`, member chains, or unresolved globals,
+/// which have no single binding to key matching on.
+fn identifier_symbol(expr: &Expression, semantic: &oxc_semantic::Semantic) -> Option<SymbolId> {
+    let Expression::Identifier(ident) = expr else {
+        return None;
+    };
+    let ref_id = ident.reference_id.get()?;
+    semantic.scoping().get_reference(ref_id).symbol_id()
+}
+
+/// Build the mutation key for a write target `obj.prop`, matching the key used
+/// for read candidates: the object's binding symbol, its source text, and the
+/// property name.
+fn write_key(
+    member: &StaticMemberExpression,
+    source: &str,
+    semantic: &oxc_semantic::Semantic,
+) -> (Option<SymbolId>, String, String) {
+    let obj_text =
+        &source[member.object.span().start as usize..member.object.span().end as usize];
+    (
+        identifier_symbol(&member.object, semantic),
+        obj_text.to_string(),
+        member.property.name.to_string(),
+    )
+}
+
+fn is_simple_expression(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(_) | Expression::ThisExpression(_) => true,
+        Expression::StaticMemberExpression(mem) => is_simple_expression(&mem.object),
+        _ => false,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,41 +835,5 @@ mod tests {
         let diags = run(code);
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("plain"));
-    }
-}
-
-/// Resolve `expr` to the symbol of its binding when it is a plain identifier
-/// reference. Returns `None` for `this`, member chains, or unresolved globals,
-/// which have no single binding to key matching on.
-fn identifier_symbol(expr: &Expression, semantic: &oxc_semantic::Semantic) -> Option<SymbolId> {
-    let Expression::Identifier(ident) = expr else {
-        return None;
-    };
-    let ref_id = ident.reference_id.get()?;
-    semantic.scoping().get_reference(ref_id).symbol_id()
-}
-
-/// Build the mutation key for a write target `obj.prop`, matching the key used
-/// for read candidates: the object's binding symbol, its source text, and the
-/// property name.
-fn write_key(
-    member: &StaticMemberExpression,
-    source: &str,
-    semantic: &oxc_semantic::Semantic,
-) -> (Option<SymbolId>, String, String) {
-    let obj_text =
-        &source[member.object.span().start as usize..member.object.span().end as usize];
-    (
-        identifier_symbol(&member.object, semantic),
-        obj_text.to_string(),
-        member.property.name.to_string(),
-    )
-}
-
-fn is_simple_expression(expr: &Expression) -> bool {
-    match expr {
-        Expression::Identifier(_) | Expression::ThisExpression(_) => true,
-        Expression::StaticMemberExpression(mem) => is_simple_expression(&mem.object),
-        _ => false,
     }
 }

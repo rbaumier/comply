@@ -15,7 +15,7 @@ pub struct Check;
 /// (`extends`/`implements`/`{`, or `=` for aliases). A first `<` that appears
 /// after that boundary belongs to a superclass type argument (`extends
 /// Base<T>`) or a return type, not to this signature.
-fn extract_generics_between<'a>(code: &'a str) -> Option<&'a str> {
+fn extract_generics_between(code: &str) -> Option<&str> {
     let first_line = code
         .lines()
         .map(str::trim_start)
@@ -26,11 +26,10 @@ fn extract_generics_between<'a>(code: &'a str) -> Option<&'a str> {
         None => first_line,
     };
     let open = head.find('<')?;
-    if let Some(boundary) = own_params_boundary(head) {
-        if open > boundary {
+    if let Some(boundary) = own_params_boundary(head)
+        && open > boundary {
             return None;
         }
-    }
     let close = open + matching_angle(&head[open..])?;
     let between = &head[open + 1..close];
     if between.trim().is_empty() {

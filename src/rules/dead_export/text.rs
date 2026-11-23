@@ -1180,11 +1180,10 @@ fn collect_in_file_referenced_names(source: &str, lang: crate::files::Language) 
 fn collect_type_identifiers(node: tree_sitter::Node, source: &[u8], out: &mut FxHashSet<String>) {
     let mut stack = vec![node];
     while let Some(n) = stack.pop() {
-        if n.kind() == "type_identifier" {
-            if let Ok(text) = n.utf8_text(source) {
+        if n.kind() == "type_identifier"
+            && let Ok(text) = n.utf8_text(source) {
                 out.insert(text.to_string());
             }
-        }
         for child in n.named_children(&mut n.walk()) {
             if child.kind() == "statement_block" {
                 continue;

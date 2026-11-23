@@ -20,10 +20,7 @@ fn exit_code_zero_on_clean_file() {
         "test('ok', () => {});\n",
     )
     .unwrap();
-    common::comply()
-        .arg(&path)
-        .assert()
-        .success();
+    common::comply().arg(&path).assert().success();
 }
 
 #[test]
@@ -32,10 +29,7 @@ fn exit_code_one_on_violations() {
         "bad.ts",
         "function handleClick() { throw new Error('boom'); }\n",
     );
-    common::comply()
-        .arg(&path)
-        .assert()
-        .code(1);
+    common::comply().arg(&path).assert().code(1);
 }
 
 #[test]
@@ -82,10 +76,7 @@ fn unknown_extension_is_skipped_silently() {
 #[test]
 fn empty_directory_returns_clean() {
     let dir = TempDir::new().unwrap();
-    common::comply()
-        .arg(dir.path())
-        .assert()
-        .success();
+    common::comply().arg(dir.path()).assert().success();
 }
 
 // Regression for #5941: type-aware is on by default, but a project with no
@@ -111,13 +102,10 @@ fn no_tsconfig_does_not_fail_type_aware() {
         "test('ok', () => {});\n",
     )
     .unwrap();
-    common::comply()
-        .arg(&path)
-        .assert()
-        .stderr(
-            predicate::str::contains("no tsconfig.json found")
-                .or(predicate::str::contains("needs Node.js on PATH")),
-        );
+    common::comply().arg(&path).assert().stderr(
+        predicate::str::contains("no tsconfig.json found")
+            .or(predicate::str::contains("needs Node.js on PATH")),
+    );
 }
 
 #[test]

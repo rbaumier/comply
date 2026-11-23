@@ -938,11 +938,10 @@ impl OxcCheck for Check {
                 }
                 _ => None,
             };
-            if let Some(text) = body_text {
-                if text.contains("Result.await") || text.contains("Result.gen") {
+            if let Some(text) = body_text
+                && (text.contains("Result.await") || text.contains("Result.gen")) {
                     continue;
                 }
-            }
 
             // Arrow with concise-body returning a value (`async () => X`).
             // The companion `promise-function-async` rule mandates the

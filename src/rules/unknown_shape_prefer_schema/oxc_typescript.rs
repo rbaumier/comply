@@ -243,11 +243,10 @@ fn classify<'a>(bin: &'a BinaryExpression<'a>) -> Option<(&'a IdentifierReferenc
                 }
             }
             // `v === <literal>` — one leg of a hand-rolled literal union.
-            Expression::Identifier(ident) => {
-                if is_shape_literal(other) {
+            Expression::Identifier(ident)
+                if is_shape_literal(other) => {
                     return Some((ident, ReadKind::BaseLiteral));
                 }
-            }
             _ => {}
         }
     }

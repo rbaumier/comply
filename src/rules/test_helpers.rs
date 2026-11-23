@@ -275,7 +275,9 @@ pub fn run_rule_in_indexed_files(check: &dyn RunRule, files: &[(&str, &str)]) ->
         let language = Language::from_path(&path).unwrap_or(Language::Rust);
         written.push((SourceFile { path, language }, source));
     }
-    let (leaf, leaf_source) = written.last().expect("at least one file to run the rule on");
+    let (leaf, leaf_source) = written
+        .last()
+        .expect("at least one file to run the rule on");
     let leaf_path = leaf.path.clone();
     let refs: Vec<&SourceFile> = written.iter().map(|(file, _)| file).collect();
     let project = ProjectCtx::for_test_with_files(&refs);
@@ -341,7 +343,10 @@ pub fn k8s_project_from_sources(
         let path = dir.path().join(name);
         std::fs::write(&path, source).expect("write yaml fixture");
         paths.push(path.clone());
-        files.push(SourceFile { path, language: Language::Yaml });
+        files.push(SourceFile {
+            path,
+            language: Language::Yaml,
+        });
     }
     let refs: Vec<&SourceFile> = files.iter().collect();
     let project = ProjectCtx::for_test_with_files(&refs);
@@ -391,12 +396,7 @@ mod tests {
             lang,
             project,
         );
-        let normal_file = FileCtx::build(
-            std::path::Path::new("app/page.tsx"),
-            src,
-            lang,
-            project,
-        );
+        let normal_file = FileCtx::build(std::path::Path::new("app/page.tsx"), src, lang, project);
         assert!(
             rule.meta.applies_to_file(&normal_file),
             "rule must apply on a normal path"
@@ -407,4 +407,3 @@ mod tests {
         );
     }
 }
-

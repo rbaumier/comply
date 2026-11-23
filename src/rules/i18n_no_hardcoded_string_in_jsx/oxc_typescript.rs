@@ -111,7 +111,7 @@ mod tests {
         use oxc_parser::Parser as OxcParser;
         use oxc_semantic::SemanticBuilder;
         use oxc_span::SourceType;
-        use std::path::Path;
+        
 
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("package.json"), pkg_json).unwrap();

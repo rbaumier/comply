@@ -357,14 +357,13 @@ fn collect_free_references(node: tree_sitter::Node, source: &[u8], out: &mut Vec
             // Callee of a call expression — imported/module-scope
             // functions don't vary per-render, so they aren't cache
             // inputs. `fetchUser(userId)` should flag only `userId`.
-            "call_expression" => {
+            "call_expression"
                 if parent
                     .child_by_field_name("function")
                     .is_some_and(|f| f == n)
-                {
+                => {
                     return;
                 }
-            }
             _ => {}
         }
         if let Ok(text) = n.utf8_text(source) {
@@ -460,14 +459,10 @@ fn collect_module_scope_bindings(
             "export_statement" => {
                 let mut inner = child.walk();
                 for c in child.named_children(&mut inner) {
-                    walk_subtree(c, &mut |n| match n.kind() {
-                        "identifier" => {
-                            if let Ok(text) = n.utf8_text(source) {
-                                out.insert(text.to_string());
-                            }
-                        }
-                        _ => {}
-                    });
+                    walk_subtree(c, &mut |n| if n.kind() == "identifier"
+                        && let Ok(text) = n.utf8_text(source) {
+                            out.insert(text.to_string());
+                        });
                 }
             }
             _ => {}

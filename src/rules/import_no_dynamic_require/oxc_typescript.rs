@@ -43,12 +43,11 @@ impl OxcCheck for Check {
         // Check if the argument is a static string literal
         match first_arg {
             Argument::StringLiteral(_) => return, // static
-            Argument::TemplateLiteral(tpl) => {
+            Argument::TemplateLiteral(tpl)
                 // Template strings with no expressions are static
-                if tpl.expressions.is_empty() {
+                if tpl.expressions.is_empty() => {
                     return;
                 }
-            }
             _ => {}
         }
 

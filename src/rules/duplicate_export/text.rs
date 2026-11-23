@@ -78,7 +78,6 @@
 //! paths in the message are shown relative to the project root.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::project::ProjectCtx;
 use crate::project::import_index::ExportKind;
 use crate::rules::backend::{CheckCtx, TextCheck};
 use rustc_hash::{FxHashMap, FxHashSet};

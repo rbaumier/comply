@@ -123,7 +123,15 @@ fn entry_with_filter(
         },
         backends: TS_FAMILY
             .iter()
-            .map(|&lang| (lang, Backend::Oxlint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) }))
+            .map(|&lang| {
+                (
+                    lang,
+                    Backend::Oxlint {
+                        rule: oxlint_key,
+                        post_filter: post_filter.as_ref().map(Arc::clone),
+                    },
+                )
+            })
             .collect(),
     }
 }
@@ -192,8 +200,7 @@ fn is_css_custom_prop_cast_fp(src: &str, line_1based: usize) -> bool {
     let start = line_1based - 1;
     let end = (line_1based + 14).min(lines.len());
     let window = lines[start..end].join("\n");
-    window.contains("as React.CSSProperties")
-        && (window.contains("\"--") || window.contains("'--"))
+    window.contains("as React.CSSProperties") && (window.contains("\"--") || window.contains("'--"))
 }
 
 fn is_generic_param_bridge_cast(src: &str, line_1based: usize) -> bool {
@@ -212,10 +219,12 @@ fn line_has_generic_param_bridge_cast(line: &str) -> bool {
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
             .unwrap_or(after_as.len());
         let after_ident = after_as[cut..].trim_start();
-        if let Some(inner) = balanced_angle_inner(after_ident) {
-            if split_top_level(inner).iter().any(|a| is_generic_param_name(a)) {
-                return true;
-            }
+        if let Some(inner) = balanced_angle_inner(after_ident)
+            && split_top_level(inner)
+                .iter()
+                .any(|a| is_generic_param_name(a))
+        {
+            return true;
         }
         from += rel + 4;
     }
@@ -326,8 +335,7 @@ mod tests {
             .expect("needle not in source")
     }
 
-    const NUTA: &str = "typescript/no-unsafe-type-assertion";
-    const f: NoUnsafeTypeAssertionFilter = NoUnsafeTypeAssertionFilter;
+    const F: NoUnsafeTypeAssertionFilter = NoUnsafeTypeAssertionFilter;
 
     // ── from-any (Closes #572) ────────────────────────────────────────────
 
@@ -337,7 +345,7 @@ mod tests {
             Path::new("/tmp/x.ts"),
             "Unsafe assertion from any detected: consider using type guards.",
         );
-        assert!(!f.keep(&d, None));
+        assert!(!F.keep(&d, None));
     }
 
     #[test]
@@ -346,7 +354,7 @@ mod tests {
             Path::new("/tmp/x.ts"),
             "Unsafe assertion from string detected: consider using type guards.",
         );
-        assert!(f.keep(&d, None));
+        assert!(F.keep(&d, None));
     }
 
     #[test]
@@ -355,7 +363,7 @@ mod tests {
             Path::new("/tmp/x.ts"),
             "Unsafe assertion to Foo detected: consider a more specific type.",
         );
-        assert!(f.keep(&d, None));
+        assert!(F.keep(&d, None));
     }
 
     // ── test files (Closes #573) ──────────────────────────────────────────
@@ -363,14 +371,14 @@ mod tests {
     #[test]
     fn drops_in_test_file() {
         let d = diag_at(Path::new("src/api/foo.test.ts"), 1);
-        assert!(!f.keep(&d, None));
+        assert!(!F.keep(&d, None));
     }
 
     #[test]
     fn keeps_in_production_file() {
         let d = diag_at(Path::new("src/api/foo.ts"), 1);
         // No source needed — test-path check comes first.
-        assert!(f.keep(&d, None));
+        assert!(F.keep(&d, None));
     }
 
     // ── CSS custom properties (Closes #569) ──────────────────────────────
@@ -382,7 +390,7 @@ mod tests {
         let line = line_of(src, "\"--my-var\"");
         let src_content = std::fs::read_to_string(&path).unwrap();
         let d = diag_at(&path, line);
-        assert!(!f.keep(&d, Some(&src_content)));
+        assert!(!F.keep(&d, Some(&src_content)));
     }
 
     #[test]
@@ -391,7 +399,7 @@ mod tests {
         let path = write_temp("no_css_custom.ts", src);
         let src_content = std::fs::read_to_string(&path).unwrap();
         let d = diag_at(&path, 1);
-        assert!(f.keep(&d, Some(&src_content)));
+        assert!(F.keep(&d, Some(&src_content)));
     }
 
     // ── generic-parameter bridge (Closes #571) ───────────────────────────
@@ -402,7 +410,7 @@ mod tests {
         let path = write_temp("generic_bridge.ts", src);
         let src_content = std::fs::read_to_string(&path).unwrap();
         let d = diag_at(&path, 1);
-        assert!(!f.keep(&d, Some(&src_content)));
+        assert!(!F.keep(&d, Some(&src_content)));
     }
 
     #[test]
@@ -411,6 +419,6 @@ mod tests {
         let path = write_temp("concrete_generic.ts", src);
         let src_content = std::fs::read_to_string(&path).unwrap();
         let d = diag_at(&path, 1);
-        assert!(f.keep(&d, Some(&src_content)));
+        assert!(F.keep(&d, Some(&src_content)));
     }
 }

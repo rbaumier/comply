@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn flags_done_in_beforeEach() {
+    fn flags_done_in_before_each() {
         let src = r#"beforeEach((done) => { setup(done); });"#;
         assert_eq!(run(src).len(), 1);
     }

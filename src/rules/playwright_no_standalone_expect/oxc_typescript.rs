@@ -87,10 +87,12 @@ fn is_inside_test_or_hook<'a>(
                             }
                     }
                 }
-                // A named function declared at module level is a test helper —
-                // expect() inside it will run in a test context when called.
-                if matches!(parent.kind(), AstKind::Function(_))
-                    && is_module_level_function(parent_id, semantic)
+                // A module-level function kept for later (declaration, constant,
+                // table row) is a helper; one passed to a call runs now.
+                if !matches!(
+                    semantic.nodes().ancestor_kinds(parent_id).next(),
+                    Some(AstKind::CallExpression(_))
+                ) && is_module_level_function(parent_id, semantic)
                 {
                     return true;
                 }
@@ -115,41 +117,6 @@ impl crate::rules::test_helpers::RunRule for Check {
         file: &crate::rules::file_ctx::FileCtx,
     ) -> Vec<crate::diagnostic::Diagnostic> {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
-
-    fn run_ts(source: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
-    }
-
-    #[test]
-    fn flags_standalone_expect() {
-        let d = run_ts("expect(1).toBe(1);");
-        assert_eq!(d.len(), 1);
-    }
-
-    #[test]
-    fn allows_expect_in_test() {
-        let d = run_ts("test('ok', () => { expect(1).toBe(1); });");
-        assert!(d.is_empty());
-    }
-
-    #[test]
-    fn allows_expect_in_helper_called_from_test() {
-        let d = run_ts(r#"
-function assertUrl(page) {
-  expect(page).toHaveURL(/\/dashboard/);
-}
-test('my test', () => {
-  assertUrl(page);
-});
-"#);
-        assert!(d.is_empty(), "expect in helper called from test should be allowed");
     }
 }
 
@@ -197,5 +164,74 @@ impl OxcCheck for Check {
             severity: Severity::Error,
             span: None,
         });
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PW_IMPORT: &str = "import { test, expect } from \"@playwright/test\";\n";
+
+    fn run_ts(source: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule(&Check, &format!("{PW_IMPORT}{source}"), "app.test.ts")
+    }
+
+    #[test]
+    fn flags_standalone_expect() {
+        let d = run_ts("expect(1).toBe(1);");
+        assert_eq!(d.len(), 1);
+    }
+
+    #[test]
+    fn allows_expect_in_test() {
+        let d = run_ts("test('ok', () => { expect(1).toBe(1); });");
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn allows_expect_in_helper_called_from_test() {
+        let d = run_ts(r#"
+function assertUrl(page) {
+  expect(page).toHaveURL(/\/dashboard/);
+}
+test('my test', () => {
+  assertUrl(page);
+});
+"#);
+        assert!(d.is_empty(), "expect in helper called from test should be allowed");
+    }
+
+    #[test]
+    fn allows_expect_in_module_level_arrow_constant() {
+        let d = run_ts(r#"
+const check = async (page) => {
+  expect(page).toHaveURL(/\/dashboard/);
+};
+test('my test', async () => {
+  await check(page);
+});
+"#);
+        assert!(d.is_empty(), "a module-level arrow constant is a helper: {d:?}");
+    }
+
+    #[test]
+    fn allows_expect_in_module_level_table_row_arrow() {
+        let d = run_ts(r#"
+const ROWS = [
+  { action: "add_contact", check: async (answer) => { expect(answer).toContain("ok"); } },
+];
+for (const row of ROWS) {
+  test(row.action, async () => {
+    await row.check("ok");
+  });
+}
+"#);
+        assert!(d.is_empty(), "a module-level table row's arrow is a helper: {d:?}");
+    }
+
+    #[test]
+    fn flags_expect_in_arrow_passed_to_non_test_call() {
+        let d = run_ts("[1, 2].forEach((n) => { expect(n).toBe(n); });");
+        assert_eq!(d.len(), 1, "a callback passed to a module-level call runs outside any test");
     }
 }
