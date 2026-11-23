@@ -4699,15 +4699,14 @@ fn element_int_type(declared: &str) -> Option<&str> {
         inner.split(';').next().unwrap_or(inner).trim()
     } else if let Some(inner) = t.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
         inner.trim()
-    } else if let Some(inner) = t.strip_prefix("Box<").and_then(|s| s.strip_suffix('>')) {
+    } else {
         // `Box<[T]>` — the box wraps a slice.
+        let inner = t.strip_prefix("Box<").and_then(|s| s.strip_suffix('>'))?;
         let slice = inner.trim();
         slice
             .strip_prefix('[')
             .and_then(|s| s.strip_suffix(']'))?
             .trim()
-    } else {
-        return None;
     };
     is_fixed_width_int(element).then_some(element)
 }

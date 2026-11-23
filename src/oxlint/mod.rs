@@ -291,10 +291,7 @@ fn is_jest_test_file(path: &Path) -> bool {
 /// non-test file (e.g. a `test-helpers/tx-test.ts` wrapper) is a false
 /// positive, so keep jest diagnostics only on test files.
 fn keep_delegated_diagnostic(rule_id: &str, path: &Path) -> bool {
-    if is_jest_delegated_rule(rule_id) && !is_jest_test_file(path) {
-        return false;
-    }
-    true
+    !is_jest_delegated_rule(rule_id) || is_jest_test_file(path)
 }
 
 fn es_module_files<'a>(files: &[&'a SourceFile], project: &ProjectCtx) -> Vec<&'a SourceFile> {

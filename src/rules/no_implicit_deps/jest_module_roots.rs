@@ -266,14 +266,10 @@ fn local_source_exists(candidate: &Path) -> bool {
             }
         }
     }
-    if candidate.is_dir()
+    candidate.is_dir()
         && SOURCE_EXTENSIONS
             .iter()
             .any(|ext| candidate.join(format!("index.{ext}")).is_file())
-    {
-        return true;
-    }
-    false
 }
 
 #[cfg(test)]

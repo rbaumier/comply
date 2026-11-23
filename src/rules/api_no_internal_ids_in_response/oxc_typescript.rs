@@ -57,10 +57,7 @@ fn is_internal_field(name: &str) -> bool {
             return true;
         }
     }
-    if name.ends_with("_id") && name.len() > 3 {
-        return true;
-    }
-    false
+    name.ends_with("_id") && name.len() > 3
 }
 
 fn check_members(
