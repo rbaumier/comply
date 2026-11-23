@@ -15,6 +15,8 @@
 //!
 //!    rustc's `unused_crate_dependencies` lint is forced on as well.
 //!    Its verdicts become an [`ExternUsage`] for `rust-unused-dep`.
+//!    From cargo 1.100, cargo swallows them for its `unused_dependencies` lint.
+//!    That lint's stderr reports then join the [`ExternUsage`].
 //!
 //!    Cargo emits one JSON object per line. We parse the stream,
 //!    keep only `compiler-message` rows, filter to spans inside the
@@ -84,6 +86,7 @@ pub fn lint_files(
     if files.is_empty() {
         return Ok((vec![], usage));
     }
+    usage.cargo_lints = cargo_lints_unused_dependencies();
     let bindings = crate::rules::collect_clippy_bindings();
     let remap = remap::build_table(&bindings);
     let lint_args = lint_args(&bindings, config);
@@ -110,7 +113,7 @@ pub fn lint_files(
                     vec!["--workspace".to_owned()]
                 };
                 let output = invoke_clippy(&root, &packages, &lint_args, &clippy_conf_dir)?;
-                usage.record(&output.stdout, &root);
+                usage.record(&output.stdout, &output.stderr, &root);
                 diagnostics.extend(parse_clippy_jsonl(
                     &output.stdout,
                     &root,
@@ -143,6 +146,11 @@ pub fn lint_files(
 /// The lint carries no fix, so `--fix` never edits code for it.
 const UNUSED_EXTERNS_LINT: &str = "--force-warn=unused_crate_dependencies";
 
+/// An extern no code can use, so every target reports it unused.
+/// A target reporting it proves rustc's verdicts reach comply.
+/// cargo 1.100 swallows every such report, the probe's included.
+const LIVENESS_PROBE: &str = "comply_liveness_probe";
+
 /// The `-W`/`-A` flags passed after `--`, shared by lint and `--fix`:
 /// clippy records them in each crate's fingerprint, so any difference
 /// between the two modes re-lints the workspace when one follows the other.
@@ -152,6 +160,11 @@ pub(crate) fn lint_args(
 ) -> Vec<String> {
     let mut args = build_lint_args(bindings);
     args.push(UNUSED_EXTERNS_LINT.to_owned());
+    // rustc only reads the file of an extern some code uses.
+    args.push("--extern".to_owned());
+    args.push(format!(
+        "{LIVENESS_PROBE}=/nonexistent/lib{LIVENESS_PROBE}.rlib"
+    ));
     extend_with_user_enabled(&mut args, config);
     extend_with_user_disabled(&mut args, config);
     args
@@ -252,6 +265,11 @@ fn invoke_clippy(
         "--all-targets",
         "--message-format=json",
         "--quiet",
+        // `cargo_reports` reads cargo's lint reports as plain text.
+        "--color=never",
+        // A `build.warnings = "allow"` would hide them.
+        "--config",
+        "build.warnings=\"warn\"",
         "--manifest-path",
     ]);
     cmd.arg(&manifest);
@@ -422,6 +440,8 @@ fn is_lint_level_note(message: &str) -> bool {
 #[derive(Debug, Default)]
 pub struct ExternUsage {
     packages: FxHashMap<PathBuf, PackageExterns>,
+    /// cargo runs its `unused_dependencies` lint.
+    cargo_lints: bool,
 }
 
 /// rustc's verdicts on the targets of one package.
@@ -429,10 +449,16 @@ pub struct ExternUsage {
 pub struct PackageExterns {
     /// Targets cargo reported built, build scripts excluded.
     pub compiled: FxHashSet<(Vec<String>, String)>,
+    /// Targets that reported the liveness probe unused.
+    /// Only their verdicts reached comply.
+    pub live: FxHashSet<(Vec<String>, String)>,
     /// Externs rustc reported unused, per target.
     pub unused: FxHashMap<(Vec<String>, String), FxHashSet<String>>,
     /// rustc reported an unused extern without naming it readably.
     pub unreadable: bool,
+    /// The keys cargo's `unused_dependencies` lint reported.
+    /// `None` unless that lint judged every target of the package.
+    pub cargo_unused: Option<FxHashSet<String>>,
 }
 
 impl ExternUsage {
@@ -441,11 +467,16 @@ impl ExternUsage {
         self.packages.get(&canonicalize_or_self(manifest))
     }
 
-    /// Read the artifacts and unused-extern warnings of one clippy run.
+    /// Read the artifacts and unused-extern reports of one clippy run.
     /// Crates outside `workspace` are dependencies, so they are left out.
-    fn record(&mut self, stdout: &[u8], workspace: &Path) {
+    fn record(&mut self, stdout: &[u8], stderr: &[u8], workspace: &Path) {
         let root = canonicalize_or_self(workspace);
+        let mut succeeded = false;
+        let mut selected = FxHashSet::default();
         for envelope in envelopes(stdout) {
+            if envelope.reason == "build-finished" {
+                succeeded = envelope.success == Some(true);
+            }
             let (Some(manifest), Some(target)) = (envelope.manifest_path, envelope.target) else {
                 continue;
             };
@@ -456,6 +487,9 @@ impl ExternUsage {
             if !manifest.starts_with(&root) {
                 continue;
             }
+            if envelope.profile.is_some_and(|profile| profile.test) {
+                selected.insert(manifest.clone());
+            }
             let package = self.packages.entry(manifest).or_default();
             let key = (target.kind, target.name);
             match (envelope.reason.as_str(), envelope.message) {
@@ -464,6 +498,9 @@ impl ExternUsage {
                 }
                 ("compiler-message", Some(diag)) if is_unused_extern(&diag) => {
                     match diag.message.split('`').nth(1) {
+                        Some(LIVENESS_PROBE) => {
+                            package.live.insert(key);
+                        }
                         Some(name) if !name.is_empty() => {
                             package
                                 .unused
@@ -477,6 +514,83 @@ impl ExternUsage {
                 _ => {}
             }
         }
+        // cargo lints the packages it was asked for, once all built.
+        let reports = cargo_reports(stderr, &root).filter(|_| self.cargo_lints && succeeded);
+        let Some(mut reports) = reports else {
+            return;
+        };
+        for manifest in selected {
+            let unused = reports.remove(&manifest).unwrap_or_default();
+            self.packages.entry(manifest).or_default().cargo_unused = Some(unused);
+        }
+    }
+}
+
+/// The keys cargo's `unused_dependencies` lint reported, per manifest.
+/// Each report reads ``warning: unused dependency `key` ``.
+/// Its next line reads ` --> path:line:column`, relative to `root`.
+/// `None` when one report is unreadable.
+fn cargo_reports(stderr: &[u8], root: &Path) -> Option<FxHashMap<PathBuf, FxHashSet<String>>> {
+    let text = String::from_utf8_lossy(stderr);
+    let mut lines = text.lines();
+    let mut reports: FxHashMap<PathBuf, FxHashSet<String>> = FxHashMap::default();
+    while let Some(line) = lines.next() {
+        if !line.contains("unused dependency") {
+            continue;
+        }
+        let key = ["warning: ", "error: "]
+            .iter()
+            .find_map(|level| line.strip_prefix(level))?
+            .strip_prefix("unused dependency `")?
+            .strip_suffix('`')?;
+        let path = lines.next()?.trim_start().strip_prefix("--> ")?;
+        let manifest = canonicalize_or_self(&root.join(without_position(path)));
+        reports.entry(manifest).or_default().insert(key.to_owned());
+    }
+    Some(reports)
+}
+
+/// `path` without a trailing `:line:column`.
+fn without_position(path: &str) -> &str {
+    without_number(without_number(path))
+}
+
+/// `text` without a trailing `:` and number.
+fn without_number(text: &str) -> &str {
+    match text.rsplit_once(':') {
+        Some((head, number))
+            if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            head
+        }
+        _ => text,
+    }
+}
+
+/// Whether cargo runs its own `unused_dependencies` lint.
+/// It does from 1.100, swallowing rustc's unused-extern warnings.
+fn cargo_lints_unused_dependencies() -> bool {
+    Command::new("cargo")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|text| {
+            text.split_whitespace()
+                .nth(1)
+                .is_some_and(|version| version_at_least(version, 1, 100))
+        })
+}
+
+/// Whether the `major.minor` that `version` starts with reaches the given one.
+/// `1.79`, `1.100.0` and `1.101.0-nightly` all parse.
+pub(crate) fn version_at_least(version: &str, major: u64, minor: u64) -> bool {
+    let mut parts = version.split(['.', '-']).map(str::parse::<u64>);
+    match (parts.next(), parts.next()) {
+        (Some(Ok(found_major)), Some(Ok(found_minor))) => {
+            (found_major, found_minor) >= (major, minor)
+        }
+        _ => false,
     }
 }
 
@@ -525,13 +639,14 @@ mod tests {
         };
         let stream = [
             line("compiler-message", "lib", &unused("extern crate `idle` is unused in crate `app`")),
+            line("compiler-message", "lib", &unused("extern crate `comply_liveness_probe` is unused in crate `app`")),
             line("compiler-artifact", "lib", ""),
             line("compiler-artifact", "custom-build", ""),
             r#"{"reason":"compiler-artifact","manifest_path":"/registry/dep/Cargo.toml","target":{"name":"dep","kind":["lib"]}}"#.to_owned(),
         ]
         .join("\n");
         let mut usage = ExternUsage::default();
-        usage.record(stream.as_bytes(), &ws);
+        usage.record(stream.as_bytes(), b"", &ws);
 
         let package = usage.package(&app).expect("app is a workspace crate");
         let lib = (vec!["lib".to_owned()], "app".to_owned());
@@ -541,7 +656,9 @@ mod tests {
             "a build script is no target to prove with"
         );
         assert!(package.compiled.contains(&lib));
+        assert!(package.live.contains(&lib));
         assert!(package.unused[&lib].contains("idle"));
+        assert!(!package.unused[&lib].contains(LIVENESS_PROBE));
         assert!(!package.unreadable);
         assert!(
             usage
@@ -552,9 +669,64 @@ mod tests {
         let mut garbled = ExternUsage::default();
         garbled.record(
             line("compiler-message", "lib", &unused("unused crate")).as_bytes(),
+            b"",
             &ws,
         );
         assert!(garbled.package(&app).unwrap().unreadable);
+    }
+
+    /// What cargo 1.100 prints for an unused `idle` in `app`.
+    const CARGO_REPORT: &str = "warning: unused dependency `idle`\n \
+        --> app/Cargo.toml:6:1\n  |\n6 | idle = { path = \"../idle\" }\n  | ^^^^\n  |\n  \
+        = note: `cargo::unused_dependencies` is set to `warn` by default\n\
+        help: consider removing the dependency on `idle`\n";
+
+    /// The `app` package's cargo verdict after one clippy run.
+    fn cargo_verdict(lints: bool, stdout: &str, stderr: &str) -> Option<FxHashSet<String>> {
+        let ws = std::env::temp_dir().join("comply-cargo-reports");
+        let mut usage = ExternUsage {
+            cargo_lints: lints,
+            ..ExternUsage::default()
+        };
+        let stdout = stdout.replace("APP", &ws.join("app/Cargo.toml").display().to_string());
+        usage.record(stdout.as_bytes(), stderr.as_bytes(), &ws);
+        usage
+            .package(&ws.join("app/Cargo.toml"))
+            .and_then(|package| package.cargo_unused.clone())
+    }
+
+    #[test]
+    fn cargo_reports_count_only_where_cargo_judged_every_target() {
+        let artifact = |test: bool| {
+            format!(
+                r#"{{"reason":"compiler-artifact","manifest_path":"APP","target":{{"name":"app","kind":["lib"]}},"profile":{{"test":{test}}}}}"#
+            )
+        };
+        let done = |success: bool| format!(r#"{{"reason":"build-finished","success":{success}}}"#);
+        let judged = format!("{}\n{}\n{}", artifact(false), artifact(true), done(true));
+        let verdict = cargo_verdict(true, &judged, CARGO_REPORT).expect("cargo judged app");
+        assert_eq!(verdict, ["idle".to_owned()].into_iter().collect());
+        assert_eq!(cargo_verdict(true, &judged, ""), Some(FxHashSet::default()));
+        // Before 1.100, cargo has no such lint: its silence is empty.
+        assert_eq!(cargo_verdict(false, &judged, ""), None);
+        // A failed unit never reported its unused externs to cargo.
+        let failed = format!("{}\n{}\n{}", artifact(false), artifact(true), done(false));
+        assert_eq!(cargo_verdict(true, &failed, ""), None);
+        // Built only as a dependency, the package went unlinted.
+        let dependency = format!("{}\n{}", artifact(false), done(true));
+        assert_eq!(cargo_verdict(true, &dependency, ""), None);
+        let garbled = "warning: unused dependency idle\n";
+        assert_eq!(cargo_verdict(true, &judged, garbled), None);
+    }
+
+    #[test]
+    fn version_at_least_reads_major_and_minor() {
+        assert!(version_at_least("1.100.0", 1, 100));
+        assert!(version_at_least("1.101.0-nightly", 1, 100));
+        assert!(version_at_least("1.79", 1, 79));
+        assert!(!version_at_least("1.99.1", 1, 100));
+        assert!(!version_at_least("1.75", 1, 79));
+        assert!(!version_at_least("stable", 1, 79));
     }
 
     #[test]

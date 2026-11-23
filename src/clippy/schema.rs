@@ -15,7 +15,7 @@ use serde::de::IgnoredAny;
 
 /// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
 /// Top-level cargo message envelope.
-/// We read `reason`, `message`, `manifest_path` and `target`.
+/// We read `reason`, `message`, `manifest_path`, `target`, `profile` and `success`.
 /// Cargo's other envelope fields are ignored.
 #[derive(Debug, Deserialize)]
 pub struct CargoMessage {
@@ -30,6 +30,22 @@ pub struct CargoMessage {
     /// The target that artifact or message belongs to.
     #[serde(default)]
     pub target: Option<CargoTarget>,
+    /// How cargo built a `compiler-artifact`.
+    #[serde(default)]
+    pub profile: Option<CargoProfile>,
+    /// Whether every unit built, on `build-finished`.
+    #[serde(default)]
+    pub success: Option<bool>,
+    #[serde(default, flatten)]
+    pub _extra: IgnoredAny,
+}
+
+/// The profile of one artifact.
+#[derive(Debug, Deserialize)]
+pub struct CargoProfile {
+    /// Built as a test harness, so its package was selected.
+    #[serde(default)]
+    pub test: bool,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }

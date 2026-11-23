@@ -24,6 +24,8 @@
 //!    It misses code `include!` loads from `OUT_DIR`, like `include_proto!`.
 //!    rustc judges after expansion, through clippy's run.
 //!    `cargo metadata` gives each key the extern name rustc reports.
+//!    From cargo 1.100, rustc's verdicts reach comply through cargo's lint.
+//!    Its silence proves use only where it would have spoken.
 //!
 //! Workspaces are de-duplicated so we don't shell out twice for the same
 //! manifest when many `.rs` files share a parent crate.
@@ -152,15 +154,21 @@ pub fn drop_proven_used(diagnostics: Vec<Diagnostic>, usage: &ExternUsage) -> Ve
                 .or_insert_with_key(|root| read_metadata(root));
             let proven = metadata
                 .as_ref()
-                .and_then(|metadata| plain_extern(metadata, &diag.path, key))
-                .is_some_and(|name| {
-                    usage
-                        .package(&diag.path)
-                        .is_some_and(|package| rustc_kept(package, &name))
-                });
+                .is_some_and(|metadata| proven_used(metadata, usage, &diag.path, key));
             !proven
         })
         .collect()
+}
+
+/// Whether rustc or cargo proves `key` used in `manifest`'s package.
+fn proven_used(metadata: &Metadata, usage: &ExternUsage, manifest: &Path, key: &str) -> bool {
+    let (Some(name), Some(package)) = (
+        plain_extern(metadata, manifest, key),
+        usage.package(manifest),
+    ) else {
+        return false;
+    };
+    rustc_kept(package, &name) || cargo_kept(metadata, package, manifest, &name, key)
 }
 
 /// How long `cargo metadata` may run.
@@ -174,8 +182,14 @@ const METADATA_OUTPUT_CAP: u64 = 64 * 1024 * 1024;
 /// `None` when cargo fails, overruns its deadline or its cap.
 /// `--locked` leaves `Cargo.lock` untouched.
 fn read_metadata(workspace: &Path) -> Option<Metadata> {
+    // Every feature, so the resolve holds each edge clippy builds.
     let mut child = Command::new("cargo")
-        .args(["metadata", "--format-version=1", "--locked"])
+        .args([
+            "metadata",
+            "--format-version=1",
+            "--locked",
+            "--all-features",
+        ])
         .current_dir(workspace)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -216,11 +230,7 @@ fn give_up(mut child: Child) -> Option<Metadata> {
 /// The extern name rustc gives `key` in `manifest`'s package.
 /// `None` unless `key` is a plain dependency, unambiguously named.
 fn plain_extern(metadata: &Metadata, manifest: &Path, key: &str) -> Option<String> {
-    let manifest = canonicalize_or_self(manifest);
-    let package = metadata
-        .packages
-        .iter()
-        .find(|package| canonicalize_or_self(&package.manifest_path) == manifest)?;
+    let package = find_package(metadata, manifest)?;
     let entries: Vec<&MetadataDependency> = package
         .dependencies
         .iter()
@@ -261,16 +271,138 @@ fn plain_extern(metadata: &Metadata, manifest: &Path, key: &str) -> Option<Strin
     externs.all(|other| other == name).then(|| name.to_owned())
 }
 
+/// The package `manifest` declares.
+fn find_package<'a>(metadata: &'a Metadata, manifest: &Path) -> Option<&'a MetadataPackage> {
+    let manifest = canonicalize_or_self(manifest);
+    metadata
+        .packages
+        .iter()
+        .find(|package| canonicalize_or_self(&package.manifest_path) == manifest)
+}
+
 /// Whether one compiled target kept the extern `name`.
+/// Only a target that reported the liveness probe has verdicts.
 /// An unreadable unused-extern warning proves nothing.
 fn rustc_kept(package: &PackageExterns, name: &str) -> bool {
     !package.unreadable
         && package.compiled.iter().any(|target| {
-            !package
-                .unused
-                .get(target)
-                .is_some_and(|unused| unused.contains(name))
+            package.live.contains(target)
+                && !package
+                    .unused
+                    .get(target)
+                    .is_some_and(|unused| unused.contains(name))
         })
+}
+
+/// Whether cargo's `unused_dependencies` lint proves `key` used.
+/// cargo keeps quiet where the lint is allowed.
+/// It also keeps quiet on a dependency another pulls in.
+fn cargo_kept(
+    metadata: &Metadata,
+    package: &PackageExterns,
+    manifest: &Path,
+    name: &str,
+    key: &str,
+) -> bool {
+    let (Some(reported), Some(member)) = (&package.cargo_unused, find_package(metadata, manifest))
+    else {
+        return false;
+    };
+    !reported.contains(key)
+        && lint_warns(member, &metadata.workspace_root)
+        && !pulled_in_elsewhere(metadata, member, name)
+}
+
+/// Whether cargo's `unused_dependencies` lint warns in `package`.
+/// cargo allows it under a `rust-version` older than 1.79.
+/// A `style` or `default` entry leaves its level unknown.
+fn lint_warns(package: &MetadataPackage, workspace_root: &Path) -> bool {
+    let recent = package
+        .rust_version
+        .as_deref()
+        .is_none_or(|version| crate::clippy::version_at_least(version, 1, 79));
+    recent
+        && cargo_lints(&package.manifest_path, workspace_root).is_some_and(|lints| {
+            !lints.contains_key("style")
+                && !lints.contains_key("default")
+                && lints.get("unused_dependencies").is_none_or(|entry| {
+                    let level = entry
+                        .as_str()
+                        .or_else(|| entry.get("level").and_then(toml::Value::as_str));
+                    matches!(level, Some("warn" | "deny" | "forbid"))
+                })
+        })
+}
+
+/// The `[lints.cargo]` table of `manifest`, empty when absent.
+/// `lints.workspace = true` defers to the root's `[workspace.lints]`.
+/// `None` when a manifest is unreadable.
+fn cargo_lints(manifest: &Path, workspace_root: &Path) -> Option<toml::Table> {
+    let own = read_toml(manifest)?;
+    let lints = own.get("lints");
+    let inherited = lints
+        .and_then(|lints| lints.get("workspace"))
+        .and_then(toml::Value::as_bool)
+        == Some(true);
+    let lints = if inherited {
+        read_toml(&workspace_root.join("Cargo.toml"))?
+            .get("workspace")
+            .and_then(|workspace| workspace.get("lints"))
+            .cloned()
+    } else {
+        lints.cloned()
+    };
+    let cargo = lints
+        .as_ref()
+        .and_then(|lints| lints.get("cargo"))
+        .and_then(toml::Value::as_table);
+    Some(cargo.cloned().unwrap_or_default())
+}
+
+/// The TOML document at `path`.
+fn read_toml(path: &Path) -> Option<toml::Value> {
+    fs::read_to_string(path).ok()?.parse().ok()
+}
+
+/// Whether another dependency of `package` pulls in `name`'s package.
+/// The walk skips a dependency's own dev edges only.
+/// A gap in the resolve counts as pulled in.
+fn pulled_in_elsewhere(metadata: &Metadata, package: &MetadataPackage, name: &str) -> bool {
+    let Some(resolve) = &metadata.resolve else {
+        return true;
+    };
+    let nodes: FxHashMap<&str, &MetadataNode> = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let Some(node) = nodes.get(package.id.as_str()) else {
+        return true;
+    };
+    let (direct, others): (Vec<&MetadataEdge>, Vec<&MetadataEdge>) =
+        node.deps.iter().partition(|edge| edge.name == name);
+    let wanted: FxHashSet<&str> = direct.iter().map(|edge| edge.pkg.as_str()).collect();
+    let mut queue: Vec<&str> = others.iter().map(|edge| edge.pkg.as_str()).collect();
+    let mut seen: FxHashSet<&str> = queue.iter().copied().collect();
+    while let Some(id) = queue.pop() {
+        if wanted.contains(id) {
+            return true;
+        }
+        let Some(node) = nodes.get(id) else {
+            return true;
+        };
+        for edge in &node.deps {
+            let dev_only = !edge.dep_kinds.is_empty()
+                && edge
+                    .dep_kinds
+                    .iter()
+                    .all(|kind| kind.kind.as_deref() == Some("dev"));
+            if !dev_only && seen.insert(edge.pkg.as_str()) {
+                queue.push(edge.pkg.as_str());
+            }
+        }
+    }
+    false
 }
 
 /// Convert each shear finding into a comply Diagnostic. We only emit
@@ -367,6 +499,8 @@ struct Metadata {
     /// Absent under `--no-deps`.
     #[serde(default)]
     resolve: Option<MetadataResolve>,
+    #[serde(default)]
+    workspace_root: PathBuf,
     #[serde(default, flatten)]
     _extra: IgnoredAny,
 }
@@ -378,6 +512,9 @@ struct MetadataPackage {
     name: String,
     manifest_path: PathBuf,
     dependencies: Vec<MetadataDependency>,
+    /// The manifest's `rust-version`, like `1.79`.
+    #[serde(default)]
+    rust_version: Option<String>,
     #[serde(default, flatten)]
     _extra: IgnoredAny,
 }
@@ -425,6 +562,19 @@ struct MetadataEdge {
     /// The extern name rustc sees.
     name: String,
     pkg: String,
+    /// The tables declaring this edge.
+    #[serde(default)]
+    dep_kinds: Vec<MetadataDepKind>,
+    #[serde(default, flatten)]
+    _extra: IgnoredAny,
+}
+
+/// One table declaring an edge.
+#[derive(Debug, Deserialize)]
+struct MetadataDepKind {
+    /// `None` for `[dependencies]`, else `dev` or `build`.
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default, flatten)]
     _extra: IgnoredAny,
 }
@@ -509,6 +659,7 @@ mod tests {
         let lib = (vec!["lib".to_owned()], "app".to_owned());
         let mut package = PackageExterns::default();
         package.compiled.insert(lib.clone());
+        package.live.insert(lib.clone());
         package
             .unused
             .insert(lib, names.iter().map(|n| (*n).to_owned()).collect());
@@ -523,6 +674,7 @@ mod tests {
         // A test target leaving `tonic_prost` unused changes nothing.
         let test = (vec!["test".to_owned()], "smoke".to_owned());
         package.compiled.insert(test.clone());
+        package.live.insert(test.clone());
         package
             .unused
             .insert(test, ["tonic_prost".to_owned()].into_iter().collect());
@@ -535,6 +687,95 @@ mod tests {
         unreadable.unreadable = true;
         assert!(!rustc_kept(&unreadable, "prost"));
         assert!(!rustc_kept(&PackageExterns::default(), "prost"));
+    }
+
+    #[test]
+    fn a_target_silent_on_the_liveness_probe_proves_nothing() {
+        // cargo 1.100 swallows every warning: `idle` looks kept.
+        let mut swallowed = lib_leaving_unused(&[]);
+        swallowed.live.clear();
+        assert!(!rustc_kept(&swallowed, "idle"));
+    }
+
+    /// A workspace whose `app` manifest reads `manifest`.
+    /// `app` depends on `used`, which depends on `shared`.
+    /// `idle`, `shared` and `dev_only` are direct dependencies too.
+    fn cargo_workspace(manifest: &str) -> (tempfile::TempDir, Metadata) {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app/Cargo.toml");
+        fs::create_dir_all(app.parent().unwrap()).unwrap();
+        fs::write(&app, manifest).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace.lints.cargo]\nstyle = \"allow\"\n",
+        )
+        .unwrap();
+        let normal = r#""dep_kinds":[{"kind":null}]"#;
+        let dev = r#""dep_kinds":[{"kind":"dev"}]"#;
+        let metadata = serde_json::from_str(&format!(
+            r#"{{"workspace_root":{root:?},"packages":[
+                {{"id":"app","name":"app","manifest_path":{app:?},"dependencies":[
+                    {{"name":"idle"}},{{"name":"used"}},{{"name":"shared"}},{{"name":"lone"}}]}}],
+               "resolve":{{"nodes":[
+                {{"id":"app","deps":[{{"name":"idle","pkg":"idle",{normal}}},{{"name":"used","pkg":"used",{normal}}},
+                    {{"name":"shared","pkg":"shared",{normal}}},{{"name":"lone","pkg":"lone",{normal}}}]}},
+                {{"id":"used","deps":[{{"name":"shared","pkg":"shared",{normal}}},{{"name":"lone","pkg":"lone",{dev}}}]}},
+                {{"id":"idle","deps":[]}},{{"id":"shared","deps":[]}},{{"id":"lone","deps":[]}}]}}}}"#,
+            root = dir.path().display().to_string(),
+            app = app.display().to_string(),
+        ))
+        .unwrap();
+        (dir, metadata)
+    }
+
+    /// The `app` package after cargo reported `reported` unused.
+    fn cargo_reporting(reported: &[&str]) -> PackageExterns {
+        PackageExterns {
+            cargo_unused: Some(reported.iter().map(|key| (*key).to_owned()).collect()),
+            ..PackageExterns::default()
+        }
+    }
+
+    #[test]
+    fn cargo_silence_proves_use_where_its_lint_would_speak() {
+        let (dir, metadata) = cargo_workspace("[package]\nname = \"app\"\n");
+        let app = dir.path().join("app/Cargo.toml");
+        let kept =
+            |package: &PackageExterns, key: &str| cargo_kept(&metadata, package, &app, key, key);
+        let package = cargo_reporting(&["idle"]);
+        assert!(kept(&package, "used"));
+        assert!(!kept(&package, "idle"));
+        // `used` pulls `shared` in, so cargo keeps quiet on it.
+        assert!(!kept(&package, "shared"));
+        // A dependency's dev edge is never built.
+        assert!(kept(&package, "lone"));
+        // Without its lint's verdict, cargo's silence proves nothing.
+        assert!(!kept(&PackageExterns::default(), "used"));
+    }
+
+    #[test]
+    fn cargo_silence_proves_nothing_where_its_lint_may_be_allowed() {
+        let package = cargo_reporting(&[]);
+        let manifests = [
+            "[package]\nname = \"app\"\n\n[lints.cargo]\nunused_dependencies = \"allow\"\n",
+            "[package]\nname = \"app\"\n\n[lints.cargo]\ndefault = { level = \"allow\", priority = 1 }\n",
+            // The root's `[workspace.lints.cargo]` sets `style = "allow"`.
+            "[package]\nname = \"app\"\n\n[lints]\nworkspace = true\n",
+        ];
+        for manifest in manifests {
+            let (dir, metadata) = cargo_workspace(manifest);
+            let app = dir.path().join("app/Cargo.toml");
+            assert!(
+                !cargo_kept(&metadata, &package, &app, "used", "used"),
+                "{manifest}"
+            );
+        }
+        let (dir, mut metadata) = cargo_workspace("[package]\nname = \"app\"\n");
+        let app = dir.path().join("app/Cargo.toml");
+        metadata.packages[0].rust_version = Some("1.75".to_owned());
+        assert!(!cargo_kept(&metadata, &package, &app, "used", "used"));
+        metadata.packages[0].rust_version = Some("1.79".to_owned());
+        assert!(cargo_kept(&metadata, &package, &app, "used", "used"));
     }
 
     #[test]

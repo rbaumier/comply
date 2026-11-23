@@ -5,6 +5,7 @@ mod common;
 use common::write_ts_file;
 use predicates::prelude::*;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 
 #[test]
@@ -957,12 +958,68 @@ fn rust_unused_dep_spares_the_runtime_crate_of_a_derive() {
     );
 }
 
-#[test]
-fn rust_unused_dep_still_reports_a_dependency_nothing_uses() {
-    let findings = unused_dep_findings(&macro_workspace());
+/// Assert `findings` hold `app`'s unused `idle` alone.
+fn assert_reports_idle_alone(findings: &[String]) {
     assert_eq!(findings.len(), 1, "{findings:#?}");
     assert!(findings[0].contains("app/Cargo.toml"), "{findings:#?}");
     assert!(findings[0].contains("`idle`"), "{findings:#?}");
+}
+
+/// Append `extra` to the file at `path`.
+fn append(path: &Path, extra: &str) {
+    let mut text = fs::read_to_string(path).unwrap();
+    text.push_str(extra);
+    fs::write(path, text).unwrap();
+}
+
+#[test]
+fn rust_unused_dep_still_reports_a_dependency_nothing_uses() {
+    assert_reports_idle_alone(&unused_dep_findings(&macro_workspace()));
+}
+
+#[test]
+fn rust_unused_dep_still_reports_a_dependency_another_one_pulls_in() {
+    // cargo keeps quiet on `idle` once `hub` pulls it in.
+    let dir = macro_workspace();
+    let root = dir.path();
+    fs::create_dir_all(root.join("hub/src")).unwrap();
+    fs::write(
+        root.join("hub/Cargo.toml"),
+        "[package]\nname = \"hub\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dependencies]\nidle = { path = \"../idle\" }\n",
+    )
+    .unwrap();
+    fs::write(root.join("hub/src/lib.rs"), "pub use idle::Idle;\n").unwrap();
+    let members = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    fs::write(
+        root.join("Cargo.toml"),
+        members.replace("\"wire\"]", "\"wire\", \"hub\"]"),
+    )
+    .unwrap();
+    append(
+        &root.join("app/Cargo.toml"),
+        "hub = { path = \"../hub\" }\n",
+    );
+    append(&root.join("app/src/lib.rs"), "pub use hub::Idle;\n");
+    assert_reports_idle_alone(&unused_dep_findings(&dir));
+}
+
+#[test]
+fn rust_unused_dep_still_reports_a_dependency_when_cargo_allows_its_lint() {
+    // cargo then keeps quiet on `idle` too.
+    // From cargo 1.100, nothing proves `codec` or `rt` used either.
+    let dir = macro_workspace();
+    append(
+        &dir.path().join("app/Cargo.toml"),
+        "\n[lints.cargo]\nunused_dependencies = \"allow\"\n",
+    );
+    let findings = unused_dep_findings(&dir);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("app/Cargo.toml") && f.contains("`idle`")),
+        "{findings:#?}"
+    );
 }
 
 /// The `react-no-sort-for-extrema` findings on a file holding `source`.
