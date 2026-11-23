@@ -1,31 +1,36 @@
 //! axum-jwt-missing-exp backend.
 //!
-//! Flags `<expr>.validate_exp = false` — turning off `jsonwebtoken`'s expiry
-//! check on a `Validation` value, so tokens whose `exp` claim has already
-//! passed are still accepted. `validate_exp` defaults to `true`
-//! (`Validation::new(alg)` keeps it on); an explicit assignment of the literal
-//! `false` is the only shape that disables expiry validation.
+//! Flags `<expr>.validate_exp = false` and `<expr>.validate_aud = false` on a
+//! `jsonwebtoken` `Validation` value. The first accepts tokens whose `exp`
+//! claim has already passed; the second accepts a token issued for another
+//! service, since its `aud` claim is never checked. Both fields default to
+//! `true` (`Validation::new(alg)` keeps them on); an explicit assignment of the
+//! literal `false` is the only shape that disables either check.
 //!
 //! Detection requires all of:
 //!
 //! 1. an `assignment_expression` whose left-hand side is a `field_expression`
-//!    whose `field` is the identifier `validate_exp`, and
+//!    whose `field` is the identifier `validate_exp` or `validate_aud`, and
 //! 2. a right-hand side that is the `boolean_literal` `false`.
 //!
-//! Reading `validate_exp`, comparing it, or assigning it any non-`false` value
+//! Reading either field, comparing it, or assigning it any non-`false` value
 //! (a variable, `true`, a config flag) is a different shape and is left alone —
-//! the rule fires only on expiry validation being explicitly turned off.
+//! the rule fires only on a check being explicitly turned off.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
-crate::ast_check! { on ["assignment_expression"] prefilter = ["validate_exp"] => |node, source, ctx, diagnostics|
+crate::ast_check! { on ["assignment_expression"] prefilter = ["validate_exp", "validate_aud"] => |node, source, ctx, diagnostics|
     let Some(left) = node.child_by_field_name("left") else { return };
     if left.kind() != "field_expression" { return; }
-    let assigns_validate_exp = left
+    let Some(field) = left
         .child_by_field_name("field")
         .and_then(|f| f.utf8_text(source).ok())
-        == Some("validate_exp");
-    if !assigns_validate_exp { return; }
+    else { return };
+    let consequence = match field {
+        "validate_exp" => "accept expired tokens",
+        "validate_aud" => "accept tokens issued for another audience",
+        _ => return,
+    };
 
     let Some(right) = node.child_by_field_name("right") else { return };
     if right.kind() != "boolean_literal" || right.utf8_text(source).ok() != Some("false") {
@@ -36,9 +41,10 @@ crate::ast_check! { on ["assignment_expression"] prefilter = ["validate_exp"] =>
         ctx.path,
         &node,
         super::META.id,
-        "`validate_exp` is set to `false` — `jsonwebtoken` will accept expired tokens. \
-         Leave it at its default (`true`) so expired tokens are rejected."
-            .into(),
+        format!(
+            "`{field}` is set to `false` — `jsonwebtoken` will {consequence}. \
+             Leave it at its default (`true`) so such tokens are rejected."
+        ),
         Severity::Error,
     ));
 }
@@ -84,6 +90,15 @@ mod tests {
         assert_eq!(run(src).len(), 1);
     }
 
+    #[test]
+    fn flags_validate_aud_false() {
+        // An unchecked audience accepts a token minted for another service.
+        let src = r#"fn f() { let mut v = Validation::new(Algorithm::HS256); v.validate_aud = false; }"#;
+        let diags = run(src);
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("validate_aud"));
+    }
+
     // ── Negative: expiry validation left on ─────────────────────────────────
 
     #[test]
@@ -96,6 +111,12 @@ mod tests {
     #[test]
     fn allows_validate_exp_true() {
         let src = r#"fn f() { let mut v = Validation::new(Algorithm::HS256); v.validate_exp = true; }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn allows_validate_aud_true() {
+        let src = r#"fn f(mut v: Validation) { v.validate_aud = true; }"#;
         assert!(run(src).is_empty());
     }
 

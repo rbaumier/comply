@@ -83,11 +83,10 @@ fn is_standalone_expect<'a>(
             AstKind::Function(_) | AstKind::ArrowFunctionExpression(_)
         ) {
             let parent = semantic.nodes().parent_node(ancestor.id());
-            if let AstKind::CallExpression(call) = parent.kind() {
-                if let Some(name) = callee_base_name(&call.callee) {
+            if let AstKind::CallExpression(call) = parent.kind()
+                && let Some(name) = callee_base_name(&call.callee) {
                     return COLLECTION_BLOCKS.contains(&name);
                 }
-            }
             return false;
         }
     }

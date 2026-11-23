@@ -177,7 +177,7 @@ fn is_types_only_module(source: &str) -> bool {
 ///   - `function` / `class`  : declared or expression function/class
 ///   - `=>`                  : arrow function value
 ///   - `) {` / `){`          : a function/method/getter body (object and
-///                             array literals never contain a `)`-then-`{`)
+///     array literals never contain a `)`-then-`{`)
 ///
 /// Shared by `is_constants_only_module` and `is_types_only_module` so both gate
 /// on one definition of "behaviour".

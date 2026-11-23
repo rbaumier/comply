@@ -262,13 +262,11 @@ fn is_in_signal_handler<'a>(
                 }
                 // Indirect: this arrow is assigned to a variable used as a signal handler.
                 let parent = nodes.parent_node(ancestor.id());
-                if let AstKind::VariableDeclarator(decl) = parent.kind() {
-                    if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
-                        if signal_callee_names.contains(id.name.as_str()) {
+                if let AstKind::VariableDeclarator(decl) = parent.kind()
+                    && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id
+                        && signal_callee_names.contains(id.name.as_str()) {
                             return true;
                         }
-                    }
-                }
             }
             AstKind::Function(func) => {
                 // Direct: this function IS a signal handler callback.
@@ -279,20 +277,17 @@ fn is_in_signal_handler<'a>(
                     return true;
                 }
                 // Indirect: named function declaration used as a signal handler.
-                if let Some(id) = &func.id {
-                    if signal_callee_names.contains(id.name.as_str()) {
+                if let Some(id) = &func.id
+                    && signal_callee_names.contains(id.name.as_str()) {
                         return true;
                     }
-                }
                 // Indirect: function expression assigned to a variable used as a signal handler.
                 let parent = nodes.parent_node(ancestor.id());
-                if let AstKind::VariableDeclarator(decl) = parent.kind() {
-                    if let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id {
-                        if signal_callee_names.contains(id.name.as_str()) {
+                if let AstKind::VariableDeclarator(decl) = parent.kind()
+                    && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &decl.id
+                        && signal_callee_names.contains(id.name.as_str()) {
                             return true;
                         }
-                    }
-                }
             }
             _ => {}
         }

@@ -73,7 +73,7 @@ fn http_only_arg_is_non_false(call: tree_sitter::Node, source: &[u8]) -> bool {
 /// passed to a `Cookie::build((name, value))` call.
 fn cookie_value_expr<'a>(
     build_call: tree_sitter::Node<'a>,
-    source: &'a [u8],
+    _source: &'a [u8],
 ) -> Option<tree_sitter::Node<'a>> {
     let args = build_call.child_by_field_name("arguments")?;
     let mut cursor = args.walk();

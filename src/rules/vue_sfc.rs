@@ -416,10 +416,26 @@ mod tests {
         // `tsx`/`ts` get a typed grammar node; `jsx` is a grammar error node —
         // all three are read from the raw start-tag text, so all are captured.
         let cases = [
-            ("<script setup lang=\"tsx\">\nconst x = 1;\n</script>", Some("tsx"), true),
-            ("<script lang=\"ts\">\nconst x = 1;\n</script>", Some("ts"), false),
-            ("<script lang=\"jsx\">\nconst x = 1;\n</script>", Some("jsx"), false),
-            ("<script lang='tsx'>\nconst x = 1;\n</script>", Some("tsx"), false),
+            (
+                "<script setup lang=\"tsx\">\nconst x = 1;\n</script>",
+                Some("tsx"),
+                true,
+            ),
+            (
+                "<script lang=\"ts\">\nconst x = 1;\n</script>",
+                Some("ts"),
+                false,
+            ),
+            (
+                "<script lang=\"jsx\">\nconst x = 1;\n</script>",
+                Some("jsx"),
+                false,
+            ),
+            (
+                "<script lang='tsx'>\nconst x = 1;\n</script>",
+                Some("tsx"),
+                false,
+            ),
             ("<script setup>\nconst x = 1;\n</script>", None, true),
         ];
         for (src, want_lang, want_setup) in cases {
@@ -643,7 +659,11 @@ mod tests {
         let inner = template_block_text_fallback(src).expect("text fallback recovers the template");
         assert!(inner.starts_with("\n  <el-icon>"));
         assert!(inner.contains("item > currentValue"));
-        assert!(inner.trim_end().ends_with("</el-icon>\n  <span>{{ text }}</span>"));
+        assert!(
+            inner
+                .trim_end()
+                .ends_with("</el-icon>\n  <span>{{ text }}</span>")
+        );
         assert!(
             !inner.contains("const hoverIndex"),
             "the trailing <script> is excluded from the template range"

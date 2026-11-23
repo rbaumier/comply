@@ -27,7 +27,7 @@ impl OxcCheck for Check {
         let mut diagnostics = Vec::new();
 
         for (node_id, node) in nodes.iter_enumerated() {
-            let (func_span, is_arrow, func_name, own_scope) = match node.kind() {
+            let (func_span, _is_arrow, func_name, own_scope) = match node.kind() {
                 AstKind::Function(func) => {
                     // A bodyless function is a TypeScript overload signature or
                     // an ambient declaration — pure type surface with no runtime

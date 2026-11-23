@@ -539,7 +539,13 @@ fn entry_with_filter(
         backends: TS_FAMILY
             .iter()
             .map(|&lang| {
-                (lang, Backend::Oxlint { rule: oxlint_key, post_filter: post_filter.as_ref().map(Arc::clone) })
+                (
+                    lang,
+                    Backend::Oxlint {
+                        rule: oxlint_key,
+                        post_filter: post_filter.as_ref().map(Arc::clone),
+                    },
+                )
             })
             .collect(),
     }
@@ -619,7 +625,10 @@ impl PostFilter for NoConsoleFilter {
 /// Those files are run directly by a shell or a build runner, so the terminal is
 /// the only place their output can go. Anchored at the project root, so a nested
 /// `src/scripts/util.ts` library helper stays subject to the rule.
-fn is_in_top_level_script_dir(path: &std::path::Path, project: &crate::project::ProjectCtx) -> bool {
+fn is_in_top_level_script_dir(
+    path: &std::path::Path,
+    project: &crate::project::ProjectCtx,
+) -> bool {
     project
         .project_root
         .as_deref()
@@ -734,7 +743,10 @@ const BROWSER_PACKAGES: &[&str] = &[
 ];
 
 fn is_browser_targeted(path: &std::path::Path, source: Option<&str>) -> bool {
-    if matches!(path.extension().and_then(|e| e.to_str()), Some("tsx") | Some("jsx")) {
+    if matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("tsx") | Some("jsx")
+    ) {
         return true;
     }
     let Some(src) = source else {
@@ -912,11 +924,7 @@ fn has_backtick_before_placeholder(content: &str) -> bool {
 /// an intentional library-DSL literal placeholder. Failing safe: if the source
 /// is unreadable, the position does not land on a `StringLiteral`, or no
 /// placeholder holds a parseable leading identifier, returns `true` (keep).
-fn any_placeholder_resolves_to_binding(
-    src: &str,
-    path: &std::path::Path,
-    offset: usize,
-) -> bool {
+fn any_placeholder_resolves_to_binding(src: &str, path: &std::path::Path, offset: usize) -> bool {
     use oxc_allocator::Allocator;
     use oxc_ast::AstKind;
     use oxc_parser::Parser;
@@ -1062,7 +1070,12 @@ fn new_at_offset_is_exempt(src: &str, path: &std::path::Path, offset: usize) -> 
     let target = semantic
         .nodes()
         .iter()
-        .filter(|node| matches!(node.kind(), crate::rules::backend::AstKind::NewExpression(_)))
+        .filter(|node| {
+            matches!(
+                node.kind(),
+                crate::rules::backend::AstKind::NewExpression(_)
+            )
+        })
         .filter(|node| {
             let span = node.kind().span();
             span.start <= offset && offset < span.end
@@ -1491,7 +1504,8 @@ mod tests {
         // libphonenumber-js publishes a library (no `bin`) yet runs
         // `build-scripts/generate.js` from `scripts` — its progress output is
         // the only interface the developer has while `npm run gen` works.
-        let pkg = r#"{"name":"libphonenumber-js","scripts":{"gen":"node build-scripts/generate.js"}}"#;
+        let pkg =
+            r#"{"name":"libphonenumber-js","scripts":{"gen":"node build-scripts/generate.js"}}"#;
         let source = "console.log('generating metadata')\n";
         assert!(!keep_in_project(pkg, "build-scripts/generate.js", source));
     }
@@ -1526,7 +1540,12 @@ mod tests {
     fn drops_console_in_a_benchmark_harness() {
         // moment/luxon: `benchmarks/info.js` prints timings — that output is the
         // entire product of running it.
-        for rel in ["benchmarks/info.js", "bench/x.js", "benchmark/x.js", "parse.bench.js"] {
+        for rel in [
+            "benchmarks/info.js",
+            "bench/x.js",
+            "benchmark/x.js",
+            "parse.bench.js",
+        ] {
             assert!(
                 !keep_in_loaded_project(&[("package.json", LUXON_PKG), (rel, BENCH_SRC)], rel),
                 "benchmark harness {rel} must not be flagged"
@@ -1537,7 +1556,10 @@ mod tests {
     #[test]
     fn drops_console_in_a_top_level_script_dir() {
         assert!(!keep_in_loaded_project(
-            &[("package.json", LUXON_PKG), ("scripts/precompile.js", BENCH_SRC)],
+            &[
+                ("package.json", LUXON_PKG),
+                ("scripts/precompile.js", BENCH_SRC)
+            ],
             "scripts/precompile.js",
         ));
     }
@@ -1547,7 +1569,10 @@ mod tests {
         // Negative space: the top-level anchor is what earns the exemption — a
         // `src/scripts/` library helper is product code.
         assert!(keep_in_loaded_project(
-            &[("package.json", LUXON_PKG), ("src/scripts/util.js", BENCH_SRC)],
+            &[
+                ("package.json", LUXON_PKG),
+                ("src/scripts/util.js", BENCH_SRC)
+            ],
             "src/scripts/util.js",
         ));
     }
@@ -1589,7 +1614,8 @@ mod tests {
     #[test]
     fn keeps_ts_file_importing_react_dom_server() {
         // SSR entry — server-side, not a browser signal.
-        let src = "import { renderToString } from \"react-dom/server\";\nconsole.log(\"render\");\n";
+        let src =
+            "import { renderToString } from \"react-dom/server\";\nconsole.log(\"render\");\n";
         let d = diag("src/server/render.ts");
         assert!(FILTER.keep(&d, Some(src)));
     }
@@ -1621,7 +1647,11 @@ mod tests {
     // ── console member not invoked (dropped) — issue #8141 ───────────────────
 
     fn diag_at(path: &str, line: usize, column: usize) -> Diagnostic {
-        Diagnostic { line, column, ..diag(path) }
+        Diagnostic {
+            line,
+            column,
+            ..diag(path)
+        }
     }
 
     /// minisearch's `src/MiniSearch.test.js` mock idiom: capture the real
@@ -1883,7 +1913,9 @@ mod tests {
     /// identifier `name` in `src`, mirroring oxlint's reported position (1-based
     /// line/column on the variable name).
     fn no_unassigned_diag(path: &str, src: &str, name: &str) -> Diagnostic {
-        let idx = src.find(name).expect("source must contain the binding name");
+        let idx = src
+            .find(name)
+            .expect("source must contain the binding name");
         let line = src[..idx].bytes().filter(|&b| b == b'\n').count() + 1;
         let line_start = src[..idx].rfind('\n').map_or(0, |p| p + 1);
         let column = idx - line_start + 1;
@@ -1929,7 +1961,8 @@ mod tests {
     fn no_unassigned_kept_for_plain_let_after_definite_in_list() {
         // In `let div!: T, plain: U`, the non-definite `plain` declarator still
         // flags even though its sibling carries the assertion.
-        let src = "function f() {\n  let div!: HTMLDivElement, plain: string;\n  return plain;\n}\n";
+        let src =
+            "function f() {\n  let div!: HTMLDivElement, plain: string;\n  return plain;\n}\n";
         let d = no_unassigned_diag("test/dynamic.spec.tsx", src, "plain");
         assert!(NoUnassignedVarsFilter.keep(&d, Some(src)));
     }

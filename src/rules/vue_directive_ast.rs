@@ -46,8 +46,11 @@ pub fn directive_value<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Op
 /// directive (`:foo`, `v-bind:foo`), e.g. `key` for `:key`. A dynamic argument
 /// comes back bracketed (`[foo]` for `:[foo]`), so it never equals a bare name.
 pub fn binding_argument<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> Option<&'a str> {
-    child_of_kind(directive, &["directive_argument", "directive_dynamic_argument"])
-        .and_then(|n| n.utf8_text(source).ok())
+    child_of_kind(
+        directive,
+        &["directive_argument", "directive_dynamic_argument"],
+    )
+    .and_then(|n| n.utf8_text(source).ok())
 }
 
 /// Whether a binding directive uses the Vue 3.5+ same-name shorthand: it carries
@@ -75,8 +78,10 @@ pub fn bound_expression<'a>(directive: tree_sitter::Node, source: &'a [u8]) -> O
 
 /// Whether a `directive_attribute` is a `:key` / `v-bind:key` binding.
 fn is_key_binding(directive: tree_sitter::Node, source: &[u8]) -> bool {
-    matches!(directive_name(directive, source), Some(":") | Some("v-bind"))
-        && binding_argument(directive, source) == Some("key")
+    matches!(
+        directive_name(directive, source),
+        Some(":") | Some("v-bind")
+    ) && binding_argument(directive, source) == Some("key")
 }
 
 /// The `:key` binding directive on a tag, if present.
@@ -167,7 +172,10 @@ mod tests {
 
     #[test]
     fn split_for_splits_on_top_level_in() {
-        assert_eq!(split_for("(item, i) in items"), Some(("(item, i)", "items")));
+        assert_eq!(
+            split_for("(item, i) in items"),
+            Some(("(item, i)", "items"))
+        );
     }
 
     #[test]
@@ -209,7 +217,10 @@ mod tests {
 
     #[test]
     fn tuple_parts_keeps_nested_destructuring_together() {
-        assert_eq!(tuple_parts("({ id, name }, i)"), Some(vec!["{ id, name }", "i"]));
+        assert_eq!(
+            tuple_parts("({ id, name }, i)"),
+            Some(vec!["{ id, name }", "i"])
+        );
     }
 
     #[test]

@@ -130,11 +130,10 @@ impl OxcCheck for Check {
                     return;
                 }
             }
-            AstKind::VariableDeclarator(decl) => {
-                if is_unknown_annotation(decl.type_annotation.as_deref()) {
+            AstKind::VariableDeclarator(decl)
+                if is_unknown_annotation(decl.type_annotation.as_deref()) => {
                     return;
                 }
-            }
             _ => {}
         }
 

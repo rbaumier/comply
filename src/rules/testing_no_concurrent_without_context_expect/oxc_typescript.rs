@@ -49,11 +49,10 @@ fn stmt_has_expect_call(stmt: &Statement) -> bool {
 fn expr_has_expect_call(expr: &Expression) -> bool {
     match expr {
         Expression::CallExpression(call) => {
-            if let Expression::Identifier(id) = &call.callee {
-                if id.name.as_str() == "expect" {
+            if let Expression::Identifier(id) = &call.callee
+                && id.name.as_str() == "expect" {
                     return true;
                 }
-            }
             // Recurse into callee for chained calls like `expect(x).toBe(y)`.
             expr_has_expect_call(&call.callee)
                 || call.arguments.iter().any(|arg| {

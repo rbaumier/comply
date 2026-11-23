@@ -212,7 +212,10 @@ pub fn type_name_references(source: &str) -> FxHashSet<String> {
     for block in scan_blocks(source) {
         for tag in block.tags() {
             let canonical = canonical_tag(&tag.name);
-            if !TYPE_BEARING_TAGS.iter().any(|t| t.eq_ignore_ascii_case(canonical)) {
+            if !TYPE_BEARING_TAGS
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(canonical))
+            {
                 continue;
             }
             if let Some(expr) = tag.type_expr() {
@@ -290,7 +293,10 @@ fn names_a_type(bytes: &[u8], end: usize, is_after_dot: bool) -> bool {
 
 /// Length of the identifier that opens `bytes`.
 fn identifier_len(bytes: &[u8]) -> usize {
-    bytes.iter().take_while(|byte| is_identifier_byte(**byte)).count()
+    bytes
+        .iter()
+        .take_while(|byte| is_identifier_byte(**byte))
+        .count()
 }
 
 /// Number of consecutive `.` bytes that open `bytes`.
@@ -566,10 +572,7 @@ mod tests {
         // `...` marks a rest type; only a lone dot qualifies a name.
         assert_eq!(type_names("/** @param {...Batch} a */"), ["Batch"]);
         // A template literal type contributes its `${...}` holes.
-        assert_eq!(
-            type_names("/** @type {`${Prefix}-suffix`} */"),
-            ["Prefix"]
-        );
+        assert_eq!(type_names("/** @type {`${Prefix}-suffix`} */"), ["Prefix"]);
         // A Unicode identifier is captured whole, not truncated to its ASCII
         // prefix.
         assert_eq!(type_names("/** @type {Café} */"), ["Café"]);
@@ -619,7 +622,11 @@ mod tests {
         // Every entry is a canonical spelling, so `canonical_tag` resolving a
         // tag before the lookup can never miss one.
         for tag in TYPE_BEARING_TAGS {
-            assert_eq!(canonical_tag(tag), *tag, "`@{tag}` is a synonym, not a canonical tag");
+            assert_eq!(
+                canonical_tag(tag),
+                *tag,
+                "`@{tag}` is a synonym, not a canonical tag"
+            );
         }
     }
 

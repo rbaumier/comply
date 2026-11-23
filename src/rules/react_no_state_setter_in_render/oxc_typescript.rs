@@ -43,7 +43,7 @@ impl OxcCheck for Check {
                     let Some(init) = &decl.init else { continue };
                     match init {
                         Expression::ArrowFunctionExpression(arrow) => {
-                            if arrow.body.statements.first().is_none() {
+                            if arrow.body.statements.is_empty() {
                                 continue;
                             }
                             id.name.as_str().to_string()

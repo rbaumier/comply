@@ -20,7 +20,7 @@ fn sets_non_json_content_type(init: &ObjectExpression) -> bool {
         let ObjectPropertyKind::ObjectProperty(p) = prop else {
             return true;
         };
-        if !p.key.static_name().is_some_and(|n| n == "headers") {
+        if p.key.static_name().is_none_or(|n| n != "headers") {
             continue;
         }
         let Expression::ObjectExpression(headers) = &p.value else {
@@ -96,11 +96,10 @@ impl OxcCheck for Check {
         }
 
         // Skip responses that set a deliberate non-JSON Content-Type.
-        if let Some(oxc_ast::ast::Argument::ObjectExpression(init)) = new_expr.arguments.get(1) {
-            if sets_non_json_content_type(init) {
+        if let Some(oxc_ast::ast::Argument::ObjectExpression(init)) = new_expr.arguments.get(1)
+            && sets_non_json_content_type(init) {
                 return;
             }
-        }
 
         let (line, column) = byte_offset_to_line_col(ctx.source, new_expr.span.start as usize);
         diagnostics.push(Diagnostic {

@@ -22,8 +22,8 @@
 //! Workspaces are de-duplicated so we don't shell out twice for the same
 //! manifest when many `.rs` files share a parent crate.
 
-use rustc_hash::FxHashSet;
 use anyhow::{Context, Result};
+use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -91,7 +91,11 @@ const QUOTED_LINES: usize = 5;
 /// the findings it carried, if any, never reached comply.
 fn read_report(stdout: &[u8], stderr: &[u8], workspace: &Path) -> Result<ShearReport> {
     if stdout.is_empty() {
-        return Err(unusable(workspace, "reported nothing", &first_lines(stderr)));
+        return Err(unusable(
+            workspace,
+            "reported nothing",
+            &first_lines(stderr),
+        ));
     }
     serde_json::from_slice::<ShearReport>(stdout).map_err(|cause| {
         unusable(
@@ -130,10 +134,7 @@ fn first_lines(raw: &[u8]) -> String {
 /// by design — flagging them as unused is noise because cargo-shear
 /// only sees the default feature set.
 fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
-    let dep_name = message
-        .split('`')
-        .nth(1)
-        .unwrap_or("");
+    let dep_name = message.split('`').nth(1).unwrap_or("");
     if dep_name.is_empty() {
         return false;
     }
@@ -146,13 +147,13 @@ fn is_optional_dep(manifest_path: &Path, message: &str) -> bool {
     for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(deps) = toml.get(section).and_then(|d| d.as_table())
             && let Some(entry) = deps.get(dep_name)
-                && entry
-                    .get("optional")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    return true;
-                }
+            && entry
+                .get("optional")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        {
+            return true;
+        }
     }
     false
 }
@@ -271,7 +272,10 @@ mod tests {
     fn a_shear_run_that_reported_nothing_is_refused() {
         let ws = Path::new("/ws");
         let clean = br#"{"summary":{"errors":0,"warnings":0,"fixed":0},"findings":[]}"#;
-        assert!(read_report(clean, b"", ws).is_ok(), "a clean report stays a clean report");
+        assert!(
+            read_report(clean, b"", ws).is_ok(),
+            "a clean report stays a clean report"
+        );
         assert!(
             read_report(b"", b"error: failed to parse manifest", ws).is_err(),
             "empty stdout is a run that examined no dependency"

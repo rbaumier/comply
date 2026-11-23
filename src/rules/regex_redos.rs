@@ -107,24 +107,56 @@ mod tests {
         assert!(inner_quantifier_on_leading_atom(b"[a-z]+"), "([a-z]+)*");
         assert!(inner_quantifier_on_leading_atom(b".*"), "(.*)*");
         assert!(inner_quantifier_on_leading_atom(b"(a|b)+"), "((a|b)+)+");
-        assert!(inner_quantifier_on_leading_atom(b"(a+)"), "((a+))+ recurses into leading group");
-        assert!(inner_quantifier_on_leading_atom(br"a?b+"), "(a?b+)+ optional atom can't anchor");
-        assert!(inner_quantifier_on_leading_atom(br"\s?\w+"), "(\\s?\\w+)+ nullable separator");
+        assert!(
+            inner_quantifier_on_leading_atom(b"(a+)"),
+            "((a+))+ recurses into leading group"
+        );
+        assert!(
+            inner_quantifier_on_leading_atom(br"a?b+"),
+            "(a?b+)+ optional atom can't anchor"
+        );
+        assert!(
+            inner_quantifier_on_leading_atom(br"\s?\w+"),
+            "(\\s?\\w+)+ nullable separator"
+        );
         // Non-disjoint anchor: the mandatory atom overlaps the repeated one, so
         // it does not partition the input → still catastrophic, keep the flag.
         assert!(inner_quantifier_on_leading_atom(b"aa+"), "(aa+)+");
-        assert!(inner_quantifier_on_leading_atom(b"[a-z][a-z]+"), "([a-z][a-z]+)+");
-        assert!(inner_quantifier_on_leading_atom(b"ab+"), "distinct literal not proven disjoint");
+        assert!(
+            inner_quantifier_on_leading_atom(b"[a-z][a-z]+"),
+            "([a-z][a-z]+)+"
+        );
+        assert!(
+            inner_quantifier_on_leading_atom(b"ab+"),
+            "distinct literal not proven disjoint"
+        );
         // Byte appears in the class source but a `-` range / `\` escape still
         // matches `L`, so `L` is NOT excluded → overlapping → keep the flag.
-        assert!(inner_quantifier_on_leading_atom(b"-[^a-z]*"), "(-[^a-z]*)+ range hyphen");
-        assert!(inner_quantifier_on_leading_atom(br"d[^\d]*"), "(d[^\\d]*)+ escape class");
+        assert!(
+            inner_quantifier_on_leading_atom(b"-[^a-z]*"),
+            "(-[^a-z]*)+ range hyphen"
+        );
+        assert!(
+            inner_quantifier_on_leading_atom(br"d[^\d]*"),
+            "(d[^\\d]*)+ escape class"
+        );
         // Malformed unterminated leading `(` must not panic.
-        assert!(inner_quantifier_on_leading_atom(b"("), "unterminated group is conservative");
+        assert!(
+            inner_quantifier_on_leading_atom(b"("),
+            "unterminated group is conservative"
+        );
         // Anchored (suppress): a literal excluded by the following repeated
         // negated class — the linear unrolled-loop tag stripper.
-        assert!(!inner_quantifier_on_leading_atom(br"?:(?!<\/script>)<[^<]*"));
-        assert!(!inner_quantifier_on_leading_atom(b"<[^<]*"), "`<` excluded by `[^<]*`");
-        assert!(!inner_quantifier_on_leading_atom(br#""[^"]*"#), "quoted-string stripper");
+        assert!(!inner_quantifier_on_leading_atom(
+            br"?:(?!<\/script>)<[^<]*"
+        ));
+        assert!(
+            !inner_quantifier_on_leading_atom(b"<[^<]*"),
+            "`<` excluded by `[^<]*`"
+        );
+        assert!(
+            !inner_quantifier_on_leading_atom(br#""[^"]*"#),
+            "quoted-string stripper"
+        );
     }
 }

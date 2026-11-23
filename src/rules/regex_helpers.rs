@@ -113,7 +113,9 @@ fn is_capturing_open(bytes: &[u8], open: usize) -> bool {
 pub fn group_is_nullable(body: &[u8]) -> bool {
     let body = strip_group_prefix(body);
     // Alternation: nullable iff any top-level branch is nullable.
-    split_top_level_alternation(body).into_iter().any(branch_is_nullable)
+    split_top_level_alternation(body)
+        .into_iter()
+        .any(branch_is_nullable)
 }
 
 /// Strips a leading group prefix so only the matchable body remains:
@@ -295,7 +297,10 @@ mod tests {
     fn outside_class_is_false() {
         let b = b"abc(){}";
         for i in 0..b.len() {
-            assert!(!is_inside_char_class(b, i), "index {i} should be outside a class");
+            assert!(
+                !is_inside_char_class(b, i),
+                "index {i} should be outside a class"
+            );
         }
     }
 
@@ -311,10 +316,16 @@ mod tests {
         assert!(!is_inside_char_class(b, 0));
         // indices 1..=4 = `(`, `)`, `{`, `}` literal members.
         for i in 1..=4 {
-            assert!(is_inside_char_class(b, i), "index {i} should be inside the class");
+            assert!(
+                is_inside_char_class(b, i),
+                "index {i} should be inside the class"
+            );
         }
         // index 6 = `*` quantifier, after the closing `]` was consumed — outside.
-        assert!(!is_inside_char_class(b, 6), "the quantifier after the class is outside");
+        assert!(
+            !is_inside_char_class(b, 6),
+            "the quantifier after the class is outside"
+        );
     }
 
     #[test]
@@ -323,18 +334,30 @@ mod tests {
         // (index 2) is still inside the class; the byte after the real close
         // (index 3) would be outside.
         let b = b"[]$]X";
-        assert!(is_inside_char_class(b, 1), "first ] after [ is a literal member");
+        assert!(
+            is_inside_char_class(b, 1),
+            "first ] after [ is a literal member"
+        );
         assert!(is_inside_char_class(b, 2), "$ is inside the class");
-        assert!(!is_inside_char_class(b, 4), "byte after the second ] is outside");
+        assert!(
+            !is_inside_char_class(b, 4),
+            "byte after the second ] is outside"
+        );
     }
 
     #[test]
     fn first_close_bracket_after_negated_open_is_literal() {
         // /[^]$]/ — the first `]` after `[^` is a literal member.
         let b = b"[^]$]X";
-        assert!(is_inside_char_class(b, 2), "first ] after [^ is a literal member");
+        assert!(
+            is_inside_char_class(b, 2),
+            "first ] after [^ is a literal member"
+        );
         assert!(is_inside_char_class(b, 3), "$ is inside the class");
-        assert!(!is_inside_char_class(b, 5), "byte after the second ] is outside");
+        assert!(
+            !is_inside_char_class(b, 5),
+            "byte after the second ] is outside"
+        );
     }
 
     #[test]
@@ -342,7 +365,10 @@ mod tests {
         // /\[a\]b/ — both brackets are escaped, so nothing is ever inside a class.
         let b = br"\[a\]b";
         for i in 0..b.len() {
-            assert!(!is_inside_char_class(b, i), "index {i} should be outside (escaped brackets)");
+            assert!(
+                !is_inside_char_class(b, i),
+                "index {i} should be outside (escaped brackets)"
+            );
         }
     }
 
@@ -352,8 +378,14 @@ mod tests {
         // so `b` (index 4) is still inside; the byte after the real close
         // (index 6) is outside.
         let b = br"[a\]b]X";
-        assert!(is_inside_char_class(b, 4), "b stays inside after an escaped ]");
-        assert!(!is_inside_char_class(b, 6), "byte after the unescaped ] is outside");
+        assert!(
+            is_inside_char_class(b, 4),
+            "b stays inside after an escaped ]"
+        );
+        assert!(
+            !is_inside_char_class(b, 6),
+            "byte after the unescaped ] is outside"
+        );
     }
 
     #[test]
@@ -370,7 +402,10 @@ mod tests {
         assert!(group_is_nullable(b"a?"), "single optional atom");
         assert!(group_is_nullable(b"a*"), "single star atom");
         assert!(group_is_nullable(b"a?b?"), "every atom optional");
-        assert!(group_is_nullable(b"a?|b"), "one alternation branch nullable");
+        assert!(
+            group_is_nullable(b"a?|b"),
+            "one alternation branch nullable"
+        );
         assert!(group_is_nullable(b""), "empty body matches empty");
         assert!(group_is_nullable(b"?:a?"), "non-capturing prefix stripped");
         assert!(group_is_nullable(b"a{0,3}"), "min-0 brace quantifier");
@@ -382,21 +417,33 @@ mod tests {
     fn non_nullable_bodies() {
         assert!(!group_is_nullable(b"a"), "single mandatory literal");
         assert!(!group_is_nullable(b"\\n"), "mandatory escape");
-        assert!(!group_is_nullable(b"\\r?\\n"), "optional CR then mandatory LF");
+        assert!(
+            !group_is_nullable(b"\\r?\\n"),
+            "optional CR then mandatory LF"
+        );
         assert!(!group_is_nullable(b"a?b"), "trailing mandatory atom");
         assert!(!group_is_nullable(b"ab?"), "leading mandatory atom");
         assert!(!group_is_nullable(b"a|b"), "no nullable alternation branch");
         assert!(!group_is_nullable(b"[abc]"), "char class consumes one char");
         assert!(!group_is_nullable(b"a{1,3}"), "min-1 brace quantifier");
-        assert!(!group_is_nullable(b"(?:a)+"), "min-1 quantified nested group");
+        assert!(
+            !group_is_nullable(b"(?:a)+"),
+            "min-1 quantified nested group"
+        );
     }
 
     #[test]
     fn char_class_chars_are_literals() {
         // `|` and quantifiers inside `[...]` are members, not syntax: this body
         // is a single mandatory char class, so it is not nullable.
-        assert!(!group_is_nullable(b"[a|b]"), "pipe inside class is a literal");
-        assert!(!group_is_nullable(b"[a?]"), "question mark inside class is a literal");
+        assert!(
+            !group_is_nullable(b"[a|b]"),
+            "pipe inside class is a literal"
+        );
+        assert!(
+            !group_is_nullable(b"[a?]"),
+            "question mark inside class is a literal"
+        );
     }
 
     // --- count_capturing_groups ---
@@ -421,7 +468,11 @@ mod tests {
 
     #[test]
     fn named_group_counts() {
-        assert_eq!(count_capturing_groups(b"(?<name>a)"), 1, "named capture group");
+        assert_eq!(
+            count_capturing_groups(b"(?<name>a)"),
+            1,
+            "named capture group"
+        );
         assert_eq!(
             count_capturing_groups(b"(?<a>x)(?<b>y)"),
             2,
@@ -431,20 +482,40 @@ mod tests {
 
     #[test]
     fn paren_inside_char_class_is_literal() {
-        assert_eq!(count_capturing_groups(b"[()]"), 0, "parens in class are literals");
-        assert_eq!(count_capturing_groups(b"[(]( )"), 1, "literal ( then a real group");
+        assert_eq!(
+            count_capturing_groups(b"[()]"),
+            0,
+            "parens in class are literals"
+        );
+        assert_eq!(
+            count_capturing_groups(b"[(]( )"),
+            1,
+            "literal ( then a real group"
+        );
     }
 
     #[test]
     fn escaped_paren_does_not_count() {
         assert_eq!(count_capturing_groups(br"\(a\)"), 0, "escaped parens");
-        assert_eq!(count_capturing_groups(br"\((a)"), 1, "escaped ( then a real group");
+        assert_eq!(
+            count_capturing_groups(br"\((a)"),
+            1,
+            "escaped ( then a real group"
+        );
     }
 
     #[test]
     fn mixed_capturing_and_non_capturing() {
         // `(?=( +|\t+))\1` from eslint: one capturing group inside the lookahead.
-        assert_eq!(count_capturing_groups(br"(?=( +|\t+))"), 1, "group inside lookahead");
-        assert_eq!(count_capturing_groups(br"(?=(\t*))(?=( +))"), 2, "two lookahead groups");
+        assert_eq!(
+            count_capturing_groups(br"(?=( +|\t+))"),
+            1,
+            "group inside lookahead"
+        );
+        assert_eq!(
+            count_capturing_groups(br"(?=(\t*))(?=( +))"),
+            2,
+            "two lookahead groups"
+        );
     }
 }

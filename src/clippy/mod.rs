@@ -295,7 +295,11 @@ fn forces_sqlx_offline(workspace: &Path, caller_choice: Option<&std::ffi::OsStr>
 fn ensure_analyzed(workspace: &Path, output: &std::process::Output) -> Result<()> {
     let errors = build_errors(&output.stdout);
     if !errors.is_empty() {
-        let quoted = errors.into_iter().take(QUOTED_BUILD_ERRORS).collect::<Vec<_>>().join("\n");
+        let quoted = errors
+            .into_iter()
+            .take(QUOTED_BUILD_ERRORS)
+            .collect::<Vec<_>>()
+            .join("\n");
         return Err(unusable(workspace, "could not compile", &quoted));
     }
     if !output.status.success() && !lints_reported(&output.stdout) {
@@ -330,7 +334,12 @@ fn unusable(workspace: &Path, what_failed: &str, detail: &str) -> anyhow::Error 
 fn build_errors(stdout: &[u8]) -> Vec<String> {
     compiler_messages(stdout)
         .filter(|diag| diag.level == "error")
-        .filter(|diag| !diag.code.as_ref().is_some_and(|code| code.code.starts_with("clippy::")))
+        .filter(|diag| {
+            !diag
+                .code
+                .as_ref()
+                .is_some_and(|code| code.code.starts_with("clippy::"))
+        })
         .filter(|diag| !diag.message.starts_with("aborting due to"))
         .map(|diag| diag.rendered.unwrap_or(diag.message))
         .collect()
@@ -535,7 +544,10 @@ mod tests {
 
         assert!(forces_sqlx_offline(&cached, None));
         assert!(forces_sqlx_offline(&cached, Some(std::ffi::OsStr::new(""))));
-        assert!(!forces_sqlx_offline(&cached, Some(std::ffi::OsStr::new("false"))));
+        assert!(!forces_sqlx_offline(
+            &cached,
+            Some(std::ffi::OsStr::new("false"))
+        ));
         assert!(!forces_sqlx_offline(&plain, None));
     }
 
@@ -549,7 +561,10 @@ mod tests {
 {"reason":"build-finished","success":false}"#;
         assert_eq!(
             build_errors(json),
-            vec!["error[E0308]: mismatched types".to_owned(), "error communicating with database".to_owned()]
+            vec![
+                "error[E0308]: mismatched types".to_owned(),
+                "error communicating with database".to_owned()
+            ]
         );
     }
 

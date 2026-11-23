@@ -73,7 +73,11 @@ fn scan_directives(path: &Path, source: &str) -> ScannedDirectives {
             parses.push((last_line, parsed));
         }
     }
-    ScannedDirectives { parses, marker_lines, last_line }
+    ScannedDirectives {
+        parses,
+        marker_lines,
+        last_line,
+    }
 }
 
 /// Lines covered by a JSDoc block. Forwarding an above-line marker skips them
@@ -103,7 +107,11 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // a line-1 ignore in a BOM-prefixed file would never apply otherwise.
     let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
 
-    let ScannedDirectives { parses, marker_lines, last_line } = scan_directives(path, source);
+    let ScannedDirectives {
+        parses,
+        marker_lines,
+        last_line,
+    } = scan_directives(path, source);
     let jsdoc_lines = jsdoc_lines(source);
 
     // Apply each parse. An above-line marker whose immediate target is itself
@@ -117,9 +125,7 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
             None => None,
             Some(t) if t == line_num => Some(t), // trailing marker
             Some(mut t) => {
-                while t <= last_line
-                    && (marker_lines.contains(&t) || jsdoc_lines.contains(&t))
-                {
+                while t <= last_line && (marker_lines.contains(&t) || jsdoc_lines.contains(&t)) {
                     t += 1;
                 }
                 Some(t)
@@ -244,7 +250,10 @@ pub fn apply_to_all(
     let mut by_raw: FxHashMap<std::sync::Arc<Path>, Vec<Diagnostic>> =
         FxHashMap::with_capacity_and_hasher(diagnostics.len(), Default::default());
     for d in diagnostics {
-        by_raw.entry(std::sync::Arc::clone(&d.path)).or_default().push(d);
+        by_raw
+            .entry(std::sync::Arc::clone(&d.path))
+            .or_default()
+            .push(d);
     }
 
     // Pair each discovered file with its diagnostics moved out of the map, so
@@ -268,7 +277,10 @@ pub fn apply_to_all(
     if !by_raw.is_empty() {
         let mut by_canon: FxHashMap<PathBuf, Vec<Diagnostic>> = FxHashMap::default();
         for (raw, diags) in by_raw.drain() {
-            by_canon.entry(canonical_key(&raw)).or_default().extend(diags);
+            by_canon
+                .entry(canonical_key(&raw))
+                .or_default()
+                .extend(diags);
         }
         for (file, file_diags) in &mut work {
             if let Some(extra) = by_canon.remove(&canonical_key(&file.path)) {
@@ -298,7 +310,10 @@ pub fn apply_to_all(
                 Ok(src) if !has_suppression_marker(&src) => file_diags,
                 Ok(src) => apply_suppressions(file_diags, &file.path, &src),
                 Err(e) => {
-                    eprintln!("comply: skipping ignore-scan for {}: {e}", file.path.display());
+                    eprintln!(
+                        "comply: skipping ignore-scan for {}: {e}",
+                        file.path.display()
+                    );
                     file_diags
                 }
             };
@@ -390,8 +405,14 @@ mod tests {
             ("ts-no-explicit-any", "no-explicit-any"),
             ("ts-no-explicit-any", "typescript/no-explicit-any"),
             ("ts-no-inferrable-types", "no-inferrable-types"),
-            ("promise-prefer-await-to-then", "promise/prefer-await-to-then"),
-            ("consistent-type-imports", "typescript/consistent-type-imports"),
+            (
+                "promise-prefer-await-to-then",
+                "promise/prefer-await-to-then",
+            ),
+            (
+                "consistent-type-imports",
+                "typescript/consistent-type-imports",
+            ),
         ];
         for (canonical, alias) in cases {
             let source = format!("// comply-ignore: {alias} — pre-existing\nlet x = 5;");
@@ -584,7 +605,10 @@ mod tests {
             Path::new("t.ts"),
             s,
         );
-        assert!(kept.is_empty(), "expected the directive to be honored, got {kept:?}");
+        assert!(
+            kept.is_empty(),
+            "expected the directive to be honored, got {kept:?}"
+        );
     }
 
     #[test]
@@ -606,7 +630,10 @@ mod tests {
             let s = format!("// eslint-disable-next-line {named}\nexport function noop() {{}}\n");
             let kept =
                 apply_suppressions(vec![diag(2, "ts-no-empty-function")], Path::new("t.ts"), &s);
-            assert!(kept.is_empty(), "directive `{named}` should suppress the rule");
+            assert!(
+                kept.is_empty(),
+                "directive `{named}` should suppress the rule"
+            );
         }
     }
 
@@ -634,7 +661,10 @@ mod tests {
                  export function noop() {}\n\
                  export function noop2() {}\n";
         let kept = apply_suppressions(
-            vec![diag(2, "ts-no-empty-function"), diag(3, "ts-no-empty-function")],
+            vec![
+                diag(2, "ts-no-empty-function"),
+                diag(3, "ts-no-empty-function"),
+            ],
             Path::new("t.ts"),
             s,
         );
@@ -756,7 +786,10 @@ mod tests {
             "export const value = 1;\n",
         );
         let kept = apply_suppressions(vec![diag(5, "rule-a")], Path::new("t.ts"), s);
-        assert!(kept.is_empty(), "the marker below the template still applies, got {kept:?}");
+        assert!(
+            kept.is_empty(),
+            "the marker below the template still applies, got {kept:?}"
+        );
     }
 
     #[test]
@@ -768,7 +801,11 @@ mod tests {
         );
         let r = parse_ignores(Path::new("t.ts"), s);
         // The marker trails the closing delimiter, so it targets its own line.
-        assert!(r.suppressions.get(&2).is_some_and(|rules| rules.contains("rule-a")));
+        assert!(
+            r.suppressions
+                .get(&2)
+                .is_some_and(|rules| rules.contains("rule-a"))
+        );
         // The column counts from the start of the line, not from the delimiter.
         assert_eq!(r.bad_ignores.len(), 1);
         assert_eq!(r.bad_ignores[0].column, 12);

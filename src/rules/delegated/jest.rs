@@ -13,8 +13,7 @@ pub fn register_all() -> Vec<RuleDef> {
         oxlint_delegate(
             RuleMeta {
                 id: "jest-no-export",
-                description:
-                    "Don't `export` (or `module.exports`) from a file that contains tests.",
+                description: "Don't `export` (or `module.exports`) from a file that contains tests.",
                 remediation: "Remove the export from the test file. Exporting from a test file \
                               makes test runners treat it as a module others import, which can \
                               re-run the tests and leak helpers. Move any shared code into a \

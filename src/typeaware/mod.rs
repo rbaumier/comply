@@ -4,8 +4,8 @@
 //! resolved TypeScript program — type queries, structural comparison — which
 //! no in-process tree-sitter pass can answer. comply drives a TypeScript
 //! checker (typescript-go, from `typescript` >= 7, its side-by-side alias
-//! `@typescript/native`, or else `@typescript/native-preview`) through a Node sidecar: it sends the tsconfig
-//! + file list + enabled rule ids, the sidecar builds the program once and
+//! `@typescript/native`, or else `@typescript/native-preview`) through a Node sidecar: it sends
+//! the tsconfig + file list + enabled rule ids, the sidecar builds the program once and
 //! returns the violations as JSON.
 //!
 //! Invoked when at least one rule needing that program is still enabled for
@@ -91,7 +91,10 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         // So these rules have no program to build.
         // Nothing of their kind to analyze.
         // The TS-family grouping only brought it here.
-        if files.iter().all(|f| crate::files::is_javascript_source(&f.path)) {
+        if files
+            .iter()
+            .all(|f| crate::files::is_javascript_source(&f.path))
+        {
             return Ok(vec![]);
         }
         return Err(no_tsconfig(&enabled).into());
@@ -104,7 +107,8 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
     // The sidecar identifies files by their canonical path; keep a map back to
     // the path comply discovered so reported diagnostics match the rest of the
     // run (config filtering, diff-only normalization all key on that path).
-    let mut canon_to_orig: rustc_hash::FxHashMap<String, PathBuf> = rustc_hash::FxHashMap::default();
+    let mut canon_to_orig: rustc_hash::FxHashMap<String, PathBuf> =
+        rustc_hash::FxHashMap::default();
     let mut abs_files: Vec<String> = Vec::with_capacity(files.len());
     for f in files {
         if let Ok(canon) = std::fs::canonicalize(&f.path) {
@@ -153,7 +157,11 @@ const QUOTED_RULES: usize = 5;
 fn no_tsconfig(enabled: &[&'static crate::rules::meta::RuleMeta]) -> ToolchainError {
     let named: Vec<&str> = enabled.iter().take(QUOTED_RULES).map(|m| m.id).collect();
     let hidden = enabled.len().saturating_sub(named.len());
-    let rest = if hidden > 0 { format!(", and {hidden} more") } else { String::new() };
+    let rest = if hidden > 0 {
+        format!(", and {hidden} more")
+    } else {
+        String::new()
+    };
     ToolchainError::Unusable {
         what: format!(
             "type-aware analysis found no tsconfig.json above the linted files, so the {} \
@@ -210,14 +218,8 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<SidecarResponse> {
 
     // A response can outgrow the pipe buffer.
     // Draining it only after the wait deadlocks.
-    let mut out_pipe = child
-        .stdout
-        .take()
-        .context("sidecar stdout unavailable")?;
-    let mut err_pipe = child
-        .stderr
-        .take()
-        .context("sidecar stderr unavailable")?;
+    let mut out_pipe = child.stdout.take().context("sidecar stdout unavailable")?;
+    let mut err_pipe = child.stderr.take().context("sidecar stderr unavailable")?;
     let out_reader = std::thread::spawn(move || {
         let mut buf = String::new();
         out_pipe.read_to_string(&mut buf).map(|_| buf)

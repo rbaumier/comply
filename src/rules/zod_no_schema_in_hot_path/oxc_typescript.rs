@@ -29,7 +29,7 @@ impl OxcCheck for Check {
         };
 
         // The callee must be a member expression chain rooted at `z`.
-        if !is_z_chain(&call.callee, ctx.source) {
+        if !is_z_chain(&call.callee) {
             return;
         }
 
@@ -121,11 +121,11 @@ fn starts_uppercase(name: &str) -> bool {
 }
 
 /// Check if a `z.*` member expression chain is rooted at the identifier `z`.
-fn is_z_chain(expr: &Expression<'_>, source: &str) -> bool {
+fn is_z_chain(expr: &Expression<'_>) -> bool {
     match expr {
-        Expression::StaticMemberExpression(member) => is_z_chain(&member.object, source),
-        Expression::ComputedMemberExpression(member) => is_z_chain(&member.object, source),
-        Expression::CallExpression(call) => is_z_chain(&call.callee, source),
+        Expression::StaticMemberExpression(member) => is_z_chain(&member.object),
+        Expression::ComputedMemberExpression(member) => is_z_chain(&member.object),
+        Expression::CallExpression(call) => is_z_chain(&call.callee),
         Expression::Identifier(ident) => ident.name == "z",
         _ => false,
     }

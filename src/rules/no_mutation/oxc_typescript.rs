@@ -418,6 +418,21 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
+fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, root: &str, kind: &str) {
+    let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
+    diagnostics.push(Diagnostic {
+        path: Arc::clone(&ctx.path_arc),
+        line,
+        column,
+        rule_id: super::META.id.into(),
+        message: format!(
+            "{kind} `{root}` (declared with `const`) — build a new value instead of mutating."
+        ),
+        severity: Severity::Error,
+        span: None,
+    });
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,19 +1026,4 @@ mod tests {
         "#;
         assert_eq!(run(src).len(), 1);
     }
-}
-
-fn report(diagnostics: &mut Vec<Diagnostic>, ctx: &CheckCtx, span_start: u32, root: &str, kind: &str) {
-    let (line, column) = byte_offset_to_line_col(ctx.source, span_start as usize);
-    diagnostics.push(Diagnostic {
-        path: Arc::clone(&ctx.path_arc),
-        line,
-        column,
-        rule_id: super::META.id.into(),
-        message: format!(
-            "{kind} `{root}` (declared with `const`) — build a new value instead of mutating."
-        ),
-        severity: Severity::Error,
-        span: None,
-    });
 }

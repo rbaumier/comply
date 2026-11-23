@@ -63,19 +63,14 @@ impl AstCheck for Check {
 /// Returns true if `node` (or any descendant) contains a call whose method
 /// is `from` or `select` — i.e. a Drizzle query builder chain.
 fn subtree_has_query_call(node: tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() == "call_expression" {
-        if let Some(function) = node.child_by_field_name("function") {
-            if function.kind() == "member_expression" {
-                if let Some(prop) = function.child_by_field_name("property") {
-                    if let Ok(name) = prop.utf8_text(source) {
-                        if name == "from" || name == "select" {
+    if node.kind() == "call_expression"
+        && let Some(function) = node.child_by_field_name("function")
+            && function.kind() == "member_expression"
+                && let Some(prop) = function.child_by_field_name("property")
+                    && let Ok(name) = prop.utf8_text(source)
+                        && (name == "from" || name == "select") {
                             return true;
                         }
-                    }
-                }
-            }
-        }
-    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if subtree_has_query_call(child, source) {

@@ -10,8 +10,8 @@
 //! only the reporting step is filtered.
 
 use anyhow::{Context, Result, bail};
-use std::collections::BTreeSet;
 use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

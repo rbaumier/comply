@@ -102,11 +102,10 @@ fn in_style_context<'a>(
                     return true;
                 }
             }
-            AstKind::CallExpression(call) => {
-                if is_react_native_stylesheet_create(call, semantic) {
+            AstKind::CallExpression(call)
+                if is_react_native_stylesheet_create(call, semantic) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

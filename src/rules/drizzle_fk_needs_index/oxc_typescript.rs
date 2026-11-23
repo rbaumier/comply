@@ -213,11 +213,10 @@ fn collect_from_extras_entry<'a>(expr: &'a Expression<'a>, out: &mut FxHashSet<S
                 continue;
             }
             if let Expression::Identifier(id) = &call.callee {
-                if id.name.as_str() == "primaryKey" {
-                    if let Some(first) = leading_pk_column(call) {
+                if id.name.as_str() == "primaryKey"
+                    && let Some(first) = leading_pk_column(call) {
                         out.insert(first.to_string());
                     }
-                }
                 return;
             }
         }

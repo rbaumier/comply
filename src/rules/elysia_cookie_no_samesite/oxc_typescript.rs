@@ -58,8 +58,8 @@ fn collect_cookie_block(lines: &[&str], start: usize) -> String {
     let mut depth: i32 = 0;
     let mut seen_open = false;
     let mut last = start;
-    for i in start..end {
-        for ch in lines[i].chars() {
+    for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+        for ch in line.chars() {
             match ch {
                 '(' => {
                     depth += 1;

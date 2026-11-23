@@ -47,8 +47,6 @@ pub mod object_literal;
 pub mod path_utils;
 pub mod playwright;
 pub mod react_leak_helpers;
-#[cfg(test)]
-pub mod regex_ast;
 pub mod regex_helpers;
 pub mod regex_redos;
 mod registry;
@@ -62,8 +60,6 @@ pub mod test_assertion_helpers;
 pub mod test_guard_helpers;
 #[cfg(test)]
 pub mod test_helpers;
-#[cfg(test)]
-pub mod test_methods;
 pub mod test_validation_rejection;
 pub mod throw_assertion;
 pub mod unknown_type;

@@ -37,11 +37,10 @@ fn has_optional_assertion(pattern: &str) -> bool {
                             break;
                         }
                     }
-                    b'^' | b'$' => {
-                        if depth == 1 && !is_inside_char_class(bytes, j) {
+                    b'^' | b'$'
+                        if depth == 1 && !is_inside_char_class(bytes, j) => {
                             has_assertion = true;
                         }
-                    }
                     _ => {}
                 }
                 j += 1;

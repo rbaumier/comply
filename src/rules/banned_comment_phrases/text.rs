@@ -26,7 +26,7 @@ impl TextCheck for Check {
                 column: 1,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Comment uses `{phrase}` — narrator filler typical of AI-generated \
+                    "Comment uses `{phrase}` — filler typical of AI-generated \
                      prose. State the point directly or delete the comment."
                 ),
                 severity: Severity::Error,

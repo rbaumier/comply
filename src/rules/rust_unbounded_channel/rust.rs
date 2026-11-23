@@ -137,6 +137,7 @@ fn is_channel_unbounded_path(text: &str) -> bool {
 ///     (`mpsc::channel`, `std::sync::mpsc::channel`, `sync::mpsc::channel`);
 ///   * bare `channel()` brought in by `use std::sync::mpsc::channel;` — accepted
 ///     only when the file actually imports `channel` from an `mpsc` path.
+///
 /// Any other `channel()` (`oneshot`, `broadcast`, `watch`, a third-party
 /// channel, …), qualified OR bare-imported, is not mpsc and is not flagged.
 fn channel_is_std_mpsc(text: &str, source: &[u8]) -> bool {

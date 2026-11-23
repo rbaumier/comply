@@ -44,7 +44,7 @@ impl OxcCheck for Check {
                 column,
                 rule_id: super::META.id.into(),
                 message: format!(
-                    "Comment uses `{word}` \u{2014} dismissive filler that hides complexity. \
+                    "Comment uses `{word}` \u{2014} filler or jargon that hides complexity. \
                      Either explain the actual subtlety or delete the comment if the \
                      line is genuinely self-explanatory."
                 ),

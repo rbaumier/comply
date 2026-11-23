@@ -45,13 +45,11 @@ fn inside_define_relations_part(
     semantic: &oxc_semantic::Semantic<'_>,
 ) -> bool {
     for ancestor in semantic.nodes().ancestors(node.id()).skip(1) {
-        if let AstKind::CallExpression(call) = ancestor.kind() {
-            if let Expression::Identifier(id) = &call.callee {
-                if id.name == "defineRelationsPart" {
+        if let AstKind::CallExpression(call) = ancestor.kind()
+            && let Expression::Identifier(id) = &call.callee
+                && id.name == "defineRelationsPart" {
                     return true;
                 }
-            }
-        }
     }
     false
 }

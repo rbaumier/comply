@@ -59,11 +59,10 @@ fn children_have_title(children: &oxc_allocator::Vec<'_, JSXChild<'_>>) -> bool 
                         return true;
                     }
             }
-            JSXChild::Fragment(frag) => {
-                if children_have_title(&frag.children) {
+            JSXChild::Fragment(frag)
+                if children_have_title(&frag.children) => {
                     return true;
                 }
-            }
             _ => {}
         }
     }

@@ -92,9 +92,9 @@ pub fn is_config_file(path: &Path) -> bool {
         // a framework-consumed config entry point; a bare `config.ts` nested in
         // application source stays flaggable.
         let has_dir_prefix = path.parent().is_some_and(|p| !p.as_os_str().is_empty());
-        let under_docs_convention = path.components().any(|c| {
-            matches!(c.as_os_str().to_str(), Some("docs") | Some(".vitepress"))
-        });
+        let under_docs_convention = path
+            .components()
+            .any(|c| matches!(c.as_os_str().to_str(), Some("docs") | Some(".vitepress")));
         return !has_dir_prefix || under_docs_convention;
     }
     false
@@ -323,7 +323,10 @@ pub fn is_rust_ui_test_fixture(path: &Path) -> bool {
             if segment == "tests" {
                 seen_tests = true;
             } else if seen_tests
-                && matches!(segment.to_str(), Some("ui" | "compile-fail" | "compile_fail"))
+                && matches!(
+                    segment.to_str(),
+                    Some("ui" | "compile-fail" | "compile_fail")
+                )
             {
                 return true;
             }
@@ -348,9 +351,9 @@ pub fn is_rust_trybuild_fixture(path: &Path) -> bool {
             _ => None,
         })
         .collect();
-    segments.windows(3).any(|window| {
-        window[0] == "tests" && matches!(window[2], "pass" | "fail")
-    })
+    segments
+        .windows(3)
+        .any(|window| window[0] == "tests" && matches!(window[2], "pass" | "fail"))
 }
 
 /// True when `path` lives under a Cargo `examples/` directory or a disabled
@@ -575,8 +578,7 @@ pub fn is_top_level_resources_dir_path(path: &Path, project_root: &Path) -> bool
 /// and are not part of the shipped bundle, so importing a devDependency from
 /// them is correct.
 pub fn is_build_script_path(path: &Path, project_root: &Path) -> bool {
-    has_path_segment(path, &["scripts", "config"])
-        || is_root_level_build_script(path, project_root)
+    has_path_segment(path, &["scripts", "config"]) || is_root_level_build_script(path, project_root)
 }
 
 /// True when `path` is a `build`/`bundle` script (stem `build` or `bundle`
@@ -704,7 +706,10 @@ fn has_content_hash_shape(segment: &str) -> bool {
     if segment.len() < 8 {
         return false;
     }
-    if !segment.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+    if !segment
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
         return false;
     }
     let has_digit = segment.bytes().any(|b| b.is_ascii_digit());
@@ -1248,7 +1253,8 @@ pub fn is_build_output_specifier(spec: &str) -> bool {
 ///   `svelte-kit sync` to `.svelte-kit/types/<route>/$types.d.ts` and resolved
 ///   through tsconfig path aliases.
 pub fn is_framework_generated_route_types_specifier(spec: &str) -> bool {
-    spec.split('/').any(|seg| seg == "+types" || seg == "$types")
+    spec.split('/')
+        .any(|seg| seg == "+types" || seg == "$types")
 }
 
 /// True when `path` is a TypeScript-language source file (`.ts`/`.tsx`/`.mts`/
@@ -1454,10 +1460,7 @@ pub fn is_in_framework_entry_dir(path: &Path, project: &ProjectCtx) -> bool {
 /// convention, never through a static import. The per-framework export name is
 /// supplied by `RouteMagicExports::param_matchers`.
 pub fn is_param_dir_file(path: &Path) -> bool {
-    let is_script = matches!(
-        path.extension().and_then(|e| e.to_str()),
-        Some("js" | "ts")
-    );
+    let is_script = matches!(path.extension().and_then(|e| e.to_str()), Some("js" | "ts"));
     if !is_script {
         return false;
     }
@@ -1494,16 +1497,18 @@ const NUXT_MODULE_DEPS: &[&str] = &["@nuxt/kit", "@nuxt/module-builder"];
 pub fn is_nuxt_module_runtime_file(path: &Path, project: &ProjectCtx) -> bool {
     let is_runtime_seg = path.components().any(|c| {
         matches!(c, std::path::Component::Normal(s)
-            if s.to_str().is_some_and(|seg| {
-                seg == "runtime" || seg == "client" || seg.starts_with("runtime-")
-            }))
+        if s.to_str().is_some_and(|seg| {
+            seg == "runtime" || seg == "client" || seg.starts_with("runtime-")
+        }))
     });
     if !is_runtime_seg {
         return false;
     }
-    project
-        .nearest_package_json(path)
-        .is_some_and(|pkg| NUXT_MODULE_DEPS.iter().any(|dep| pkg.has_dep_or_engine(dep)))
+    project.nearest_package_json(path).is_some_and(|pkg| {
+        NUXT_MODULE_DEPS
+            .iter()
+            .any(|dep| pkg.has_dep_or_engine(dep))
+    })
 }
 
 /// True when `path` is a Nuxt Nitro server route module: a file directly or
@@ -1677,7 +1682,10 @@ pub fn is_quasar_ssr_entry_file(path: &Path) -> bool {
     ) {
         return false;
     }
-    path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("src-ssr")
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("src-ssr")
 }
 
 /// Nuxt's conventional auto-loaded directories — those whose files Nuxt's
@@ -1747,7 +1755,12 @@ pub fn is_framework_entry_point(path: &Path, project: &ProjectCtx) -> bool {
     // so they identify file-system-routed entry points (Next.js `pages/`,
     // Nuxt `pages/`) regardless of detection depth.
     for fw in project.frameworks_for_path(path) {
-        if fw.entry_points.dirs.iter().any(|dir| path_str.contains(dir.as_str())) {
+        if fw
+            .entry_points
+            .dirs
+            .iter()
+            .any(|dir| path_str.contains(dir.as_str()))
+        {
             return true;
         }
         if fw.entry_points.files.iter().any(|entry| entry == name) {
@@ -1847,102 +1860,166 @@ mod aux_path_tests {
 
     #[test]
     fn cargo_example_path_matches_examples_and_disabled_variants() {
-        assert!(is_cargo_example_path(&PathBuf::from("examples/search-stdin.rs")));
-        assert!(is_cargo_example_path(&PathBuf::from("crates/foo/examples/demo.rs")));
+        assert!(is_cargo_example_path(&PathBuf::from(
+            "examples/search-stdin.rs"
+        )));
+        assert!(is_cargo_example_path(&PathBuf::from(
+            "crates/foo/examples/demo.rs"
+        )));
         // #4779: disabled-example variants delimited by `_`.
         assert!(is_cargo_example_path(&PathBuf::from(
             "examples_disabled/migration/src/main.rs"
         )));
-        assert!(is_cargo_example_path(&PathBuf::from("examples_old/demo.rs")));
-        assert!(is_cargo_example_path(&PathBuf::from("disabled_examples/demo.rs")));
+        assert!(is_cargo_example_path(&PathBuf::from(
+            "examples_old/demo.rs"
+        )));
+        assert!(is_cargo_example_path(&PathBuf::from(
+            "disabled_examples/demo.rs"
+        )));
         // Token (not substring) match — an unrelated source file stays checked.
-        assert!(!is_cargo_example_path(&PathBuf::from("src/examplesHelper.rs")));
+        assert!(!is_cargo_example_path(&PathBuf::from(
+            "src/examplesHelper.rs"
+        )));
         assert!(!is_cargo_example_path(&PathBuf::from("src/lib.rs")));
     }
 
     #[test]
     fn developer_script_path_is_narrow() {
-        assert!(is_developer_script_path(&PathBuf::from("scripts/import-legacy-data.ts")));
+        assert!(is_developer_script_path(&PathBuf::from(
+            "scripts/import-legacy-data.ts"
+        )));
         assert!(is_developer_script_path(&PathBuf::from("pkg/bin/cli.ts")));
-        assert!(is_developer_script_path(&PathBuf::from("db/migrations/0001.ts")));
+        assert!(is_developer_script_path(&PathBuf::from(
+            "db/migrations/0001.ts"
+        )));
         // The narrow predicate must NOT cover config/examples/templates.
-        assert!(!is_developer_script_path(&PathBuf::from("config/helpers.ts")));
-        assert!(!is_developer_script_path(&PathBuf::from("examples/app/page.tsx")));
-        assert!(!is_developer_script_path(&PathBuf::from("templates/app/page.tsx")));
+        assert!(!is_developer_script_path(&PathBuf::from(
+            "config/helpers.ts"
+        )));
+        assert!(!is_developer_script_path(&PathBuf::from(
+            "examples/app/page.tsx"
+        )));
+        assert!(!is_developer_script_path(&PathBuf::from(
+            "templates/app/page.tsx"
+        )));
     }
 
     #[test]
     fn top_level_script_dir_is_root_anchored() {
         let root = PathBuf::from("/repo");
-        for dir in ["scripts", "bin", "tools", "examples", "example-apps", "benchmark", "benchmarks"] {
+        for dir in [
+            "scripts",
+            "bin",
+            "tools",
+            "examples",
+            "example-apps",
+            "benchmark",
+            "benchmarks",
+        ] {
             assert!(
                 is_top_level_script_dir_path(&root.join(format!("{dir}/run.ts")), &root),
                 "top-level {dir}/ is a CLI/automation entry dir"
             );
         }
         // Issue #1657: an inline build script under top-level `scripts/`.
-        assert!(is_top_level_script_dir_path(&root.join("scripts/precompile.mjs"), &root));
+        assert!(is_top_level_script_dir_path(
+            &root.join("scripts/precompile.mjs"),
+            &root
+        ));
         // Anchored at the root only: a nested `src/scripts/` library helper is
         // a real importable module and must NOT be exempted.
-        assert!(!is_top_level_script_dir_path(&root.join("src/scripts/util.ts"), &root));
-        assert!(!is_top_level_script_dir_path(&root.join("src/app/login.ts"), &root));
+        assert!(!is_top_level_script_dir_path(
+            &root.join("src/scripts/util.ts"),
+            &root
+        ));
+        assert!(!is_top_level_script_dir_path(
+            &root.join("src/app/login.ts"),
+            &root
+        ));
     }
 
     #[test]
     fn top_level_resources_dir_is_root_anchored() {
         // Issue #2399: a top-level `resources/` directory holds build tooling.
         let root = PathBuf::from("/repo");
-        assert!(is_top_level_resources_dir_path(&root.join("resources/build-npm.ts"), &root));
+        assert!(is_top_level_resources_dir_path(
+            &root.join("resources/build-npm.ts"),
+            &root
+        ));
         assert!(is_top_level_resources_dir_path(
             &root.join("resources/benchmark/worker-timing.js"),
             &root
         ));
         // Anchored at the root only: a nested `src/resources/` is runtime code.
-        assert!(!is_top_level_resources_dir_path(&root.join("src/resources/loader.ts"), &root));
+        assert!(!is_top_level_resources_dir_path(
+            &root.join("src/resources/loader.ts"),
+            &root
+        ));
         // A segment merely containing "resources" must not match.
-        assert!(!is_top_level_resources_dir_path(&root.join("resourcesLoader/x.ts"), &root));
+        assert!(!is_top_level_resources_dir_path(
+            &root.join("resourcesLoader/x.ts"),
+            &root
+        ));
     }
 
     #[test]
     fn nuxt_auto_imported_file_matches_composables_and_utils() {
         // Issue #4482: Nitro auto-imports every export under `server/utils/`.
-        assert!(is_nuxt_auto_imported_file(Path::new("playground/server/utils/session.ts")));
+        assert!(is_nuxt_auto_imported_file(Path::new(
+            "playground/server/utils/session.ts"
+        )));
         // Composables exemption (client-side auto-import).
-        assert!(is_nuxt_auto_imported_file(Path::new("composables/useFoo.ts")));
+        assert!(is_nuxt_auto_imported_file(Path::new(
+            "composables/useFoo.ts"
+        )));
         // Issue #4673: Nuxt auto-imports every named export under `utils/` —
         // both Nuxt 3's root `utils/` and Nuxt 4's `app/utils/`.
         assert!(is_nuxt_auto_imported_file(Path::new("utils/helpers.ts")));
         assert!(is_nuxt_auto_imported_file(Path::new("app/utils/url.ts")));
         // A `server/` segment without a following `utils/` is not auto-imported.
-        assert!(!is_nuxt_auto_imported_file(Path::new("src/server/handler.ts")));
+        assert!(!is_nuxt_auto_imported_file(Path::new(
+            "src/server/handler.ts"
+        )));
     }
 
     #[test]
     fn quasar_ssr_entry_file_matches_src_ssr_server_only() {
         // Issue #4711: the Quasar CLI reads `src-ssr/server.{js,ts}` named exports.
         assert!(is_quasar_ssr_entry_file(Path::new("src-ssr/server.js")));
-        assert!(is_quasar_ssr_entry_file(Path::new("ui/playground/src-ssr/server.ts")));
+        assert!(is_quasar_ssr_entry_file(Path::new(
+            "ui/playground/src-ssr/server.ts"
+        )));
         assert!(is_quasar_ssr_entry_file(Path::new("src-ssr/server.mjs")));
         // A `server.*` outside `src-ssr/` is an ordinary module.
         assert!(!is_quasar_ssr_entry_file(Path::new("src/server.ts")));
         // Other files inside `src-ssr/` are not the convention entry point.
-        assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/middlewares/render.ts")));
-        assert!(!is_quasar_ssr_entry_file(Path::new("src-ssr/server-config.ts")));
+        assert!(!is_quasar_ssr_entry_file(Path::new(
+            "src-ssr/middlewares/render.ts"
+        )));
+        assert!(!is_quasar_ssr_entry_file(Path::new(
+            "src-ssr/server-config.ts"
+        )));
     }
 
     #[test]
     fn nuxt_mcp_toolkit_file_matches_server_mcp_convention_dirs() {
         // Issue #5121: `@nuxtjs/mcp-toolkit` auto-discovers modules under
         // `server/mcp/{tools,resources,prompts}/`.
-        assert!(is_nuxt_mcp_toolkit_file(Path::new("docs/server/mcp/tools/get-component.ts")));
-        assert!(is_nuxt_mcp_toolkit_file(Path::new("server/mcp/resources/components.ts")));
+        assert!(is_nuxt_mcp_toolkit_file(Path::new(
+            "docs/server/mcp/tools/get-component.ts"
+        )));
+        assert!(is_nuxt_mcp_toolkit_file(Path::new(
+            "server/mcp/resources/components.ts"
+        )));
         assert!(is_nuxt_mcp_toolkit_file(Path::new(
             "server/mcp/prompts/find-component-for-usecase.ts"
         )));
         // A `mcp/` directory not directly under `server/` is not the convention.
         assert!(!is_nuxt_mcp_toolkit_file(Path::new("src/mcp/tools/x.ts")));
         // A `server/mcp/` subdir other than the three kinds is not exempt.
-        assert!(!is_nuxt_mcp_toolkit_file(Path::new("server/mcp/utils/registry.ts")));
+        assert!(!is_nuxt_mcp_toolkit_file(Path::new(
+            "server/mcp/utils/registry.ts"
+        )));
         // A `server/` file without the `mcp/tools` layout stays subject to the rule.
         assert!(!is_nuxt_mcp_toolkit_file(Path::new("server/api/tools.ts")));
     }
@@ -1952,7 +2029,10 @@ mod aux_path_tests {
         let root = PathBuf::from("/repo");
         assert!(is_build_script_path(&root.join("scripts/gen.ts"), &root));
         assert!(is_build_script_path(&root.join("config/helpers.ts"), &root));
-        assert!(!is_build_script_path(&root.join("src/appconfig/index.ts"), &root));
+        assert!(!is_build_script_path(
+            &root.join("src/appconfig/index.ts"),
+            &root
+        ));
         // Root-level build/bundle scripts are tooling, exempt at the root only.
         assert!(is_build_script_path(&root.join("build.ts"), &root));
         assert!(is_build_script_path(&root.join("bundle.mjs"), &root));
@@ -1961,24 +2041,38 @@ mod aux_path_tests {
         assert!(is_sample_dir_path(&PathBuf::from("samples-dev/x.ts")));
         assert!(is_sample_dir_path(&PathBuf::from("examples/app.ts")));
         // Issue #1563: component-library demo/example directories.
-        assert!(is_sample_dir_path(&PathBuf::from("components/tabs/demo/style-class.tsx")));
-        assert!(is_sample_dir_path(&PathBuf::from("packages/foo/demos/index.tsx")));
+        assert!(is_sample_dir_path(&PathBuf::from(
+            "components/tabs/demo/style-class.tsx"
+        )));
+        assert!(is_sample_dir_path(&PathBuf::from(
+            "packages/foo/demos/index.tsx"
+        )));
         assert!(is_sample_dir_path(&PathBuf::from("example/app.ts")));
         // Issue #1214: singular `sample/` directory.
-        assert!(is_sample_dir_path(&PathBuf::from("packages/foo/sample/usage.ts")));
-        assert!(!is_sample_dir_path(&PathBuf::from("src/mysamples/index.ts")));
+        assert!(is_sample_dir_path(&PathBuf::from(
+            "packages/foo/sample/usage.ts"
+        )));
+        assert!(!is_sample_dir_path(&PathBuf::from(
+            "src/mysamples/index.ts"
+        )));
         // Segment (not substring) match — `myexamples` must not match `examples`.
         assert!(!is_sample_dir_path(&PathBuf::from("src/myexamples/foo.ts")));
         // Segment (not substring) match — `demonstration` must not match `demo`.
-        assert!(!is_sample_dir_path(&PathBuf::from("src/demonstration/index.ts")));
+        assert!(!is_sample_dir_path(&PathBuf::from(
+            "src/demonstration/index.ts"
+        )));
     }
 
     #[test]
     fn type_test_file_covers_tsd_conventions_issue3324() {
         // The issue's exact reproducer paths.
         assert!(is_type_test_file(&PathBuf::from("test-d/jsonify.ts")));
-        assert!(is_type_test_file(&PathBuf::from("test-d/conditional-simplify.ts")));
-        assert!(is_type_test_file(&PathBuf::from("test-d/structured-cloneable.ts")));
+        assert!(is_type_test_file(&PathBuf::from(
+            "test-d/conditional-simplify.ts"
+        )));
+        assert!(is_type_test_file(&PathBuf::from(
+            "test-d/structured-cloneable.ts"
+        )));
         // Other tsd/dtslint directory and filename conventions.
         assert!(is_type_test_file(&PathBuf::from("src/test-d/types.ts")));
         assert!(is_type_test_file(&PathBuf::from("test-tsd/common.ts")));
@@ -2013,16 +2107,28 @@ mod aux_path_tests {
             "src/generic-composables.typecheck.ts"
         )));
         // Pre-existing type-compilation-test directory conventions still match.
-        assert!(is_type_compilation_test_path(&PathBuf::from("tsc-build/index.ts")));
-        assert!(is_type_compilation_test_path(&PathBuf::from("type-tests/api.ts")));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "tsc-build/index.ts"
+        )));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "type-tests/api.ts"
+        )));
         // Segment (not substring) match — an unrelated `type-checker/` dir or a
         // `typecheck` token embedded in a longer name must NOT match.
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-checker/run.ts")));
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheckers/run.ts")));
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/widget.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/type-checker/run.ts"
+        )));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/typecheckers/run.ts"
+        )));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/widget.ts"
+        )));
         // The infix requires surrounding dots — a bare `typecheck.ts` filename
         // (no leading dot, e.g. a `typecheck` runtime module) does NOT match.
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheck.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/typecheck.ts"
+        )));
     }
 
     #[test]
@@ -2047,7 +2153,9 @@ mod aux_path_tests {
         )));
         // The infix requires surrounding dots — a bare `d-test.ts` filename
         // (no leading dot) does NOT match.
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/d-test.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/d-test.ts"
+        )));
         assert!(!is_type_compilation_test_path(&PathBuf::from(
             "src/myd-test.ts"
         )));
@@ -2061,16 +2169,28 @@ mod aux_path_tests {
         assert!(is_type_compilation_test_path(&PathBuf::from(
             "packages/core/src/types/type-tests.ts"
         )));
-        assert!(is_type_compilation_test_path(&PathBuf::from("src/types-tests.ts")));
+        assert!(is_type_compilation_test_path(&PathBuf::from(
+            "src/types-tests.ts"
+        )));
         // Stem match (not substring) — a runtime test file whose stem merely ends
         // in `-tests` (e.g. `widget-tests.ts`) is NOT a type-compilation test.
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/widget-tests.ts")));
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-tests-helpers.ts")));
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/utils.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/widget-tests.ts"
+        )));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/type-tests-helpers.ts"
+        )));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/utils.ts"
+        )));
         // Bare `typecheck`/`type-check` stems can name a runtime module, so they
         // stay non-matching at the file-stem level (issue #4940 invariant).
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/typecheck.ts")));
-        assert!(!is_type_compilation_test_path(&PathBuf::from("src/type-check.ts")));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/typecheck.ts"
+        )));
+        assert!(!is_type_compilation_test_path(&PathBuf::from(
+            "src/type-check.ts"
+        )));
     }
 
     #[test]
@@ -2079,18 +2199,32 @@ mod aux_path_tests {
         assert!(is_scaffold_template_path(&PathBuf::from(
             "cli/template/extras/src/app/page/base.tsx"
         )));
-        assert!(is_scaffold_template_path(&PathBuf::from("templates/app/page.tsx")));
-        assert!(is_scaffold_template_path(&PathBuf::from("scaffold/index.ts")));
-        assert!(is_scaffold_template_path(&PathBuf::from("boilerplate/main.ts")));
+        assert!(is_scaffold_template_path(&PathBuf::from(
+            "templates/app/page.tsx"
+        )));
+        assert!(is_scaffold_template_path(&PathBuf::from(
+            "scaffold/index.ts"
+        )));
+        assert!(is_scaffold_template_path(&PathBuf::from(
+            "boilerplate/main.ts"
+        )));
         // Narrower than is_aux_dir_path: these must NOT be skipped — an
         // unresolved relative import in config/scripts/migrations/examples is a
         // real error.
-        assert!(!is_scaffold_template_path(&PathBuf::from("config/next.config.js")));
+        assert!(!is_scaffold_template_path(&PathBuf::from(
+            "config/next.config.js"
+        )));
         assert!(!is_scaffold_template_path(&PathBuf::from("scripts/gen.ts")));
-        assert!(!is_scaffold_template_path(&PathBuf::from("examples/app/page.tsx")));
+        assert!(!is_scaffold_template_path(&PathBuf::from(
+            "examples/app/page.tsx"
+        )));
         // Segment (not substring) match.
-        assert!(!is_scaffold_template_path(&PathBuf::from("src/templated/index.ts")));
-        assert!(!is_scaffold_template_path(&PathBuf::from("src/app/login.ts")));
+        assert!(!is_scaffold_template_path(&PathBuf::from(
+            "src/templated/index.ts"
+        )));
+        assert!(!is_scaffold_template_path(&PathBuf::from(
+            "src/app/login.ts"
+        )));
     }
 
     #[test]
@@ -2101,7 +2235,9 @@ mod aux_path_tests {
         )));
         assert!(is_auto_mock_dir_path(&PathBuf::from("__mocks__/fs.js")));
         // Segment (not substring) match.
-        assert!(!is_auto_mock_dir_path(&PathBuf::from("src/my__mocks__data/index.ts")));
+        assert!(!is_auto_mock_dir_path(&PathBuf::from(
+            "src/my__mocks__data/index.ts"
+        )));
         assert!(!is_auto_mock_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
@@ -2109,11 +2245,21 @@ mod aux_path_tests {
     fn mock_or_fixture_dir_path_segments() {
         // Issue #1591: mock config-flag and fixture constants under a
         // mock/fixture directory.
-        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("test/mocks/nuxt-config.ts")));
-        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("src/mock/config.ts")));
-        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__mocks__/fs.js")));
-        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("test/fixtures/data.ts")));
-        assert!(is_mock_or_fixture_dir_path(&PathBuf::from("__fixtures__/sample.ts")));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "test/mocks/nuxt-config.ts"
+        )));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/mock/config.ts"
+        )));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "__mocks__/fs.js"
+        )));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "test/fixtures/data.ts"
+        )));
+        assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
+            "__fixtures__/sample.ts"
+        )));
         // Issue #2115: jscodeshift `__testfixtures__/` codemod fixture dir.
         assert!(is_mock_or_fixture_dir_path(&PathBuf::from(
             "src/v5/rename-properties/__testfixtures__/rename-cache-time.input.tsx"
@@ -2123,42 +2269,83 @@ mod aux_path_tests {
             "tests/syntax-tests/source/TypeScript/example.ts"
         )));
         // Segment (not substring) match.
-        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/mockingbird/index.ts")));
-        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/fixturesHelper.ts")));
-        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/__testfixtures__data/index.ts")));
-        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("syntax-tests-data/foo.ts")));
-        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from("src/app/login.ts")));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/mockingbird/index.ts"
+        )));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/fixturesHelper.ts"
+        )));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/__testfixtures__data/index.ts"
+        )));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from(
+            "syntax-tests-data/foo.ts"
+        )));
+        assert!(!is_mock_or_fixture_dir_path(&PathBuf::from(
+            "src/app/login.ts"
+        )));
     }
 
     #[test]
     fn test_scaffolding_path_covers_dirs_and_infixes() {
         // A test-suite directory segment, at the root or nested.
-        assert!(is_test_scaffolding_path(&PathBuf::from("test/plots/shorthand-tickX.ts")));
-        assert!(is_test_scaffolding_path(&PathBuf::from("packages/foo/tests/io.ts")));
-        assert!(is_test_scaffolding_path(&PathBuf::from("__tests__/Router-test.tsx")));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "test/plots/shorthand-tickX.ts"
+        )));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "packages/foo/tests/io.ts"
+        )));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "__tests__/Router-test.tsx"
+        )));
         assert!(is_test_scaffolding_path(&PathBuf::from(
             "packages/tests/server/regression/issue-3351-TRPCError.test.ts"
         )));
         // A mock/fixture directory segment, via the shared classifier.
-        assert!(is_test_scaffolding_path(&PathBuf::from("__fixtures__/render-My.ts")));
-        assert!(is_test_scaffolding_path(&PathBuf::from("src/__mocks__/server.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "__fixtures__/render-My.ts"
+        )));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "src/__mocks__/server.ts"
+        )));
         // A `.test.`/`.spec.` infix on a file co-located in production source.
-        assert!(is_test_scaffolding_path(&PathBuf::from("src/plots/shorthand-tickX.test.ts")));
-        assert!(is_test_scaffolding_path(&PathBuf::from("src/plots/aspect.spec.ts")));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "src/plots/shorthand-tickX.test.ts"
+        )));
+        assert!(is_test_scaffolding_path(&PathBuf::from(
+            "src/plots/aspect.spec.ts"
+        )));
         // Segment (not substring) match — `contest/`, `latest/` and a stem
         // merely containing `test` are production source.
-        assert!(!is_test_scaffolding_path(&PathBuf::from("src/contest/shorthand-tickX.ts")));
-        assert!(!is_test_scaffolding_path(&PathBuf::from("src/latest/index.ts")));
-        assert!(!is_test_scaffolding_path(&PathBuf::from("src/testHarness.ts")));
-        assert!(!is_test_scaffolding_path(&PathBuf::from("src/app/login.ts")));
+        assert!(!is_test_scaffolding_path(&PathBuf::from(
+            "src/contest/shorthand-tickX.ts"
+        )));
+        assert!(!is_test_scaffolding_path(&PathBuf::from(
+            "src/latest/index.ts"
+        )));
+        assert!(!is_test_scaffolding_path(&PathBuf::from(
+            "src/testHarness.ts"
+        )));
+        assert!(!is_test_scaffolding_path(&PathBuf::from(
+            "src/app/login.ts"
+        )));
     }
 
     #[test]
     fn numeric_ordering_prefix_strips_sort_key_only() {
         // Every separator, in the ordered-directory and docs-example shapes.
-        assert_eq!(strip_numeric_ordering_prefix("01.auth.global.ts"), Some("auth.global.ts"));
-        assert_eq!(strip_numeric_ordering_prefix("0065_comment_newline.rs"), Some("comment_newline.rs"));
-        assert_eq!(strip_numeric_ordering_prefix("0010-single-row.js"), Some("single-row.js"));
+        assert_eq!(
+            strip_numeric_ordering_prefix("01.auth.global.ts"),
+            Some("auth.global.ts")
+        );
+        assert_eq!(
+            strip_numeric_ordering_prefix("0065_comment_newline.rs"),
+            Some("comment_newline.rs")
+        );
+        assert_eq!(
+            strip_numeric_ordering_prefix("0010-single-row.js"),
+            Some("single-row.js")
+        );
         // No digits, no separator after the digits, and nothing after the
         // separator are all "not an ordering prefix".
         assert!(strip_numeric_ordering_prefix("auth.ts").is_none());
@@ -2186,7 +2373,9 @@ mod aux_path_tests {
             "apps/react-vite/src/testing/setup-tests.ts"
         )));
         // Segment (not substring) match.
-        assert!(!is_test_infra_dir_path(&PathBuf::from("src/testingLibraryWrapper.ts")));
+        assert!(!is_test_infra_dir_path(&PathBuf::from(
+            "src/testingLibraryWrapper.ts"
+        )));
         assert!(!is_test_infra_dir_path(&PathBuf::from("src/app/login.ts")));
     }
 
@@ -2321,7 +2510,9 @@ mod aux_path_tests {
 
     #[test]
     fn fuzz_targets_path_match() {
-        assert!(is_fuzz_targets_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
+        assert!(is_fuzz_targets_path(&PathBuf::from(
+            "fuzz/fuzz_targets/parse.rs"
+        )));
         assert!(!is_fuzz_targets_path(&PathBuf::from("src/lib.rs")));
     }
 
@@ -2331,8 +2522,12 @@ mod aux_path_tests {
         // cargo-fuzz's `fuzz_targets/` segment alone — chessops' JS targets live
         // at `fuzz/src/*.fuzz.ts`, AFL's at `fuzz-afl/fuzzers/`.
         assert!(is_fuzz_harness_path(&PathBuf::from("fuzz/src/uci.fuzz.ts")));
-        assert!(is_fuzz_harness_path(&PathBuf::from("fuzz/fuzz_targets/parse.rs")));
-        assert!(is_fuzz_harness_path(&PathBuf::from("fuzz-afl/fuzzers/a.rs")));
+        assert!(is_fuzz_harness_path(&PathBuf::from(
+            "fuzz/fuzz_targets/parse.rs"
+        )));
+        assert!(is_fuzz_harness_path(&PathBuf::from(
+            "fuzz-afl/fuzzers/a.rs"
+        )));
         assert!(is_fuzz_harness_path(&PathBuf::from("fuzzing/target.js")));
         assert!(!is_fuzz_harness_path(&PathBuf::from("src/lib.rs")));
         // Segment equality, not prefix: a `fuzzy/` directory is unrelated.
@@ -2345,31 +2540,59 @@ mod aux_path_tests {
         assert!(has_test_suite_factory_suffix(&PathBuf::from(
             "packages/integration-testsuite/src/apolloServerTests.ts"
         )));
-        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/httpServerTests.js")));
-        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/queryTests.tsx")));
-        assert!(has_test_suite_factory_suffix(&PathBuf::from("src/parserSpec.ts")));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from(
+            "src/httpServerTests.js"
+        )));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from(
+            "src/queryTests.tsx"
+        )));
+        assert!(has_test_suite_factory_suffix(&PathBuf::from(
+            "src/parserSpec.ts"
+        )));
         // Negative space: ordinary words that merely end in lowercase `tests`/`spec`
         // (no capital boundary) are production files, not test factories.
-        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/manifests.ts")));
-        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/respec.ts")));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from(
+            "src/manifests.ts"
+        )));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from(
+            "src/respec.ts"
+        )));
         // The suffix must be a camelCase word boundary, not the whole stem.
-        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/Tests.ts")));
-        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/Spec.ts")));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from(
+            "src/Tests.ts"
+        )));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from(
+            "src/Spec.ts"
+        )));
         // Only JS/TS source extensions qualify.
-        assert!(!has_test_suite_factory_suffix(&PathBuf::from("src/apolloServerTests.md")));
+        assert!(!has_test_suite_factory_suffix(&PathBuf::from(
+            "src/apolloServerTests.md"
+        )));
     }
 
     #[test]
     fn extraneous_test_file_union() {
-        assert!(is_extraneous_test_file(&PathBuf::from("src/login-form.test.tsx")));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "src/login-form.test.tsx"
+        )));
         assert!(is_extraneous_test_file(&PathBuf::from("src/foo.spec.ts")));
-        assert!(is_extraneous_test_file(&PathBuf::from("src/__testUtils__/expectJSON.ts")));
-        assert!(is_extraneous_test_file(&PathBuf::from("src/endOfWeek/test.ts")));
-        assert!(is_extraneous_test_file(&PathBuf::from("src/startOfWeek/spec.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "src/__testUtils__/expectJSON.ts"
+        )));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "src/endOfWeek/test.ts"
+        )));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "src/startOfWeek/spec.ts"
+        )));
         // Issue #1915: date-fns `.tp.` type-probe convention.
-        assert!(is_extraneous_test_file(&PathBuf::from("src/addBusinessDays/test.tp.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "src/addBusinessDays/test.tp.ts"
+        )));
         // Issue #1891: root-level test-runner tooling named with a framework prefix.
-        assert!(is_extraneous_test_file(&PathBuf::from("vitest-custom-reporter.ts")));
+        assert!(is_extraneous_test_file(&PathBuf::from(
+            "vitest-custom-reporter.ts"
+        )));
         assert!(is_extraneous_test_file(&PathBuf::from("jest-setup.ts")));
         // Issue #2118: package-root global setup files named by the setup-file
         // convention (no test directory, no `.setup.` infix).
@@ -2387,19 +2610,25 @@ mod aux_path_tests {
         assert!(!is_extraneous_test_file(&PathBuf::from("src/app/login.ts")));
         // Guard: `vitest` must be a `/vitest/` directory segment, not a substring
         // of an unrelated production file or directory name.
-        assert!(!is_extraneous_test_file(&PathBuf::from("src/vitestHelper.ts")));
+        assert!(!is_extraneous_test_file(&PathBuf::from(
+            "src/vitestHelper.ts"
+        )));
         // Guard: the prefix must be a real `vitest-`/`jest-` name boundary, not a
         // substring of an unrelated production file name.
         assert!(!is_extraneous_test_file(&PathBuf::from("src/jester.ts")));
         // Guard: a production file whose name merely contains "setup" as part of
         // a larger word must not match the setup-file convention.
-        assert!(!is_extraneous_test_file(&PathBuf::from("src/setupStore.ts")));
+        assert!(!is_extraneous_test_file(&PathBuf::from(
+            "src/setupStore.ts"
+        )));
     }
 
     #[test]
     fn storybook_story_infix_and_extension() {
         // Issue #1359: Storybook story files discovered via the glob loader.
-        assert!(is_storybook_story(&PathBuf::from("components/Button.stories.tsx")));
+        assert!(is_storybook_story(&PathBuf::from(
+            "components/Button.stories.tsx"
+        )));
         assert!(is_storybook_story(&PathBuf::from("src/Header.stories.ts")));
         assert!(is_storybook_story(&PathBuf::from("src/Card.stories.jsx")));
         assert!(is_storybook_story(&PathBuf::from("src/Card.stories.js")));
@@ -2407,8 +2636,12 @@ mod aux_path_tests {
         // Older singular `.story.` convention.
         assert!(is_storybook_story(&PathBuf::from("src/Toggle.story.tsx")));
         // The extension gate keeps non-loaded sibling assets out.
-        assert!(!is_storybook_story(&PathBuf::from("src/Button.stories.css")));
-        assert!(!is_storybook_story(&PathBuf::from("src/Button.stories.json")));
+        assert!(!is_storybook_story(&PathBuf::from(
+            "src/Button.stories.css"
+        )));
+        assert!(!is_storybook_story(&PathBuf::from(
+            "src/Button.stories.json"
+        )));
         // An ordinary component file is not a story.
         assert!(!is_storybook_story(&PathBuf::from("src/Button.tsx")));
         // `stories`/`story` must be a `.`-delimited infix, not a stem substring.
@@ -2419,11 +2652,19 @@ mod aux_path_tests {
     #[test]
     fn storybook_config_dir_segment() {
         // Issue #6692: files under the `.storybook/` config directory.
-        assert!(is_storybook_config_dir(&PathBuf::from(".storybook/preview.ts")));
-        assert!(is_storybook_config_dir(&PathBuf::from(".storybook/main.ts")));
-        assert!(is_storybook_config_dir(&PathBuf::from("packages/ui/.storybook/manager.ts")));
+        assert!(is_storybook_config_dir(&PathBuf::from(
+            ".storybook/preview.ts"
+        )));
+        assert!(is_storybook_config_dir(&PathBuf::from(
+            ".storybook/main.ts"
+        )));
+        assert!(is_storybook_config_dir(&PathBuf::from(
+            "packages/ui/.storybook/manager.ts"
+        )));
         // `.storybook` must be a directory segment, not a filename substring.
-        assert!(!is_storybook_config_dir(&PathBuf::from("src/storybook-helper.ts")));
+        assert!(!is_storybook_config_dir(&PathBuf::from(
+            "src/storybook-helper.ts"
+        )));
         assert!(!is_storybook_config_dir(&PathBuf::from("src/foo.ts")));
     }
 
@@ -2441,10 +2682,16 @@ mod aux_path_tests {
     fn type_probe_infix_filename() {
         // Issue #1915: date-fns `test.tp.ts` type-probe convention (stem
         // `test.tp`, so the `.tp.` infix is the marker, not the stem).
-        assert!(has_type_probe_infix(&PathBuf::from("src/addBusinessDays/test.tp.ts")));
-        assert!(has_type_probe_infix(&PathBuf::from("src/addDays/foo.tp.tsx")));
+        assert!(has_type_probe_infix(&PathBuf::from(
+            "src/addBusinessDays/test.tp.ts"
+        )));
+        assert!(has_type_probe_infix(&PathBuf::from(
+            "src/addDays/foo.tp.tsx"
+        )));
         // A plain co-located source file is not a type probe.
-        assert!(!has_type_probe_infix(&PathBuf::from("src/addDays/index.ts")));
+        assert!(!has_type_probe_infix(&PathBuf::from(
+            "src/addDays/index.ts"
+        )));
     }
 
     #[test]
@@ -2471,17 +2718,31 @@ mod aux_path_tests {
     #[test]
     fn framework_generated_route_types_specifier_segments() {
         // Issue #2221: React Router v7's code-generated `+types/` directory.
-        assert!(is_framework_generated_route_types_specifier("./+types/root.ts"));
-        assert!(is_framework_generated_route_types_specifier("./+types/login.ts"));
-        assert!(is_framework_generated_route_types_specifier("../+types/about"));
+        assert!(is_framework_generated_route_types_specifier(
+            "./+types/root.ts"
+        ));
+        assert!(is_framework_generated_route_types_specifier(
+            "./+types/login.ts"
+        ));
+        assert!(is_framework_generated_route_types_specifier(
+            "../+types/about"
+        ));
         // Issue #3244: SvelteKit's code-generated `$types` module.
         assert!(is_framework_generated_route_types_specifier("./$types"));
-        assert!(is_framework_generated_route_types_specifier("../foo/$types"));
+        assert!(is_framework_generated_route_types_specifier(
+            "../foo/$types"
+        ));
         // Segment (not substring) match — a `+`/`$` elsewhere must not match.
-        assert!(!is_framework_generated_route_types_specifier("./my+types/x.ts"));
-        assert!(!is_framework_generated_route_types_specifier("./types/root.ts"));
+        assert!(!is_framework_generated_route_types_specifier(
+            "./my+types/x.ts"
+        ));
+        assert!(!is_framework_generated_route_types_specifier(
+            "./types/root.ts"
+        ));
         assert!(!is_framework_generated_route_types_specifier("./$typesfoo"));
-        assert!(!is_framework_generated_route_types_specifier("./does-not-exist.ts"));
+        assert!(!is_framework_generated_route_types_specifier(
+            "./does-not-exist.ts"
+        ));
     }
 
     #[test]
@@ -2493,7 +2754,10 @@ mod aux_path_tests {
         assert_eq!(strip_specifier_query("./worker.js?worker"), "./worker.js");
         assert_eq!(strip_specifier_query("./data.csv?url&inline"), "./data.csv");
         assert_eq!(strip_specifier_query("../[url].txt?url"), "../[url].txt");
-        assert_eq!(strip_specifier_query("/abs/styles.css?url"), "/abs/styles.css");
+        assert_eq!(
+            strip_specifier_query("/abs/styles.css?url"),
+            "/abs/styles.css"
+        );
         // A hash fragment is cut too; a query before a hash wins (URL grammar).
         assert_eq!(strip_specifier_query("./mod.js#frag"), "./mod.js");
         assert_eq!(strip_specifier_query("./mod.js?url#frag"), "./mod.js");
@@ -2509,7 +2773,9 @@ mod aux_path_tests {
         assert!(is_generated_file_specifier("./routeTree.gen"));
         assert!(is_generated_file_specifier("./routeTree.gen.ts"));
         assert!(is_generated_file_specifier("../app/routeTree.gen"));
-        assert!(is_generated_file_specifier("../../runtime/client/idle.prebuilt.js"));
+        assert!(is_generated_file_specifier(
+            "../../runtime/client/idle.prebuilt.js"
+        ));
         assert!(is_generated_file_specifier("./visible.prebuilt.js"));
         assert!(!is_generated_file_specifier("./routeTree"));
         assert!(!is_generated_file_specifier("./generated"));
@@ -2530,7 +2796,9 @@ mod aux_path_tests {
         assert!(is_linter_spec_fixture(&PathBuf::from(
             "crates/rome_js_analyze/tests/specs/a11y/useValidLang/valid.jsx"
         )));
-        assert!(is_linter_spec_fixture(&PathBuf::from("pkg/tests/specs/foo/valid.ts")));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "pkg/tests/specs/foo/valid.ts"
+        )));
         // Snapshot outputs under the same dir.
         assert!(is_linter_spec_fixture(&PathBuf::from(
             "crates/rome_js_analyze/tests/specs/a11y/noAccessKey/invalid.jsx.snap"
@@ -2539,7 +2807,9 @@ mod aux_path_tests {
             "pkg/tests/specs/foo/invalid.snap.new"
         )));
         // `tests-`/`test-` prefixed test roots and singular `test/specs/`.
-        assert!(is_linter_spec_fixture(&PathBuf::from("pkg/test/specs/foo/valid.js")));
+        assert!(is_linter_spec_fixture(&PathBuf::from(
+            "pkg/test/specs/foo/valid.js"
+        )));
         assert!(is_linter_spec_fixture(&PathBuf::from(
             "pkg/tests-integration/specs/foo/invalid.ts"
         )));
@@ -2551,7 +2821,9 @@ mod aux_path_tests {
         assert!(!is_linter_spec_fixture(&PathBuf::from("src/valid.ts")));
         assert!(!is_linter_spec_fixture(&PathBuf::from("src/invalid.jsx")));
         // A `specs/` dir not under a test root is not a spec-fixture dir.
-        assert!(!is_linter_spec_fixture(&PathBuf::from("src/specs/valid.ts")));
+        assert!(!is_linter_spec_fixture(&PathBuf::from(
+            "src/specs/valid.ts"
+        )));
         // Under `tests/specs/`, only valid/invalid stems (or .snap) are fixtures;
         // a normal helper module there is still real test code.
         assert!(!is_linter_spec_fixture(&PathBuf::from(
@@ -2559,10 +2831,16 @@ mod aux_path_tests {
         )));
         // Segment (not substring) match — `tests-specs/` is one segment, not
         // `tests/specs/`, and `myspecs/` is not `specs/`.
-        assert!(!is_linter_spec_fixture(&PathBuf::from("pkg/tests-specs/valid.ts")));
-        assert!(!is_linter_spec_fixture(&PathBuf::from("pkg/tests/myspecs/valid.ts")));
+        assert!(!is_linter_spec_fixture(&PathBuf::from(
+            "pkg/tests-specs/valid.ts"
+        )));
+        assert!(!is_linter_spec_fixture(&PathBuf::from(
+            "pkg/tests/myspecs/valid.ts"
+        )));
         // A `.snap` outside a spec dir is not exempted by this predicate.
-        assert!(!is_linter_spec_fixture(&PathBuf::from("src/__snapshots__/foo.snap")));
+        assert!(!is_linter_spec_fixture(&PathBuf::from(
+            "src/__snapshots__/foo.snap"
+        )));
     }
 
     #[test]
@@ -2572,7 +2850,9 @@ mod aux_path_tests {
             "axum-macros/tests/from_ref/pass/reference-types.rs"
         )));
         // The `fail` half of the same convention.
-        assert!(is_rust_trybuild_fixture(&PathBuf::from("tests/x/fail/y.rs")));
+        assert!(is_rust_trybuild_fixture(&PathBuf::from(
+            "tests/x/fail/y.rs"
+        )));
         // Anything nested under a pass/fail dir is a fixture.
         assert!(is_rust_trybuild_fixture(&PathBuf::from(
             "a/tests/x/pass/deep/nested/y.rs"
@@ -2582,7 +2862,9 @@ mod aux_path_tests {
     #[test]
     fn rust_trybuild_fixture_negative_space() {
         // A fixture directly under the suite, not under pass/fail, stays checked.
-        assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/from_ref/x.rs")));
+        assert!(!is_rust_trybuild_fixture(&PathBuf::from(
+            "tests/from_ref/x.rs"
+        )));
         // A `pass`/`fail` dir with no suite between it and `tests` is not the
         // trybuild convention.
         assert!(!is_rust_trybuild_fixture(&PathBuf::from("tests/pass/x.rs")));
@@ -2601,9 +2883,13 @@ mod aux_path_tests {
             "tests/compile_fail/no-arbitrary.rs"
         )));
         // The existing `tests/ui/` rustc/trybuild convention still matches.
-        assert!(is_rust_ui_test_fixture(&PathBuf::from("tests/ui/untagged-struct.rs")));
+        assert!(is_rust_ui_test_fixture(&PathBuf::from(
+            "tests/ui/untagged-struct.rs"
+        )));
         // A `compile-fail` dir not under `tests/` is unrelated source.
-        assert!(!is_rust_ui_test_fixture(&PathBuf::from("src/compile-fail/x.rs")));
+        assert!(!is_rust_ui_test_fixture(&PathBuf::from(
+            "src/compile-fail/x.rs"
+        )));
         // A bare `ui` segment outside `tests/` stays checked.
         assert!(!is_rust_ui_test_fixture(&PathBuf::from("src/ui/widget.rs")));
     }
@@ -2611,12 +2897,18 @@ mod aux_path_tests {
     #[test]
     fn cargo_bin_target_path_matches_src_bin_files_issue3230() {
         // The issue's exact reproducer path (clap).
-        assert!(is_cargo_bin_target_path(&PathBuf::from("src/bin/stdio-fixture.rs")));
+        assert!(is_cargo_bin_target_path(&PathBuf::from(
+            "src/bin/stdio-fixture.rs"
+        )));
         // A workspace member's `src/bin/` is the same convention.
-        assert!(is_cargo_bin_target_path(&PathBuf::from("crates/foo/src/bin/my-tool.rs")));
+        assert!(is_cargo_bin_target_path(&PathBuf::from(
+            "crates/foo/src/bin/my-tool.rs"
+        )));
         // A file nested deeper under `src/bin/` is a module of a directory-based
         // binary and must still follow snake_case.
-        assert!(!is_cargo_bin_target_path(&PathBuf::from("src/bin/foo/my-helper.rs")));
+        assert!(!is_cargo_bin_target_path(&PathBuf::from(
+            "src/bin/foo/my-helper.rs"
+        )));
         // A `bin/` dir not directly under `src/` is unrelated.
         assert!(!is_cargo_bin_target_path(&PathBuf::from("bin/tool.rs")));
         // Ordinary library source is not a binary target.
@@ -2630,7 +2922,9 @@ mod aux_path_tests {
             "fixtures/fixture-project/benches/my-bench.rs"
         )));
         // A workspace member's `benches/` is the same convention.
-        assert!(is_cargo_bench_target_path(&PathBuf::from("crates/foo/benches/io.rs")));
+        assert!(is_cargo_bench_target_path(&PathBuf::from(
+            "crates/foo/benches/io.rs"
+        )));
         // A file nested deeper under `benches/` is a module of a directory-based
         // benchmark and must still follow snake_case.
         assert!(!is_cargo_bench_target_path(&PathBuf::from(
@@ -2659,7 +2953,9 @@ mod aux_path_tests {
             "tests/common/mod.rs"
         )));
         // Ordinary library source is not an integration-test target.
-        assert!(!is_cargo_integration_test_target_path(&PathBuf::from("src/lib.rs")));
+        assert!(!is_cargo_integration_test_target_path(&PathBuf::from(
+            "src/lib.rs"
+        )));
     }
 
     #[test]
@@ -2668,12 +2964,20 @@ mod aux_path_tests {
         assert!(is_in_client_boundary_dir(&PathBuf::from(
             "packages/richtext-lexical/src/lexical/config/client/loader.ts"
         )));
-        assert!(is_in_client_boundary_dir(&PathBuf::from("src/client/loader.ts")));
+        assert!(is_in_client_boundary_dir(&PathBuf::from(
+            "src/client/loader.ts"
+        )));
         // Segment match only: `client-utils/` and `myclient.ts` are not a
         // `client/` directory segment.
-        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/client-utils/loader.ts")));
-        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/myclient.ts")));
-        assert!(!is_in_client_boundary_dir(&PathBuf::from("src/lib/config.ts")));
+        assert!(!is_in_client_boundary_dir(&PathBuf::from(
+            "src/client-utils/loader.ts"
+        )));
+        assert!(!is_in_client_boundary_dir(&PathBuf::from(
+            "src/lib/myclient.ts"
+        )));
+        assert!(!is_in_client_boundary_dir(&PathBuf::from(
+            "src/lib/config.ts"
+        )));
     }
 
     #[test]
@@ -2683,21 +2987,37 @@ mod aux_path_tests {
         assert!(is_build_artifact_path(&PathBuf::from(
             "website/public/demos/territory-wars/assets/index-CJXmzTYg.js"
         )));
-        assert!(is_build_artifact_path(&PathBuf::from("dist/assets/index-CJXmzTYg.js")));
-        assert!(is_build_artifact_path(&PathBuf::from("dist/assets/vendor-a1b2c3d4.css")));
-        assert!(is_build_artifact_path(&PathBuf::from("build/main-DeadBeef0.mjs")));
-        assert!(is_build_artifact_path(&PathBuf::from(".output/public/chunk-abcd1234.js")));
+        assert!(is_build_artifact_path(&PathBuf::from(
+            "dist/assets/index-CJXmzTYg.js"
+        )));
+        assert!(is_build_artifact_path(&PathBuf::from(
+            "dist/assets/vendor-a1b2c3d4.css"
+        )));
+        assert!(is_build_artifact_path(&PathBuf::from(
+            "build/main-DeadBeef0.mjs"
+        )));
+        assert!(is_build_artifact_path(&PathBuf::from(
+            ".output/public/chunk-abcd1234.js"
+        )));
         // Hand-written source keeps both guards honest: a non-hash name in a
         // build/asset dir, and a hash-shaped name outside any build-output dir,
         // are both still analysed.
         assert!(!is_build_artifact_path(&PathBuf::from("public/widget.js")));
-        assert!(!is_build_artifact_path(&PathBuf::from("public/web-streams.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from(
+            "public/web-streams.js"
+        )));
         assert!(!is_build_artifact_path(&PathBuf::from("src/index.js")));
-        assert!(!is_build_artifact_path(&PathBuf::from("src/index-CJXmzTYg.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from(
+            "src/index-CJXmzTYg.js"
+        )));
         // A lowercase-only suffix is a word, not a content hash.
-        assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/utils-helper.js")));
+        assert!(!is_build_artifact_path(&PathBuf::from(
+            "dist/assets/utils-helper.js"
+        )));
         // A built-asset extension is required: a hash-named `.html`/`.map` is not.
-        assert!(!is_build_artifact_path(&PathBuf::from("dist/assets/index-CJXmzTYg.html")));
+        assert!(!is_build_artifact_path(&PathBuf::from(
+            "dist/assets/index-CJXmzTYg.html"
+        )));
     }
 
     #[test]
@@ -2709,7 +3029,9 @@ mod aux_path_tests {
                       pub enum EscapeError { ZeroChars }\n";
         assert!(has_vendored_source_banner(banner));
         // "Copied from" is the equivalent phrasing.
-        assert!(has_vendored_source_banner("// Copied from upstream\npub enum E {}\n"));
+        assert!(has_vendored_source_banner(
+            "// Copied from upstream\npub enum E {}\n"
+        ));
         // Case-insensitive, and other comment styles count.
         assert!(has_vendored_source_banner("# vendored from foo\n"));
         assert!(has_vendored_source_banner("/* Vendored from bar */\n"));
@@ -2717,18 +3039,28 @@ mod aux_path_tests {
         let deep = "pub enum A {}\n\n\n\n\n// vendored from somewhere\n";
         assert!(!has_vendored_source_banner(deep));
         // An ordinary authored file has no banner.
-        assert!(!has_vendored_source_banner("// the public status enum\npub enum Status {}\n"));
+        assert!(!has_vendored_source_banner(
+            "// the public status enum\npub enum Status {}\n"
+        ));
         // A non-comment line mentioning the phrase does not count.
-        assert!(!has_vendored_source_banner("let note = \"vendored from x\";\n"));
+        assert!(!has_vendored_source_banner(
+            "let note = \"vendored from x\";\n"
+        ));
     }
 
     #[test]
     fn typescript_language_file_excludes_plain_javascript() {
         for ts in ["a.ts", "a.tsx", "a.mts", "a.cts", "dir/Model.ts"] {
-            assert!(is_typescript_language_file(&PathBuf::from(ts)), "{ts} should be TS");
+            assert!(
+                is_typescript_language_file(&PathBuf::from(ts)),
+                "{ts} should be TS"
+            );
         }
         for js in ["a.js", "a.jsx", "a.mjs", "a.cjs", "dir/Model.js"] {
-            assert!(!is_typescript_language_file(&PathBuf::from(js)), "{js} should not be TS");
+            assert!(
+                !is_typescript_language_file(&PathBuf::from(js)),
+                "{js} should not be TS"
+            );
         }
         assert!(!is_typescript_language_file(&PathBuf::from("a.vue")));
         assert!(!is_typescript_language_file(&PathBuf::from("noext")));

@@ -66,11 +66,10 @@ impl OxcCheck for Check {
             {
                 // Allow call/new expressions — they may return a Promise,
                 // which is the documented Vitest/Jest/Mocha async pattern.
-                if let Some(arg) = &ret.argument {
-                    if matches!(arg, Expression::CallExpression(_) | Expression::NewExpression(_)) {
+                if let Some(arg) = &ret.argument
+                    && matches!(arg, Expression::CallExpression(_) | Expression::NewExpression(_)) {
                         return;
                     }
-                }
                 let (line, column) = byte_offset_to_line_col(ctx.source, ret.span.start as usize);
                 diagnostics.push(Diagnostic {
                     path: Arc::clone(&ctx.path_arc),

@@ -59,11 +59,10 @@ fn module_roots_in_dir(d: &Path) -> Vec<PathBuf> {
             raws.push(raw);
         }
     }
-    if let Ok(raw) = std::fs::read_to_string(d.join("package.json")) {
-        if let Some(jest) = jest_block(&raw) {
+    if let Ok(raw) = std::fs::read_to_string(d.join("package.json"))
+        && let Some(jest) = jest_block(&raw) {
             raws.push(jest.to_string());
         }
-    }
 
     let mut roots = Vec::new();
     for raw in &raws {

@@ -7,7 +7,7 @@ const AUTH_PATTERNS: &[&str] = &["session", "token", "jwt", "auth", "sid"];
 fn is_auth_cookie_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     // Split on word separators to avoid matching "sid" inside "sidebar_state"
-    let segments: Vec<&str> = lower.split(|c| c == '_' || c == '-').collect();
+    let segments: Vec<&str> = lower.split(['_', '-']).collect();
     AUTH_PATTERNS.iter().any(|&p| {
         segments.iter().any(|s| {
             if p.len() <= 3 {
@@ -49,7 +49,7 @@ impl OxcCheck for Check {
                 if !before.contains("cookie") {
                     continue;
                 }
-                let cookie_name = before.split('.').filter(|s| !s.is_empty()).last().unwrap_or("");
+                let cookie_name = before.split('.').rfind(|s| !s.is_empty()).unwrap_or("");
                 if !is_auth_cookie_name(cookie_name) {
                     continue;
                 }

@@ -56,15 +56,12 @@ impl OxcCheck for Check {
 
         let func_name = match &call.callee {
             Expression::Identifier(id) => id.name.as_str(),
-            Expression::StaticMemberExpression(m) => {
+            Expression::StaticMemberExpression(m)
                 if matches!(&m.object, Expression::Identifier(id) if id.name == "i18n")
                     && m.property.name == "t"
-                {
+                => {
                     "i18n.t"
-                } else {
-                    return;
                 }
-            }
             _ => return,
         };
         if func_name != "t" && func_name != "i18n.t" {

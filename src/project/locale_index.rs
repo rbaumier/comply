@@ -4,8 +4,8 @@
 //! enabling rules like `i18n-json-identical-keys` to compare keys
 //! across locales.
 
-use serde_json::Value;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// Index of translation keys across locale files.

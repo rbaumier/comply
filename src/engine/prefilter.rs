@@ -207,8 +207,7 @@ mod lint_in_memory_prefilter_tests {
     /// file must NOT exempt the whole file.
     #[test]
     fn scoped_eslint_disable_does_not_exempt_file_issue1284() {
-        let source =
-            "// eslint-disable-next-line some-rule\nconst x = foo as string;\n";
+        let source = "// eslint-disable-next-line some-rule\nconst x = foo as string;\n";
         assert!(
             fires_no_type_assertion("src/schema.ts", source),
             "a scoped eslint-disable-next-line must not exempt the whole file"

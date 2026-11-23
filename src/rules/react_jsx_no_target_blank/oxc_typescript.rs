@@ -75,11 +75,10 @@ impl OxcCheck for Check {
                         has_target_blank = true;
                     }
                 }
-                "rel" => {
-                    if super::rel_is_safe(value) {
+                "rel"
+                    if super::rel_is_safe(value) => {
                         has_safe_rel = true;
                     }
-                }
                 _ => {}
             }
         }

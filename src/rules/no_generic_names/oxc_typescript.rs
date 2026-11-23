@@ -1078,13 +1078,12 @@ fn ts_type_is_descriptive(ty: &TSType) -> bool {
             }
             // `Promise<Result<...>>` / `Readonly<Foo[]>` / `Array<T>` —
             // recurse into the type argument.
-            if matches!(name, Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray")) {
-                if let Some(params) = &type_ref.type_arguments
+            if matches!(name, Some("Promise") | Some("Readonly") | Some("Array") | Some("ReadonlyArray"))
+                && let Some(params) = &type_ref.type_arguments
                     && let Some(first) = params.params.first()
                 {
                     return ts_type_is_descriptive(first);
                 }
-            }
             false
         }
         // `T[]` / `readonly T[]`.
@@ -2131,7 +2130,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_result_when_typed_as_Result() {
+    fn ignores_result_when_typed_as_result() {
         // Regression for rbaumier/comply#39 case 2 — canonical Result name.
         let src = r#"
             async function unwrapOrThrow<T, E>(p: Promise<Result<T, E>>): Promise<T> {

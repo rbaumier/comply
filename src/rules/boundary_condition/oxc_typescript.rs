@@ -952,16 +952,16 @@ fn ts_type_admits_absent(ty: &TSType) -> bool {
 ///      may be absent.
 ///   4. in an `&&` chain, two short-circuit guards (the right operand runs only
 ///      when the left is truthy):
-///        a. a `<obj_text>.length` check in the LEFT operand exempts an access in
-///           the RIGHT operand (`arr.length && arr[0]`), the expression form of
-///           `if (arr.length)`. It does not exempt an access in the LEFT operand
-///           itself (that runs before the guard).
-///        b. for a first-element read, a truthy `<obj_text>[0]` test in the LEFT
-///           operand exempts a `[0]` read in EITHER operand: the LEFT read is the
-///           truthiness test itself (`arr[0] && …`, evaluated for truthiness only,
-///           short-circuiting harmlessly on an empty array) and the RIGHT read
-///           runs only after it (`arr[0] && use(arr[0])`) — the `&&` form of
-///           `if (arr[0])`.
+///      a. a `<obj_text>.length` check in the LEFT operand exempts an access in
+///      the RIGHT operand (`arr.length && arr[0]`), the expression form of
+///      `if (arr.length)`. It does not exempt an access in the LEFT operand
+///      itself (that runs before the guard).
+///      b. for a first-element read, a truthy `<obj_text>[0]` test in the LEFT
+///      operand exempts a `[0]` read in EITHER operand: the LEFT read is the
+///      truthiness test itself (`arr[0] && …`, evaluated for truthiness only,
+///      short-circuiting harmlessly on an empty array) and the RIGHT read
+///      runs only after it (`arr[0] && use(arr[0])`) — the `&&` form of
+///      `if (arr[0])`.
 ///      Scoped to the SAME array: a different array in the left
 ///      (`foo.length && bar[0]`, `other[0] && use(arr[0])`) stays flagged. Only
 ///      `&&` qualifies; `||` / `??` short-circuit on a falsy left and do not
@@ -1128,7 +1128,7 @@ fn has_length_guard_ancestor(
 /// Returns true when `test` — the condition of an enclosing `while`/`for` loop or
 /// a dominating `if` whose branch dominates the access — proves `<obj_text>.length
 /// >= 1` (the array is non-empty in the guarded region). Recognized on the SAME
-/// receiver array:
+/// > receiver array:
 ///   - a bare truthy `<obj_text>.length` (zero is falsy, so a truthy length is `>= 1`);
 ///   - `<obj_text>.length > 0` / `>= 1` / `!== 0` / `=== N` (`N >= 1`) and the
 ///     mirrored `0 < <obj_text>.length` — delegated to
@@ -1138,6 +1138,7 @@ fn has_length_guard_ancestor(
 ///     result proves at least one element exists (see [`array_some_call_matches`]);
 ///   - any conjunct of an `&&` chain that proves one of the above — every conjunct
 ///     holds inside the guarded region, so it suffices for one to bound the length.
+///
 /// `||` is NOT traversed: a disjunct need not hold when the whole test is true.
 fn test_proves_nonempty(test: &Expression, obj_text: &str, source: &str) -> bool {
     match test {
@@ -1194,6 +1195,7 @@ fn array_some_call_matches(call: &CallExpression, obj_text: &str, source: &str) 
 ///     excluded — `undefined !== x` is `true`, so the branch runs for an absent
 ///     element — as is equality against `undefined` / `null`, which is an emptiness
 ///     check (mirrors [`is_equality_comparison_operand`]).
+///
 /// Recurses through the operators that preserve or carry the guard: `&&`, `||`, `!`,
 /// equality/relational comparisons (into both operands), and parentheses. `negated`
 /// tracks logical-NOT polarity so a predicate call under
@@ -1464,11 +1466,10 @@ fn body_has_early_exit(stmt: &Statement) -> bool {
         | Statement::ContinueStatement(_)
         | Statement::BreakStatement(_) => true,
         Statement::ExpressionStatement(expr_stmt) => {
-            if let Expression::CallExpression(call) = &expr_stmt.expression {
-                if let Expression::StaticMemberExpression(member) = &call.callee {
+            if let Expression::CallExpression(call) = &expr_stmt.expression
+                && let Expression::StaticMemberExpression(member) = &call.callee {
                     return member.property.name.as_str() == "exit";
                 }
-            }
             false
         }
         Statement::BlockStatement(block) => block.body.iter().any(body_has_early_exit),
@@ -1518,7 +1519,7 @@ fn scan_preceding_stmts(
             let cond_text = &source[cond_start..cond_end];
             if cond_text.contains(".length")
                 && (body_has_early_exit(&if_stmt.consequent)
-                    || if_stmt.alternate.as_ref().map_or(false, body_has_early_exit))
+                    || if_stmt.alternate.as_ref().is_some_and(body_has_early_exit))
             {
                 return true;
             }
@@ -1528,11 +1529,10 @@ fn scan_preceding_stmts(
         if stmt_text.contains(have_length_needle.as_str()) {
             return true;
         }
-        if let Some(after_prefix) = find_after(stmt_text, &length_expect_prefix) {
-            if length_expect_proves_nonempty(after_prefix) {
+        if let Some(after_prefix) = find_after(stmt_text, &length_expect_prefix)
+            && length_expect_proves_nonempty(after_prefix) {
                 return true;
             }
-        }
         if stmt_has_chai_length_assertion(stmt_text, obj_text) {
             return true;
         }
@@ -3943,11 +3943,10 @@ fn reference_is_guarded(
                 return true;
             }
         }
-        AstKind::CallExpression(call) => {
-            if call.optional && call.callee.span() == ref_span {
+        AstKind::CallExpression(call)
+            if call.optional && call.callee.span() == ref_span => {
                 return true;
             }
-        }
         _ => {}
     }
     // 2: an early-exit nullish guard preceding the reference, in its block or in an

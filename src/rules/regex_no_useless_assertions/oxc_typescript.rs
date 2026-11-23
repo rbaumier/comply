@@ -64,6 +64,43 @@ impl crate::rules::test_helpers::RunRule for Check {
         crate::rules::test_helpers::run_oxc_check(self, src, path, project, file)
     }
 }
+
+impl OxcCheck for Check {
+    fn interested_kinds(&self) -> &'static [AstType] {
+        &[AstType::RegExpLiteral]
+    }
+
+    fn run<'a>(
+        &self,
+        node: &oxc_semantic::AstNode<'a>,
+        ctx: &CheckCtx,
+        _semantic: &'a oxc_semantic::Semantic<'a>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let AstKind::RegExpLiteral(re) = node.kind() else { return };
+
+        if re.regex.flags.contains(oxc_ast::ast::RegExpFlags::M) {
+            return;
+        }
+
+        let pattern = re.regex.pattern.text.as_str();
+
+        if !has_useless_dollar(pattern) && !has_useless_caret(pattern) {
+            return;
+        }
+
+        let (line, column) = byte_offset_to_line_col(ctx.source, re.span.start as usize);
+        diagnostics.push(Diagnostic {
+            path: Arc::clone(&ctx.path_arc),
+            line,
+            column,
+            rule_id: super::META.id.into(),
+            message: "Assertion is always true or always false and has no effect.".into(),
+            severity: Severity::Error,
+            span: None,
+        });
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,7 +141,8 @@ mod tests {
         // after the escape. Must not panic with OOB index.
         assert!(run_on(r#"const re = /\\/;"#).is_empty());
         // Incomplete char class with trailing backslash — also must not panic.
-        assert!(run_on(r#"const re = /[\\/;"#).is_empty() || true); // may or may not flag; no panic
+        // The verdict is unspecified; the call must simply return.
+        let _ = run_on(r#"const re = /[\\/;"#);
     }
 
     #[test]
@@ -156,42 +194,5 @@ mod tests {
     fn allows_caret_and_dollar_anchors_in_groups_with_char_classes() {
         // filepath.ts shape: both `^` and `$` begin/end group alternatives.
         assert!(run_on(r#"const re = /(?:^|[\/\\])\.\.(?:$|[\/\\])/;"#).is_empty());
-    }
-}
-
-impl OxcCheck for Check {
-    fn interested_kinds(&self) -> &'static [AstType] {
-        &[AstType::RegExpLiteral]
-    }
-
-    fn run<'a>(
-        &self,
-        node: &oxc_semantic::AstNode<'a>,
-        ctx: &CheckCtx,
-        _semantic: &'a oxc_semantic::Semantic<'a>,
-        diagnostics: &mut Vec<Diagnostic>,
-    ) {
-        let AstKind::RegExpLiteral(re) = node.kind() else { return };
-
-        if re.regex.flags.contains(oxc_ast::ast::RegExpFlags::M) {
-            return;
-        }
-
-        let pattern = re.regex.pattern.text.as_str();
-
-        if !has_useless_dollar(pattern) && !has_useless_caret(pattern) {
-            return;
-        }
-
-        let (line, column) = byte_offset_to_line_col(ctx.source, re.span.start as usize);
-        diagnostics.push(Diagnostic {
-            path: Arc::clone(&ctx.path_arc),
-            line,
-            column,
-            rule_id: super::META.id.into(),
-            message: "Assertion is always true or always false and has no effect.".into(),
-            severity: Severity::Error,
-            span: None,
-        });
     }
 }

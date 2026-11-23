@@ -88,7 +88,7 @@ impl OxcCheck for Check {
             // `α`/`β` are the ITU-R BT.2020 transfer-function coefficients — so
             // the convention does not apply (issue #5918). This is a pure
             // Unicode property, not a per-symbol allowlist.
-            if name.chars().any(|c| !c.is_ascii()) {
+            if !name.is_ascii() {
                 continue;
             }
 
