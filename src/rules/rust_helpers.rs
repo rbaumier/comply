@@ -988,16 +988,11 @@ pub fn any_outer_attribute(item: Node, source: &[u8], predicate: impl Fn(&str) -
     })
 }
 
-/// The source text of the nearest outer attribute of `item` that `predicate` accepts.
+/// The source text of each outer attribute of `item`, nearest first.
 /// It reads the attributes [`any_outer_attribute`] reads.
-pub fn find_outer_attribute<'s>(
-    item: Node,
-    source: &'s [u8],
-    predicate: impl Fn(&str) -> bool,
-) -> Option<&'s str> {
+pub fn outer_attributes<'t>(item: Node<'t>, source: &'t [u8]) -> impl Iterator<Item = &'t str> {
     preceding_attribute_items(item)
         .filter_map(|attribute_item| attribute_item.utf8_text(source).ok())
-        .find(|text| predicate(text))
 }
 
 /// True if a single attribute's source text marks test code: a `#[test]` /
@@ -3782,12 +3777,19 @@ fn is_test_only_node(node: Node, source: &[u8]) -> bool {
 /// True when only test builds compile the file at `path`.
 /// Such is a Cargo `tests/` target.
 /// Such is a module gated on `test` by its `mod` chain.
+/// Such is one only a test build links.
 /// A file any library, binary or example links is not.
 pub fn is_test_only_file(path: &Path, project: &ProjectCtx) -> bool {
-    (is_cargo_test_target(path, project) || project.rust_file_requires_cfg_test(path))
-        && !project
-            .nearest_cargo_manifest(path)
-            .is_some_and(|manifest| manifest.non_test_target_links(path))
+    let manifest = project.nearest_cargo_manifest(path);
+    let links = |links: fn(&CargoManifest, &Path) -> bool| {
+        manifest
+            .as_ref()
+            .is_some_and(|manifest| links(manifest, path))
+    };
+    !links(CargoManifest::non_test_target_links)
+        && (is_cargo_test_target(path, project)
+            || project.rust_file_requires_cfg_test(path)
+            || links(CargoManifest::test_build_links))
 }
 
 /// True when the package's library and binaries never link `node`.

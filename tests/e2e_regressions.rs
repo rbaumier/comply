@@ -1107,6 +1107,94 @@ fn a_file_outside_src_a_release_root_declares_ships() {
 }
 
 #[test]
+fn a_file_a_macro_or_a_conditional_path_loads_ships() {
+    // Another root gates the same file on `test`.
+    // The library's own declaration ships it.
+    let helper = shipped_defects();
+    let macro_rules = "macro_rules! modules { ($($item:tt)*) => { $($item)* } }\n";
+    let invoked = format!("{macro_rules}modules! {{ pub mod helper; }}\n");
+    // The shape of the `cfg-if` crate, without the dependency.
+    let cfg_if = "macro_rules! cfg_if {\n    \
+                  (if #[cfg($meta:meta)] { $($item:item)* }) => { $(#[cfg($meta)] $item)* };\n}\n\
+                  cfg_if! {\n    if #[cfg(unix)] {\n        pub mod helper;\n    }\n}\n";
+    let reloaded = "#[path = \"a.rs\"]\npub mod renamed;\npub mod a;\n";
+    let twin = "mod helper;";
+    let projects = [
+        (
+            "src/helper.rs",
+            twin,
+            "#[cfg_attr(not(test), path = \"helper.rs\")]\npub mod db;\n",
+        ),
+        ("src/helper.rs", twin, cfg_if),
+        ("src/helper.rs", twin, invoked.as_str()),
+        ("src/helper.rs", twin, "include!(\"helper.rs\");\n"),
+        (
+            "src/api/helper.rs",
+            "#[path = \"api/helper.rs\"]\nmod twin;",
+            "#[path = \"api\"]\npub mod inner {\n    pub mod helper;\n}\n",
+        ),
+        ("src/a/b.rs", "#[path = \"a/b.rs\"]\nmod twin;", reloaded),
+    ];
+    for (shipped, twin, library) in projects {
+        let main = format!("#[cfg(test)]\n{twin}\nfn main() {{}}\n");
+        let files = [
+            ("Cargo.toml", APP_MANIFEST),
+            ("src/lib.rs", library),
+            ("src/main.rs", main.as_str()),
+            ("src/db.rs", ""),
+            ("src/a.rs", "pub mod b;\n"),
+            ("src/b.rs", ""),
+            (shipped, helper.as_str()),
+        ];
+        assert_eq!(
+            rules_reporting(&files, shipped, &SHIP_RULES),
+            SHIP_RULES,
+            "{library}"
+        );
+    }
+}
+
+#[test]
+fn a_file_only_a_test_build_loads_does_not_ship() {
+    // `#[path]` keeps the gate of its item.
+    // So does an inline `mod`.
+    // `[[test]] path` builds a test target in any directory.
+    let helper = shipped_defects();
+    let test_target = format!("{APP_MANIFEST}\n[[test]]\nname = \"api\"\npath = \"it/api.rs\"\n");
+    let renamed = "#[cfg(test)]\n#[path = \"parse_tests.rs\"]\nmod tests;\n";
+    let renamed_first = "#[path = \"parse_tests.rs\"]\n#[cfg(test)]\nmod tests;\n";
+    let projects = [
+        ("src/parse_tests.rs", APP_MANIFEST, renamed),
+        ("src/parse_tests.rs", APP_MANIFEST, renamed_first),
+        (
+            "src/parse/unit.rs",
+            APP_MANIFEST,
+            "#[cfg(test)]\n#[path = \"parse/unit.rs\"]\nmod tests;\n",
+        ),
+        (
+            "src/parse/checks/helper.rs",
+            APP_MANIFEST,
+            "#[cfg(test)]\nmod checks {\n    mod helper;\n}\n",
+        ),
+        ("it/api.rs", test_target.as_str(), ""),
+    ];
+    for (file, manifest, parse) in projects {
+        let files = [
+            ("Cargo.toml", manifest),
+            ("src/lib.rs", "pub mod parse;\n"),
+            ("src/parse.rs", parse),
+            (file, helper.as_str()),
+        ];
+        let none: [&str; 0] = [];
+        assert_eq!(
+            rules_reporting(&files, file, &SHIP_RULES),
+            none,
+            "{file}: {parse}"
+        );
+    }
+}
+
+#[test]
 fn a_module_named_like_a_test_file_ships_unless_a_test_gate_declares_it() {
     // `src/test_*.rs` is a module, not a test target.
     // Only its `mod` declaration decides.

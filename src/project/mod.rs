@@ -2482,6 +2482,7 @@ pub struct CargoManifest {
     bin_paths: Vec<PathBuf>,
     /// `[[example]] path` fields, relative to `manifest_dir`.
     example_paths: Vec<PathBuf>,
+    test_paths: Vec<PathBuf>,
     /// The files the package's targets reach, walked on first use.
     module_reach: OnceLock<ModuleReach>,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
@@ -2599,6 +2600,7 @@ impl CargoManifest {
         };
         let bin_paths = target_paths("bin");
         let example_paths = target_paths("example");
+        let test_paths = target_paths("test");
 
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
@@ -2674,6 +2676,7 @@ impl CargoManifest {
             lib_path,
             bin_paths,
             example_paths,
+            test_paths,
             module_reach: OnceLock::new(),
             async_runtime,
             no_std_category,
@@ -2776,6 +2779,15 @@ impl CargoManifest {
         !reach.complete || reach.non_test.contains(&self.package_relative(file_path))
     }
 
+    /// True when the library, a binary, an example or a test declares `file_path`.
+    /// A `#[cfg(test)]` declaration counts.
+    #[must_use]
+    pub fn test_build_links(&self, file_path: &Path) -> bool {
+        self.module_reach()
+            .test_build
+            .contains(&self.package_relative(file_path))
+    }
+
     /// `file_path` relative to the manifest directory, without `.` segments.
     fn package_relative(&self, file_path: &Path) -> PathBuf {
         let relative = file_path
@@ -2798,17 +2810,26 @@ impl CargoManifest {
             let mut example_roots = self.example_paths.clone();
             example_roots.extend(auto_target_roots(&self.manifest_dir, "examples"));
 
+            let mut test_roots = self.test_paths.clone();
+            test_roots.extend(auto_target_roots(&self.manifest_dir, "tests"));
+
+            let dir = &self.manifest_dir;
             let mut release = FxHashSet::default();
-            let mut complete = release_roots
-                .iter()
-                .all(|root| walk_module_tree(&self.manifest_dir, root, &mut release));
+            let mut complete = walk_module_tree(dir, &release_roots, Build::Release, &mut release);
             let mut non_test = release.clone();
-            complete &= example_roots
-                .iter()
-                .all(|root| walk_module_tree(&self.manifest_dir, root, &mut non_test));
+            complete &= walk_module_tree(dir, &example_roots, Build::Release, &mut non_test);
+            let mut test_build = FxHashSet::default();
+            let test_build_roots = [release_roots, example_roots, test_roots];
+            complete &= walk_module_tree(
+                dir,
+                test_build_roots.iter().flatten(),
+                Build::Test,
+                &mut test_build,
+            );
             ModuleReach {
                 release,
                 non_test,
+                test_build,
                 complete,
             }
         })
@@ -7511,101 +7532,246 @@ struct ModuleReach {
     release: FxHashSet<PathBuf>,
     /// Reached from those or from an example.
     non_test: FxHashSet<PathBuf>,
+    /// Reached from those or from a test, in a test build.
+    test_build: FxHashSet<PathBuf>,
     /// False when a walk stopped at [`MODULE_TREE_MAX_FILES`].
     /// Every file then counts as reached.
     complete: bool,
 }
 
-/// Add to `reached` the files that `root` loads by ungated `mod` items.
+/// Which `mod` items a walk follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Build {
+    /// Those a release build may compile.
+    Release,
+    /// Those gated on `test` as well.
+    Test,
+}
+
+/// Add to `reached` the files that `roots` load in `build`.
 /// Paths are relative to `manifest_dir`.
 /// See [`declared_module_files`] for how Rust resolves them.
-/// False when `reached` outgrows [`MODULE_TREE_MAX_FILES`].
-fn walk_module_tree(manifest_dir: &Path, root: &Path, reached: &mut FxHashSet<PathBuf>) -> bool {
+/// False past [`MODULE_TREE_MAX_FILES`] files, or inline scopes of one file.
+fn walk_module_tree<'r>(
+    manifest_dir: &Path,
+    roots: impl IntoIterator<Item = &'r PathBuf>,
+    build: Build,
+    reached: &mut FxHashSet<PathBuf>,
+) -> bool {
     // A crate root owns its directory, as a `mod.rs` does.
-    let mut pending: Vec<(PathBuf, bool, usize)> = fold_relative(root)
-        .map(|root| (root, true, 0))
+    let mut pending: Vec<(PathBuf, bool)> = roots
         .into_iter()
+        .filter_map(|root| Some((fold_relative(root)?, true)))
         .collect();
-    while let Some((file, owns_dir, depth)) = pending.pop() {
-        if !manifest_dir.join(&file).is_file() || !reached.insert(file.clone()) {
+    // A file can be loaded both ways, and then names other files.
+    let mut visited = FxHashSet::default();
+    while let Some((file, owns_dir)) = pending.pop() {
+        if !manifest_dir.join(&file).is_file() || !visited.insert((file.clone(), owns_dir)) {
             continue;
         }
+        reached.insert(file.clone());
         if reached.len() > MODULE_TREE_MAX_FILES {
             return false;
         }
         let Ok(src) = std::fs::read_to_string(manifest_dir.join(&file)) else {
             continue;
         };
-        if depth >= RUST_MODULE_CHAIN_MAX_DEPTH {
-            continue;
-        }
         let Some(tree) = parse_rust_source(&src) else {
             continue;
         };
+        let Some(children) =
+            declared_module_files(&file, owns_dir, tree.root_node(), src.as_bytes(), build)
+        else {
+            return false;
+        };
         pending.extend(
-            declared_module_files(&file, owns_dir, tree.root_node(), src.as_bytes())
-                .into_iter()
-                .filter_map(|(child, child_owns_dir)| {
-                    Some((
-                        fold_relative(&child)?,
-                        child_owns_dir,
-                        depth.saturating_add(1),
-                    ))
-                }),
+            children.into_iter().filter_map(|(child, child_owns_dir)| {
+                Some((fold_relative(&child)?, child_owns_dir))
+            }),
         );
     }
     true
 }
 
-/// The files the ungated `mod` items of `file` may load.
+/// The files that `file` may load in `build`.
 /// Each comes with whether it owns its directory.
+/// `None` past [`MODULE_TREE_MAX_FILES`] inline scopes.
 ///
 /// - `mod a;` loads `a.rs` or `a/mod.rs` from the module's directory.
 /// - That is the file's directory for a `mod.rs` or a crate root.
 /// - Another file `x.rs` keeps its modules in `x/`.
 /// - `#[path = "p"]` loads `p` from the file's directory, and owns its own.
+/// - `#[cfg_attr(…, path = "p")]` may load either.
 /// - An inline `mod b { … }` adds `b/` for the items inside it.
+/// - `#[path = "p"] mod b { … }` adds `p/` to the file's directory.
+/// - `include!("p")` loads `p`, and [`macro_modules`] reads other macros.
 fn declared_module_files(
     file: &Path,
     owns_dir: bool,
     root: tree_sitter::Node,
     source: &[u8],
-) -> Vec<(PathBuf, bool)> {
+    build: Build,
+) -> Option<Vec<(PathBuf, bool)>> {
+    use crate::rules::rust_helpers::{cfg_requires, outer_attributes};
     let dir = file.parent().unwrap_or(Path::new(""));
-    let module_dir = match file.file_stem() {
+    let named = match file.file_stem() {
         Some(stem) if !owns_dir && file.file_name() != Some(OsStr::new("mod.rs")) => dir.join(stem),
         _ => dir.to_path_buf(),
     };
-    use crate::rules::rust_helpers::{cfg_requires, find_outer_attribute};
     let mut found = Vec::new();
-    let mut scopes = vec![(root, PathBuf::new())];
-    while let Some((scope, inline)) = scopes.pop() {
+    let mut dirs = vec![ModuleDirs {
+        path: dir.to_path_buf(),
+        named,
+    }];
+    // Each scope to read, with its index in `dirs`.
+    let mut scopes = vec![(root, 0)];
+    while let Some((scope, at)) = scopes.pop() {
         let mut cursor = scope.walk();
         for item in scope.named_children(&mut cursor) {
-            if item.kind() != "mod_item" || cfg_requires(item, source, "test") {
-                continue;
+            match item.kind() {
+                "mod_item" if build == Build::Release && cfg_requires(item, source, "test") => {}
+                "mod_item" => {
+                    let Some(name) = item
+                        .child_by_field_name("name")
+                        .and_then(|name| name.utf8_text(source).ok())
+                        .map(|name| name.trim_start_matches("r#"))
+                    else {
+                        continue;
+                    };
+                    let attributes: Vec<&str> = outer_attributes(item, source).collect();
+                    let paths = attributes
+                        .iter()
+                        .flat_map(|attribute| attribute_paths(attribute));
+                    let is_renamed = attributes
+                        .iter()
+                        .any(|attribute| attr_is_path_override(attribute));
+                    if let Some(body) = item.child_by_field_name("body") {
+                        let mut inner: Vec<PathBuf> =
+                            paths.map(|path| dirs[at].path.join(path)).collect();
+                        if !is_renamed {
+                            inner.push(dirs[at].named.join(name));
+                        }
+                        for dir in inner {
+                            scopes.push((body, dirs.len()));
+                            dirs.push(ModuleDirs {
+                                path: dir.clone(),
+                                named: dir,
+                            });
+                        }
+                        if dirs.len() > MODULE_TREE_MAX_FILES {
+                            return None;
+                        }
+                        continue;
+                    }
+                    found.extend(paths.map(|path| dirs[at].path_file(path)));
+                    if !is_renamed {
+                        found.extend(dirs[at].named_files(name));
+                    }
+                }
+                "macro_invocation" if !cfg_requires(item, source, "test") => {
+                    for module in macro_modules(item, source) {
+                        match module {
+                            MacroModule::Named(name) => found.extend(dirs[at].named_files(name)),
+                            MacroModule::Path(path) => found.push(dirs[at].path_file(path)),
+                        }
+                    }
+                }
+                _ => scopes.push((item, at)),
             }
-            let Some(name) = item
-                .child_by_field_name("name")
-                .and_then(|name| name.utf8_text(source).ok())
-                .map(|name| name.trim_start_matches("r#"))
-            else {
+        }
+    }
+    Some(found)
+}
+
+/// Where a scope's `mod` items look for their files.
+struct ModuleDirs {
+    /// For a `#[path]` one.
+    path: PathBuf,
+    /// For one found by its name.
+    named: PathBuf,
+}
+
+impl ModuleDirs {
+    /// The files `mod name;` may load, and whether each owns its directory.
+    fn named_files(&self, name: &str) -> [(PathBuf, bool); 2] {
+        [
+            (self.named.join(format!("{name}.rs")), false),
+            (self.named.join(name).join("mod.rs"), false),
+        ]
+    }
+
+    /// The file `#[path = "path"]` loads: it owns its directory.
+    fn path_file(&self, path: &str) -> (PathBuf, bool) {
+        (self.path.join(path), true)
+    }
+}
+
+/// The files a `path = "…"` of an attribute names.
+/// `#[cfg_attr(…, path = "…")]` counts.
+fn attribute_paths(attribute: &str) -> impl Iterator<Item = &str> {
+    // Text and literals alternate.
+    let mut pieces = attribute.split('"');
+    std::iter::from_fn(move || Some((pieces.next()?, pieces.next()?))).filter_map(
+        |(text, literal)| {
+            let key = text.trim_end_matches(['r', '#']).trim_end();
+            let before = key.strip_suffix('=')?.trim_end().strip_suffix("path")?;
+            let is_whole_word = !before.ends_with(|c: char| c.is_alphanumeric() || c == '_');
+            is_whole_word.then_some(literal)
+        },
+    )
+}
+
+/// A module file a macro may load.
+enum MacroModule<'s> {
+    /// `name`, as `mod name;` would.
+    Named(&'s str),
+    /// The file of that path.
+    Path(&'s str),
+}
+
+/// The module files a macro call may load.
+///
+/// `include!` loads its literal, wherever it stands.
+/// An item macro may declare any name it reads.
+/// Its `.rs` literals may be paths.
+/// Over-reading only keeps a file linted as shipped.
+fn macro_modules<'s>(call: tree_sitter::Node, source: &'s [u8]) -> Vec<MacroModule<'s>> {
+    let macro_name = call
+        .child_by_field_name("macro")
+        .and_then(|name| name.utf8_text(source).ok());
+    let is_include = macro_name.is_some_and(|name| name.rsplit("::").next() == Some("include"));
+    let is_item = call.parent().is_some_and(|parent| {
+        let holder = if parent.kind() == "expression_statement" {
+            parent.parent()
+        } else {
+            Some(parent)
+        };
+        holder.is_some_and(|holder| matches!(holder.kind(), "source_file" | "declaration_list"))
+    });
+    if !is_include && !is_item {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let mut seen = FxHashSet::default();
+    let mut pending = vec![call];
+    while let Some(node) = pending.pop() {
+        let mut cursor = node.walk();
+        for token in node.named_children(&mut cursor) {
+            let Ok(text) = token.utf8_text(source) else {
                 continue;
             };
-            if let Some(body) = item.child_by_field_name("body") {
-                scopes.push((body, inline.join(name)));
-                continue;
-            }
-            let path = find_outer_attribute(item, source, attr_is_path_override)
-                .and_then(|attribute| attribute.split('"').nth(1));
-            match path {
-                Some(path) if inline.as_os_str().is_empty() => found.push((dir.join(path), true)),
-                Some(path) => found.push((module_dir.join(&inline).join(path), true)),
-                None => {
-                    let parent = module_dir.join(&inline);
-                    found.push((parent.join(format!("{name}.rs")), false));
-                    found.push((parent.join(name).join("mod.rs"), false));
+            match token.kind() {
+                "token_tree" => pending.push(token),
+                "identifier" if !is_include && seen.insert(text) => {
+                    found.push(MacroModule::Named(text.trim_start_matches("r#")));
                 }
+                "string_literal" | "raw_string_literal" => found.extend(
+                    text.split('"')
+                        .nth(1)
+                        .filter(|path| is_include || path.ends_with(".rs"))
+                        .map(MacroModule::Path),
+                ),
+                _ => {}
             }
         }
     }
