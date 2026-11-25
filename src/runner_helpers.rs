@@ -74,7 +74,7 @@ pub fn find_cargo_workspace_root(path: &Path) -> Option<PathBuf> {
 pub fn cargo_package_args(workspace: &Path, files: &[&SourceFile]) -> Vec<String> {
     let names: Option<std::collections::BTreeSet<String>> = files
         .iter()
-        .map(|f| owning_package(workspace, &f.path))
+        .map(|f| owning_manifest(workspace, &f.path).map(|(_, name)| name))
         .collect();
     match names {
         Some(names) if !names.is_empty() => names
@@ -85,20 +85,20 @@ pub fn cargo_package_args(workspace: &Path, files: &[&SourceFile]) -> Vec<String
     }
 }
 
-/// Name of the nearest `[package]` manifest above `file`, searched up to
-/// `workspace` (canonical) inclusive.
-fn owning_package(workspace: &Path, file: &Path) -> Option<String> {
+/// The nearest `[package]` manifest above `file`, with the package's name.
+/// Searched up to `workspace` (canonical) inclusive.
+#[must_use]
+pub fn owning_manifest(workspace: &Path, file: &Path) -> Option<(PathBuf, String)> {
     let canonical = file.canonicalize().ok()?;
     canonical
         .ancestors()
         .skip(1)
         .take_while(|dir| dir.starts_with(workspace))
         .find_map(|dir| {
-            let manifest: toml::Value = std::fs::read_to_string(dir.join("Cargo.toml"))
-                .ok()?
-                .parse()
-                .ok()?;
-            Some(manifest.get("package")?.get("name")?.as_str()?.to_owned())
+            let path = dir.join("Cargo.toml");
+            let manifest: toml::Value = std::fs::read_to_string(&path).ok()?.parse().ok()?;
+            let name = manifest.get("package")?.get("name")?.as_str()?.to_owned();
+            Some((path, name))
         })
 }
 

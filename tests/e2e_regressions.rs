@@ -2517,6 +2517,207 @@ fn clippy_that_cannot_compile_is_an_error_not_all_clear() {
         .stderr(predicate::str::contains("mismatched types"));
 }
 
+/// Crate `a`, and `b` which depends on it.
+/// `b` holds a `clippy::len_zero`.
+fn dependent_crates(files: &[(&str, &str)]) -> TempDir {
+    let mut tree = vec![
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"2\"\n",
+        ),
+        (
+            "a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("a/src/lib.rs", "pub const KEEP: u8 = 1;\n"),
+        (
+            "b/Cargo.toml",
+            "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\na = { path = \"../a\" }\n",
+        ),
+        (
+            "b/src/lib.rs",
+            "pub fn is_none(v: &[u8]) -> bool {\n    a::KEEP == 1 && v.len() == 0\n}\n",
+        ),
+    ];
+    tree.extend_from_slice(files);
+    let dir = rust_crate(&tree);
+    fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "init"]);
+    dir
+}
+
+/// Comply over the staged lines `append` adds to `b`.
+fn staged_run(root: &std::path::Path, append: &str) -> assert_cmd::assert::Assert {
+    let lib = root.join("b/src/lib.rs");
+    let source = fs::read_to_string(&lib).unwrap();
+    fs::write(&lib, format!("{source}{append}")).unwrap();
+    git(root, &["add", "-A"]);
+    common::comply()
+        .current_dir(root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .args(["--staged", "--diff-only"])
+        .assert()
+}
+
+const NEW_LEN_ZERO: &str =
+    "\n/// Holds nothing.\n#[must_use]\npub fn is_bare(v: &[u8]) -> bool {\n    v.len() == 0\n}\n";
+
+// A build script that panics warns about its own `panic!`.
+// That warning excused the failure of the whole run.
+#[test]
+fn clippy_stopped_by_a_build_script_that_panics_is_an_error() {
+    let dir = dependent_crates(&[(
+        "b/build.rs",
+        "//! Generates.\nfn main() {\n    panic!(\"protoc not found\")\n}\n",
+    )]);
+    staged_run(dir.path(), NEW_LEN_ZERO)
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("protoc not found"));
+}
+
+// So did any warning of another crate.
+#[test]
+fn clippy_stopped_by_a_killed_build_script_is_an_error() {
+    let dir = dependent_crates(&[
+        (
+            "a/src/lib.rs",
+            "use std::fmt;\npub const KEEP: u8 = 1;\n",
+        ),
+        (
+            "b/build.rs",
+            "//! Dies.\nfn main() {\n    std::process::abort()\n}\n",
+        ),
+    ]);
+    staged_run(dir.path(), NEW_LEN_ZERO)
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("cargo clippy could not compile"));
+}
+
+// `a` is not staged. Its denied lint is no finding.
+// Cargo then builds no `b`.
+#[test]
+fn clippy_stopped_by_a_denied_lint_of_another_crate_is_an_error() {
+    let dir = dependent_crates(&[(
+        "a/src/lib.rs",
+        "pub const KEEP: u8 = 1;\npub fn is_low(x: u32) -> bool {\n    x < 0\n}\n",
+    )]);
+    staged_run(dir.path(), NEW_LEN_ZERO)
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("did not lint b"))
+        .stderr(predicate::str::contains("absurd_extreme_comparisons"));
+}
+
+/// Comply over a crate holding `files`, with its clippy findings.
+fn clippy_findings(files: &[(&str, &str)]) -> (Option<i32>, Vec<String>, String) {
+    let dir = rust_crate(files);
+    let output = common::comply()
+        .current_dir(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .arg(".")
+        .output()
+        .unwrap();
+    let findings = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("clippy::len_zero"))
+        .map(str::to_owned)
+        .collect();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    (output.status.code(), findings, stderr)
+}
+
+const LEN_ZERO: &str = "pub fn is_none(v: &[u8]) -> bool {\n    v.len() == 0\n}\n";
+
+#[test]
+fn denied_clippy_lint_stays_a_finding_at_every_level() {
+    let manifest = |lints: &str| {
+        format!(
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [workspace]\n{lints}"
+        )
+    };
+    for (attribute, lints) in [
+        ("", ""),
+        ("#![deny(clippy::len_zero)]\n", ""),
+        ("#![forbid(clippy::len_zero)]\n", ""),
+        ("#![deny(warnings)]\n", ""),
+        ("", "\n[lints.clippy]\nlen_zero = \"deny\"\n"),
+        ("", "\n[lints.clippy]\nlen_zero = \"forbid\"\n"),
+    ] {
+        let (code, findings, stderr) = clippy_findings(&[
+            ("Cargo.toml", &manifest(lints)),
+            ("src/lib.rs", &format!("{attribute}{LEN_ZERO}")),
+            (
+                "src/main.rs",
+                "fn main() {\n    println!(\"{}\", fixture::is_none(&[]));\n}\n",
+            ),
+        ]);
+        assert_eq!(code, Some(1), "{attribute}{lints}: {stderr}");
+        assert_eq!(findings.len(), 1, "{attribute}{lints}: {findings:?}");
+    }
+}
+
+// A denied lint stops the library the binary needs.
+#[test]
+fn denied_clippy_lint_does_not_hide_the_findings_behind_it() {
+    let (code, findings, stderr) = clippy_findings(&[
+        (
+            "src/lib.rs",
+            &format!("#![deny(clippy::len_zero)]\n{LEN_ZERO}"),
+        ),
+        (
+            "src/main.rs",
+            "fn main() {\n    let v: Vec<u8> = Vec::new();\n    \
+             println!(\"{} {}\", v.len() == 0, fixture::is_none(&v));\n}\n",
+        ),
+    ]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(findings.len(), 2, "{findings:?}");
+}
+
+// Capping the levels must not turn rustc's errors into silence.
+#[test]
+fn rustc_lint_denied_behind_a_denied_clippy_lint_is_an_error() {
+    for source in [
+        "#![deny(unused_variables)]\nfn main() {\n    let unread = 1;\n}\n",
+        "#![deny(warnings)]\nuse fixture::is_none;\nfn main() {}\n",
+    ] {
+        let (code, _, stderr) = clippy_findings(&[
+            (
+                "src/lib.rs",
+                &format!("#![deny(clippy::len_zero)]\n{LEN_ZERO}"),
+            ),
+            ("src/main.rs", source),
+        ]);
+        assert_eq!(code, Some(2), "{stderr}");
+        assert!(stderr.contains("unused"), "{stderr}");
+    }
+}
+
+// A cargo config may deny warnings, or hide them.
+#[test]
+fn cargo_build_warnings_setting_does_not_change_the_findings() {
+    for setting in ["deny", "allow"] {
+        let (code, findings, stderr) = clippy_findings(&[
+            (
+                ".cargo/config.toml",
+                &format!("[build]\nwarnings = \"{setting}\"\n"),
+            ),
+            ("src/lib.rs", LEN_ZERO),
+        ]);
+        assert_eq!(code, Some(1), "{setting}: {stderr}");
+        assert_eq!(findings.len(), 1, "{setting}: {findings:?}");
+    }
+}
+
 /// A crate whose `sqlx::query!` asks a database at build time.
 /// `.env` names a dead one, but `.sqlx/` holds the query.
 fn sqlx_crate() -> TempDir {

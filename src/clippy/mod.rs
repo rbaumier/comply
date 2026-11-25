@@ -9,13 +9,14 @@
 //!    workspace root, and for each workspace runs:
 //!
 //!        cargo clippy <--workspace | -p <owning package>...> \
-//!            --all-targets --message-format=json --quiet \
+//!            --all-targets --keep-going --message-format=json --quiet \
 //!            --manifest-path <workspace>/Cargo.toml \
 //!            -- -W clippy::lint1 -W clippy::lint2 ...
 //!
 //!    Cargo emits one JSON object per line. We parse the stream,
 //!    keep only `compiler-message` rows, filter to spans inside the
 //!    requested files, and remap each lint code to its comply RuleMeta.
+//!    A run stopped by a denied lint gets two more (see [`Pass`]).
 //! 3. Files outside any workspace (loose `.rs` files passed on the CLI)
 //!    are skipped with a single warning — clippy can't run on them
 //!    without a Cargo manifest.
@@ -33,6 +34,7 @@ mod schema;
 
 use anyhow::{Context, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,7 +44,7 @@ use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::rules::meta::RuleMeta;
-use schema::{CargoMessage, RustcDiagnostic};
+use schema::{CargoMessage, RustcDiagnostic, RustcSpan};
 
 /// Cached availability probe for `cargo clippy`. Rust toolchains usually
 /// ship clippy via rustup, but in container builds it can be missing.
@@ -106,9 +108,16 @@ pub fn lint_files(
         } else {
             vec!["--workspace".to_owned()]
         };
-        let output = invoke_clippy(&root, &packages, &lint_args, &clippy_conf.dir)?;
+        let run = |pass| invoke_clippy(&root, &packages, &lint_args, &clippy_conf.dir, pass);
+        let mut output = run(Pass::Lint)?;
         ensure_config_accepted(&clippy_conf, &output.stdout)?;
         ensure_compiled(&root, &output)?;
+        if !output.status.success() {
+            ensure_packages_linted(&root, &files_in_ws, &file_filter, &output.stdout)?;
+            ensure_compiled(&root, &run(Pass::Check)?)?;
+            output = run(Pass::Capped)?;
+            ensure_compiled(&root, &output)?;
+        }
         diagnostics.extend(parse_clippy_jsonl(
             &output.stdout,
             &root,
@@ -223,6 +232,22 @@ pub(crate) fn use_sqlx_query_cache(cmd: &mut Command, workspace: &Path) {
     }
 }
 
+/// One cargo run over a workspace.
+///
+/// A lint the code denies fails its crate.
+/// Cargo then builds nothing that depends on it.
+/// The last two passes judge what it hid.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// Clippy, with the lint levels the code sets.
+    Lint,
+    /// rustc alone, with the levels the code sets.
+    Check,
+    /// Clippy, with every denied lint lowered to a warning.
+    /// It lowers rustc's own lints too, so [`Pass::Check`] judges those.
+    Capped,
+}
+
 /// Spawn `cargo clippy` for one workspace and return the captured Output.
 /// We pass `--quiet` to suppress cargo's progress noise on stderr, and
 /// `--message-format=json` to get structured diagnostics on stdout.
@@ -238,20 +263,33 @@ fn invoke_clippy(
     packages: &[String],
     lint_args: &[String],
     clippy_conf_dir: &Path,
+    pass: Pass,
 ) -> Result<std::process::Output> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
-    cmd.arg("clippy").args(packages);
+    cmd.arg(if pass == Pass::Check {
+        "check"
+    } else {
+        "clippy"
+    });
+    cmd.args(packages);
     cmd.args([
         "--all-targets",
+        // One failed crate must not hide an unrelated one.
+        "--keep-going",
         "--message-format=json",
         "--quiet",
+        // `build.warnings` would hide the warnings, or fail on them.
+        "--config",
+        "build.warnings=\"warn\"",
         "--manifest-path",
     ]);
     cmd.arg(&manifest);
-    cmd.arg("--");
-    for arg in lint_args {
-        cmd.arg(arg);
+    if pass != Pass::Check {
+        cmd.arg("--").args(lint_args);
+    }
+    if pass == Pass::Capped {
+        cmd.args(["--cap-lints", "warn"]);
     }
     let (key, val) = config_writer::env_var_for_dir(clippy_conf_dir);
     cmd.env(key, val);
@@ -317,13 +355,14 @@ const QUOTED_BUILD_ERRORS: usize = 5;
 /// rustc's own errors carry no `clippy::` code, so `parse_clippy_jsonl`
 /// drops them. A workspace that fails to compile therefore yielded zero
 /// diagnostics and comply printed "all clear" on code clippy never saw.
-/// A cargo failure that emitted no JSON at all (bad manifest, lockfile)
-/// is refused the same way, with cargo's stderr.
+/// Only a denied clippy lint explains a failure without a build error.
+/// Any other is refused with cargo's stderr.
+/// Examples: a bad manifest, a build script that panics, a killed rustc.
 fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()> {
     let errors = build_errors(&output.stdout);
-    let silent_failure =
-        !output.status.success() && errors.is_empty() && !lints_reported(&output.stdout);
-    if errors.is_empty() && !silent_failure {
+    let is_explained =
+        output.status.success() || denied_lints(&output.stdout).next().is_some();
+    if errors.is_empty() && is_explained {
         return Ok(());
     }
     let detail = if errors.is_empty() {
@@ -344,34 +383,109 @@ fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()
     .into())
 }
 
+/// Refuse a run whose denied lint hid a package of `files`.
+/// It passes when `files` hold such a lint.
+/// The report then names one.
+fn ensure_packages_linted(
+    workspace: &Path,
+    files: &[&SourceFile],
+    file_filter: &FxHashSet<PathBuf>,
+    stdout: &[u8],
+) -> Result<()> {
+    let denied: Vec<RustcDiagnostic> = denied_lints(stdout)
+        .filter_map(|envelope| envelope.message)
+        .collect();
+    let is_reported = denied.iter().any(|lint| {
+        lint.spans
+            .iter()
+            .any(|span| span.is_primary && file_filter.contains(&span_path(span, workspace)))
+    });
+    if is_reported {
+        return Ok(());
+    }
+    let linted = linted_manifests(stdout);
+    let hidden: BTreeSet<String> = files
+        .iter()
+        .filter_map(|file| crate::runner_helpers::owning_manifest(workspace, &file.path))
+        .filter(|(manifest, _)| !linted.contains(manifest))
+        .map(|(_, package)| package)
+        .collect();
+    if hidden.is_empty() {
+        return Ok(());
+    }
+    let quoted: Vec<String> = denied
+        .into_iter()
+        .take(QUOTED_BUILD_ERRORS)
+        .map(|lint| lint.rendered.unwrap_or(lint.message))
+        .collect();
+    Err(crate::toolchain::ToolchainError::Unusable {
+        what: format!(
+            "cargo clippy did not lint {}: it stopped at a denied lint elsewhere in {}.\n{}",
+            hidden.into_iter().collect::<Vec<_>>().join(", "),
+            workspace.display(),
+            quoted.join("\n")
+        ),
+    }
+    .into())
+}
+
+/// The manifests of the packages clippy linted, one target at least.
+/// A denied lint proves it; so does an artifact.
+/// A build script proves nothing of the code it serves.
+fn linted_manifests(stdout: &[u8]) -> FxHashSet<PathBuf> {
+    envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-artifact")
+        .chain(denied_lints(stdout))
+        .filter(|envelope| {
+            !envelope
+                .target
+                .as_ref()
+                .is_some_and(|target| target.kind.iter().any(|kind| kind == "custom-build"))
+        })
+        .filter_map(|envelope| envelope.manifest_path)
+        .map(|manifest| canonicalize_or_self(Path::new(&manifest)))
+        .collect()
+}
+
 /// rustc errors that stopped the build, as rustc rendered them.
 /// A denied clippy lint is a finding, not a build error.
+/// rustc's own panic has level `error: internal compiler error`.
 fn build_errors(stdout: &[u8]) -> Vec<String> {
     compiler_messages(stdout)
-        .filter(|diag| diag.level == "error")
-        .filter(|diag| {
-            !diag
-                .code
-                .as_ref()
-                .is_some_and(|code| code.code.starts_with("clippy::"))
-        })
+        .filter(|diag| diag.level.starts_with("error"))
+        .filter(|diag| !is_clippy_lint(diag))
         .filter(|diag| !diag.message.starts_with("aborting due to"))
         .map(|diag| diag.rendered.unwrap_or(diag.message))
         .collect()
 }
 
-/// True when cargo streamed at least one compiler message.
-fn lints_reported(stdout: &[u8]) -> bool {
-    compiler_messages(stdout).next().is_some()
+/// The clippy lints whose level the code raised to an error.
+fn denied_lints(stdout: &[u8]) -> impl Iterator<Item = CargoMessage> + '_ {
+    envelopes(stdout).filter(|envelope| {
+        envelope
+            .message
+            .as_ref()
+            .is_some_and(|diag| diag.level == "error" && is_clippy_lint(diag))
+    })
+}
+
+fn is_clippy_lint(diag: &RustcDiagnostic) -> bool {
+    diag.code
+        .as_ref()
+        .is_some_and(|code| code.code.starts_with("clippy::"))
 }
 
 fn compiler_messages(stdout: &[u8]) -> impl Iterator<Item = RustcDiagnostic> + '_ {
+    envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-message")
+        .filter_map(|envelope| envelope.message)
+}
+
+fn envelopes(stdout: &[u8]) -> impl Iterator<Item = CargoMessage> + '_ {
     BufReader::new(stdout)
         .lines()
         .map_while(Result::ok)
         .filter_map(|line| serde_json::from_str::<CargoMessage>(&line).ok())
-        .filter(|envelope| envelope.reason == "compiler-message")
-        .filter_map(|envelope| envelope.message)
 }
 
 /// Parse cargo's JSONL output stream and yield Diagnostic structs for
@@ -435,16 +549,7 @@ fn parse_clippy_jsonl(
             continue;
         };
 
-        // Cargo emits file_name relative to the workspace root. Resolve
-        // it against that root, then canonicalize so it can match against
-        // the user-supplied file paths in `file_filter`.
-        let raw_span_path = Path::new(&span.file_name);
-        let absolute_span_path = if raw_span_path.is_absolute() {
-            raw_span_path.to_path_buf()
-        } else {
-            workspace_root.join(raw_span_path)
-        };
-        let span_path = canonicalize_or_self(&absolute_span_path);
+        let span_path = span_path(span, workspace_root);
         if !file_filter.contains(&span_path) {
             continue;
         }
@@ -477,6 +582,12 @@ fn parse_clippy_jsonl(
     }
 
     diagnostics
+}
+
+/// The file of `span`, in the form `file_filter` holds.
+/// Cargo names it relative to the workspace root, or in full.
+fn span_path(span: &RustcSpan, workspace_root: &Path) -> PathBuf {
+    canonicalize_or_self(&workspace_root.join(&span.file_name))
 }
 
 /// Append the `reason` of a `disallowed-*` entry to clippy's message.
@@ -524,6 +635,7 @@ mod tests {
         let json = br#"{"reason":"compiler-message","message":{"message":"mismatched types","code":{"code":"E0308"},"level":"error","rendered":"error[E0308]: mismatched types","spans":[]}}
 {"reason":"compiler-message","message":{"message":"error communicating with database","code":null,"level":"error","spans":[]}}
 {"reason":"compiler-message","message":{"message":"used unwrap","code":{"code":"clippy::unwrap_used"},"level":"error","spans":[]}}
+{"reason":"compiler-message","message":{"message":"no errors encountered","code":null,"level":"error: internal compiler error","spans":[]}}
 {"reason":"compiler-message","message":{"message":"aborting due to 2 previous errors","code":null,"level":"error","spans":[]}}
 {"reason":"compiler-message","message":{"message":"unused variable","code":{"code":"unused_variables"},"level":"warning","spans":[]}}
 {"reason":"build-finished","success":false}"#;
@@ -531,7 +643,8 @@ mod tests {
             build_errors(json),
             vec![
                 "error[E0308]: mismatched types".to_owned(),
-                "error communicating with database".to_owned()
+                "error communicating with database".to_owned(),
+                "no errors encountered".to_owned()
             ]
         );
     }
