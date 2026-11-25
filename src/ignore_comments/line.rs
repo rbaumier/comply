@@ -75,7 +75,8 @@ pub fn parse(
 }
 
 /// The comments a comply marker is read in at `path`.
-/// `//` is read in every language, as it always was.
+/// `//` is tried in every language.
+/// The caller's mask keeps it where it is a comment.
 /// A language with other comments adds its own opener.
 pub fn marker_comments(path: &Path) -> &'static [CommentSyntax] {
     match crate::files::language_of(path) {

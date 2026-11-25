@@ -248,7 +248,7 @@ throw err;
 
 Suppress a rule for an entire file with `// comply-ignore-file: <rule-id> — <reason>`.
 
-In a language without `//` comments, write the marker in the language's own comment: `-- comply-ignore:` in SQL, `# comply-ignore:` in YAML, TOML, Dockerfiles and nginx configs, `/* comply-ignore: … */` in CSS, `<!-- comply-ignore: … -->` in a Vue template. `//` is read everywhere.
+In a language without `//` comments, write the marker in the language's own comment: `-- comply-ignore:` in SQL, `# comply-ignore:` in YAML, TOML, Dockerfiles and nginx configs, `/* comply-ignore: … */` in CSS, `<!-- comply-ignore: … -->` in a Vue template. A marker in a string, a template literal, a YAML block scalar or a heredoc is text. `//` counts where it opens a comment, and anywhere in JSON, Markdown, HTML and a Vue template.
 
 The SQL rules read the statements of a `.sql` file, never its comments: a statement commented out is not reported, and a word in a comment does not change the statement next to it. A rule that asks for a comment (a rationale, a deprecation note) still finds it there.
 
