@@ -34,6 +34,15 @@ pub struct CargoMessage {
 pub struct RustcDiagnostic {
     #[serde(default)]
     pub message: String,
+    /// `error`, `warning`, `note`, `help`.
+    /// An `error` without a `clippy::` code stopped the build.
+    /// Clippy linted nothing past it.
+    /// A `children` entry carries `note`, `help` or `warning`.
+    #[serde(default)]
+    pub level: String,
+    /// rustc's own rendering, file and line included.
+    #[serde(default)]
+    pub rendered: Option<String>,
     /// `code.code` is the lint name, e.g. `clippy::unwrap_used`.
     /// rustc messages without a code (build errors, parse errors)
     /// have `code: null`.
@@ -41,9 +50,6 @@ pub struct RustcDiagnostic {
     pub code: Option<RustcCode>,
     #[serde(default)]
     pub spans: Vec<RustcSpan>,
-    /// `note`, `help`, `warning`… on the sub-diagnostics in `children`.
-    #[serde(default)]
-    pub level: String,
     /// A `disallowed-*` entry's `reason` arrives as a `note` child.
     #[serde(default)]
     pub children: Vec<RustcDiagnostic>,
@@ -71,6 +77,21 @@ pub struct RustcSpan {
     pub column_start: usize,
     #[serde(default)]
     pub is_primary: bool,
+    /// The source lines the span covers.
+    #[serde(default)]
+    pub text: Vec<RustcSpanLine>,
+    /// The fix a `help` child proposes, e.g. the key a typo meant.
+    #[serde(default)]
+    pub suggested_replacement: Option<String>,
+    #[serde(default, flatten)]
+    pub _extra: IgnoredAny,
+}
+
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
+#[derive(Debug, Deserialize)]
+pub struct RustcSpanLine {
+    #[serde(default)]
+    pub text: String,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }

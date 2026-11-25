@@ -226,14 +226,14 @@ min = 3
 max = 4
 ```
 
-comply.toml is also the single source of clippy's configuration. Any `clippy.toml` key goes under `[clippy]`, copied as-is into the file comply hands to clippy:
+comply.toml can also hold clippy's configuration. Any `clippy.toml` key goes under `[clippy]`, copied as-is into the file comply hands to clippy:
 
 ```toml
 [clippy]
 disallowed-methods = [{ path = "reqwest::get", reason = "use the shared Http client" }]
 ```
 
-A `clippy.toml` or `.clippy.toml` at the workspace root is an error: comply names it, lists its keys to move under `[clippy]`, and does not run clippy. A key set both as a `[rules."clippy::…"]` threshold and under `[clippy]` is an error too. Clippy lints every target, tests included.
+Without a `[clippy]` table (or without any comply.toml), comply reads the project's own clippy file, the one plain `cargo clippy` finds first going up from the workspace root (`.clippy.toml` or `clippy.toml`), and copies its keys as-is in place of `[clippy]`. With a `[clippy]` table, even an empty one, comply.toml is the single source: such a file is an error, comply names it, lists its keys to move under `[clippy]`, and does not run clippy. comply hands one clippy configuration to the whole workspace, so a file plain clippy would read but comply cannot is an error naming it: `.clippy.toml` and `clippy.toml` side by side, or a clippy file in a member's directory below the workspace root. A key set both as a `[rules."clippy::…"]` threshold and in `[clippy]` or the project file is an error naming the key. A key clippy rejects (unknown, wrong type) is an error naming the line of the file it was written in. Clippy lints every target, tests included.
 
 Keep this file short — if you find yourself reaching for lots of overrides, that's usually a signal a rule needs fixing rather than silencing. Issues welcome.
 

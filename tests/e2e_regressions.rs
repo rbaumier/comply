@@ -747,8 +747,9 @@ fn disallowed_method_from_comply_toml_is_reported_issue_8614() {
 }
 
 #[test]
-fn project_clippy_toml_stops_comply_before_clippy_issue_8614() {
+fn project_clippy_toml_beside_clippy_table_stops_comply_before_clippy_issue_8614() {
     let dir = rust_crate(&[
+        ("comply.toml", "[clippy]\nmsrv = \"1.70\"\n"),
         (
             "clippy.toml",
             "disallowed-methods = [{ path = \"std::env::var\", reason = \"read Config\" }]\n",
@@ -767,6 +768,199 @@ fn project_clippy_toml_stops_comply_before_clippy_issue_8614() {
         .stderr(predicate::str::contains("clippy.toml"))
         .stderr(predicate::str::contains("disallowed-methods"))
         .stderr(predicate::str::contains("crashed unexpectedly").not())
+        .stdout(predicate::str::contains("clippy::").not());
+}
+
+/// Two methods: one calls `std::env::var`, one takes three arguments.
+const ENV_VAR_AND_THREE_ARGS: &str = "pub fn home() -> Option<String> {\n    std::env::var(\"HOME\").ok()\n}\n\n\
+     pub fn first(a: u8, _b: u8, _c: u8) -> u8 {\n    a\n}\n";
+
+// Without comply.toml, clippy keeps the project's own config.
+#[test]
+fn project_clippy_toml_without_comply_toml_reaches_clippy() {
+    let dir = rust_crate(&[
+        (
+            ".clippy.toml",
+            "disallowed-methods = [{ path = \"std::env::var\", reason = \"read Config\" }]\n\
+             too-many-arguments-threshold = 2\n",
+        ),
+        ("src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .stderr(predicate::str::contains(".clippy.toml").not())
+        .stdout(predicate::str::contains("clippy::disallowed_methods"))
+        .stdout(predicate::str::contains("read Config"))
+        .stdout(predicate::str::contains("too many arguments (3/2)"));
+}
+
+#[test]
+fn threshold_also_set_by_project_clippy_toml_stops_comply_before_clippy() {
+    let dir = rust_crate(&[
+        (
+            "comply.toml",
+            "[rules.\"clippy::too_many_arguments\"]\nthreshold = 5\n",
+        ),
+        (".clippy.toml", "too-many-arguments-threshold = 2\n"),
+        ("src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "`too-many-arguments-threshold` is set both by [rules.\"clippy::too_many_arguments\"]",
+        ))
+        .stderr(predicate::str::contains(".clippy.toml; keep one"))
+        .stdout(predicate::str::contains("clippy::").not());
+}
+
+// Clippy rejects the key and lints nothing.
+// The error names the project file, never comply's cached copy.
+#[test]
+fn unknown_key_in_project_clippy_toml_is_an_error_naming_that_file() {
+    let dir = rust_crate(&[
+        (
+            ".clippy.toml",
+            "msrv = \"1.70\"\ntoo-many-arguments-treshold = 2\n",
+        ),
+        ("src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".clippy.toml:2:1: unknown field"))
+        .stderr(predicate::str::contains("`too-many-arguments-threshold`"))
+        .stderr(predicate::str::contains("clippy-conf").not())
+        .stdout(predicate::str::contains("all clear").not())
+        .stdout(predicate::str::contains("clippy::").not());
+}
+
+// Clippy reads `.clippy.toml` and ignores `clippy.toml` beside it.
+#[test]
+fn clippy_toml_beside_dot_clippy_toml_is_an_error_naming_both() {
+    let dir = rust_crate(&[
+        (".clippy.toml", "too-many-arguments-threshold = 2\n"),
+        (
+            "clippy.toml",
+            "disallowed-methods = [{ path = \"std::env::var\", reason = \"read Config\" }]\n",
+        ),
+        ("src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".clippy.toml and "))
+        .stderr(predicate::str::contains(
+            "clippy.toml both configure clippy",
+        ))
+        .stdout(predicate::str::contains("clippy::").not());
+}
+
+// `cargo shear` exits 2 when `cargo metadata` fails.
+// It prints no report: no dependency was checked.
+#[cfg(unix)]
+#[test]
+fn cargo_shear_that_checks_nothing_is_an_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = rust_crate(&[("src/lib.rs", "pub fn f() {}\n")]);
+    let bin = TempDir::new().unwrap();
+    let shear = bin.path().join("cargo-shear");
+    fs::write(
+        &shear,
+        "#!/bin/sh\ncase \"$*\" in *--version*) echo 'cargo-shear 1.14.0'; exit 0;; esac\n\
+         echo 'Error: Metadata error: `cargo metadata` exited with an error:'\nexit 2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&shear, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![bin.path().to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+
+    common::comply()
+        .current_dir(dir.path())
+        .env("PATH", std::env::join_paths(dirs).unwrap())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("cargo shear could not check"))
+        .stderr(predicate::str::contains("It exited with 2"))
+        .stderr(predicate::str::contains("Metadata error"));
+}
+
+// Plain clippy reads a member's own clippy.toml for that member.
+// comply hands one file to the whole workspace.
+// So that member file would go unread.
+#[test]
+fn member_clippy_toml_is_an_error_naming_it() {
+    let dir = rust_crate(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"m\"]\nresolver = \"2\"\n",
+        ),
+        (
+            "m/Cargo.toml",
+            "[package]\nname = \"m\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("m/clippy.toml", "too-many-arguments-threshold = 2\n"),
+        ("m/src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("m/clippy.toml"))
+        .stderr(predicate::str::contains("workspace member"))
+        .stdout(predicate::str::contains("clippy::").not());
+}
+
+// Plain clippy seeks its file up to the filesystem root.
+#[test]
+fn clippy_toml_above_the_workspace_root_reaches_clippy() {
+    let dir = rust_crate(&[
+        (".clippy.toml", "too-many-arguments-threshold = 2\n"),
+        (
+            "app/Cargo.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        ),
+        ("app/src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path().join("app"))
+        .arg(".")
+        .assert()
+        .stdout(predicate::str::contains("too many arguments (3/2)"));
+}
+
+// An empty `[clippy]` still adopts comply.toml as the single source.
+#[test]
+fn project_clippy_toml_beside_empty_clippy_table_is_an_error() {
+    let dir = rust_crate(&[
+        ("comply.toml", "[clippy]\n"),
+        ("clippy.toml", "too-many-arguments-threshold = 2\n"),
+        ("src/lib.rs", ENV_VAR_AND_THREE_ARGS),
+    ]);
+
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("clippy.toml is not read"))
         .stdout(predicate::str::contains("clippy::").not());
 }
 
@@ -841,4 +1035,98 @@ fn fix_reads_the_clippy_table_of_comply_toml_issue_8614() {
     let fixed = fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
     assert!(fixed.contains("is_empty()"), "{fixed}");
     assert!(fixed.contains("x >= 1 && x < 10"), "{fixed}");
+}
+
+#[test]
+fn clippy_that_cannot_compile_is_an_error_not_all_clear() {
+    // rustc's own errors carry no `clippy::` code.
+    // comply dropped them and printed "all clear".
+    // It must fail and say why.
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"broken\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "/// Returns one.\npub fn one() -> u32 {\n    \"one\"\n}\n",
+    )
+    .unwrap();
+
+    common::comply()
+        .arg(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("all clear").not())
+        .stderr(predicate::str::contains("cargo clippy could not compile"))
+        .stderr(predicate::str::contains("mismatched types"));
+}
+
+/// A crate whose `sqlx::query!` asks a database at build time.
+/// `.env` names a dead one, but `.sqlx/` holds the query.
+fn sqlx_crate() -> TempDir {
+    rust_crate(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"sessions\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nsqlx = { version = \"0.8\", default-features = false, \
+             features = [\"macros\", \"postgres\", \"runtime-tokio\"] }\n\n[workspace]\n",
+        ),
+        (".env", "DATABASE_URL=postgres://127.0.0.1:1/sessions\n"),
+        (
+            "src/lib.rs",
+            "//! Session store.\n\n\
+             /// Deletes every session, and returns how many went.\n\
+             pub async fn purge(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {\n\
+             \x20   let done = sqlx::query!(\"DELETE FROM sessions\").execute(pool).await?;\n\
+             \x20   Ok(done.rows_affected())\n\
+             }\n\n\
+             /// True when `v` holds nothing.\n\
+             pub fn is_none(v: &[u8]) -> bool {\n\
+             \x20   v.len() == 0\n\
+             }\n",
+        ),
+        // `sqlx` names the entry after the SHA-256 of the query.
+        (
+            ".sqlx/query-a6953b8d45e8ccf9da305fe0e9e2d7661063317a48cb96448d06da043f39edff.json",
+            "{\n  \"db_name\": \"PostgreSQL\",\n  \"query\": \"DELETE FROM sessions\",\n  \
+             \"describe\": {\n    \"columns\": [],\n    \"parameters\": {\n      \"Left\": []\n    },\n    \
+             \"nullable\": []\n  },\n  \
+             \"hash\": \"a6953b8d45e8ccf9da305fe0e9e2d7661063317a48cb96448d06da043f39edff\"\n}\n",
+        ),
+    ])
+}
+
+#[test]
+fn clippy_builds_a_sqlx_crate_from_its_query_cache() {
+    let dir = sqlx_crate();
+    common::comply()
+        .arg(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .env_remove("SQLX_OFFLINE")
+        .env_remove("DATABASE_URL")
+        .assert()
+        .stderr(predicate::str::contains("could not compile").not())
+        .stdout(predicate::str::contains("clippy::len_zero"));
+}
+
+#[test]
+fn fix_builds_a_sqlx_crate_from_its_query_cache() {
+    let dir = sqlx_crate();
+    // `cargo clippy --fix` refuses a package outside any VCS.
+    git(dir.path(), &["init", "-q"]);
+    common::comply()
+        .current_dir(dir.path())
+        .args(["--fix", "."])
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .env_remove("SQLX_OFFLINE")
+        .env_remove("DATABASE_URL")
+        .assert()
+        .stderr(predicate::str::contains("could not compile").not());
+
+    let fixed = fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
+    assert!(fixed.contains("v.is_empty()"), "{fixed}");
 }

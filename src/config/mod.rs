@@ -119,10 +119,11 @@ impl Config {
         &self.raw.entrypoints
     }
 
-    /// The `[clippy]` table, rendered as-is into the generated clippy.toml.
+    /// The `[clippy]` table, copied as-is into the generated clippy.toml.
+    /// `None` when comply.toml has none.
     #[must_use]
-    pub fn clippy_passthrough(&self) -> &toml::Table {
-        &self.raw.clippy
+    pub fn clippy_passthrough(&self) -> Option<&toml::Table> {
+        self.raw.clippy.as_ref()
     }
 
     /// True if `rule_id` is enabled for `file_path`. Combines:
@@ -485,7 +486,9 @@ fn merge(mut base: ComplyToml, user: ComplyToml) -> ComplyToml {
     for (glob, override_cfg) in user.overrides {
         base.overrides.insert(glob, override_cfg);
     }
-    base.clippy.extend(user.clippy);
+    if let Some(user_clippy) = user.clippy {
+        base.clippy.get_or_insert_default().extend(user_clippy);
+    }
     base
 }
 
