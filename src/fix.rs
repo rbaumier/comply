@@ -197,7 +197,7 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
         match workspace {
             Some(root) => {
                 let packages = crate::runner_helpers::cargo_package_args(&root, &files_in_ws);
-                if let Err(e) = invoke_clippy_fix(&root, &packages, config) {
+                if let Err(e) = invoke_clippy_fix(&root, &packages, config, &files_in_ws) {
                     eprintln!("comply: clippy --fix failed for {}: {e:#}", root.display());
                 } else {
                     runs += 1;
@@ -226,7 +226,12 @@ fn run_clippy_fix(files: &[&SourceFile], config: &Config) -> Result<usize> {
 /// Spawn `cargo clippy --fix` for one workspace on `packages`
 /// (`-p` flags from `cargo_package_args`). Clippy fixes whole crates,
 /// so other files of those packages may be edited too.
-fn invoke_clippy_fix(workspace: &Path, packages: &[String], config: &Config) -> Result<()> {
+fn invoke_clippy_fix(
+    workspace: &Path,
+    packages: &[String],
+    config: &Config,
+    files: &[&SourceFile],
+) -> Result<()> {
     let manifest = workspace.join("Cargo.toml");
     let mut cmd = Command::new("cargo");
     cmd.arg("clippy").args(packages);
@@ -240,9 +245,10 @@ fn invoke_clippy_fix(workspace: &Path, packages: &[String], config: &Config) -> 
         "--manifest-path",
     ]);
     cmd.arg(&manifest);
-    let clippy_conf_dir = crate::clippy::config_writer::materialize(config)?;
-    let (key, val) = crate::clippy::config_writer::env_var_for_dir(&clippy_conf_dir);
+    let clippy_conf = crate::clippy::config_writer::materialize(config, workspace, files)?;
+    let (key, val) = crate::clippy::config_writer::env_var_for_dir(&clippy_conf.dir);
     cmd.env(key, val);
+    crate::clippy::use_sqlx_query_cache(&mut cmd, workspace);
     cmd.arg("--");
     let bindings = crate::rules::collect_clippy_bindings();
     cmd.args(crate::clippy::lint_args(&bindings, config));

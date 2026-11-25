@@ -5,40 +5,28 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 impl TextCheck for Check {
+    /// The justification is a comment.
+    fn reads_sql_comments(&self) -> bool {
+        true
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !crate::rules::sql_helpers::is_sql_ddl(ctx.source) {
             return Vec::new();
         }
-        let lines: Vec<&str> = ctx.source.lines().collect();
-        let mut diags = Vec::new();
-        for (i, line) in lines.iter().enumerate() {
-            let upper = line.to_ascii_uppercase();
-            let t = upper.trim();
-            if !super::contains_sql_type_keyword(t) {
-                continue;
-            }
-            if t.contains("NOT NULL") || t.contains("PRIMARY KEY") {
-                continue;
-            }
-            if t.starts_with("CREATE") || t.starts_with("ALTER") || t.starts_with("--") {
-                continue;
-            }
-            let prev_is_comment = i > 0 && lines[i - 1].trim().starts_with("--");
-            let has_inline_comment = line.contains("--");
-            if !prev_is_comment && !has_inline_comment {
-                diags.push(Diagnostic {
-                    path: std::sync::Arc::clone(&ctx.path_arc),
-                    line: i + 1,
-                    column: 1,
-                    rule_id: super::META.id.into(),
-                    message: "Nullable column has no comment explaining why NULL is allowed."
-                        .into(),
-                    severity: Severity::Error,
-                    span: None,
-                });
-            }
-        }
-        diags
+        let code = crate::rules::sql_helpers::mask_sql_comments(ctx.source);
+        super::nullable_lines_without_comment(ctx.source, &code)
+            .into_iter()
+            .map(|offset| Diagnostic {
+                path: std::sync::Arc::clone(&ctx.path_arc),
+                line: offset.saturating_add(1),
+                column: 1,
+                rule_id: super::META.id.into(),
+                message: "Nullable column has no comment explaining why NULL is allowed.".into(),
+                severity: Severity::Error,
+                span: None,
+            })
+            .collect()
     }
 }
 
@@ -78,6 +66,11 @@ mod tests {
     #[test]
     fn allows_not_null() {
         assert!(run("CREATE TABLE t (\n  email TEXT NOT NULL,\n);").is_empty());
+    }
+
+    #[test]
+    fn ignores_column_in_a_block_comment() {
+        assert!(run("CREATE TABLE t (\n  /* archived_at TIMESTAMP, */\n  id INT NOT NULL\n);").is_empty());
     }
 
     #[test]

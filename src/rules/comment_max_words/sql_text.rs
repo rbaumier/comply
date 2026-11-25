@@ -11,6 +11,10 @@ impl TextCheck for Check {
         Some(&["--", "/*"])
     }
 
+    fn reads_sql_comments(&self) -> bool {
+        true
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let max = ctx.config.threshold(super::META.id, "max", ctx.lang);
         let comments = comment_blocks::from_line_oriented_text(ctx.source);

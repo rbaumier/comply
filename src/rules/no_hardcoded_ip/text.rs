@@ -1,26 +1,22 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
 use crate::rules::backend::{CheckCtx, TextCheck};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_outside_release;
 
 #[derive(Debug)]
 pub struct Check;
 
 /// True when the IPv4 literal at byte offset `ip_offset` in the Rust file
-/// `ctx` describes sits in test code (an inline `#[cfg(test)] mod tests`, a `#[test]`
-/// function, a `#![cfg(test)]` file, a Cargo `tests/` integration file, …).
-/// Such IPs are test fixtures, not deployment config, so they must not flag.
-///
-/// Resolves the AST node at the literal's offset and defers to the shared
-/// `is_in_test_context` predicate.
-fn rust_offset_in_test_context(
+/// `ctx` describes sits outside the release, per [`is_outside_release`].
+/// Such IPs are test or example fixtures, not deployment config.
+fn rust_offset_outside_release(
     tree: &tree_sitter::Tree,
     ctx: &CheckCtx,
     ip_offset: usize,
 ) -> bool {
     tree.root_node()
         .descendant_for_byte_range(ip_offset, ip_offset)
-        .is_some_and(|node| is_test_code(node, ctx.source.as_bytes(), ctx))
+        .is_some_and(|node| is_outside_release(node, ctx))
 }
 
 /// Match a dotted-quad IPv4 pattern starting at `start` in `s`.
@@ -233,10 +229,9 @@ fn is_in_comment(line: &str) -> bool {
 impl TextCheck for Check {
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        // For Rust files, parse once so IPs inside an inline `#[cfg(test)]`
-        // module or a `#[test]` function are recognized as test fixtures and
-        // skipped — the AST counterpart to the `tests/`-directory skip. Other
-        // languages keep the pure text path.
+        // Rust files are parsed once.
+        // An IP outside the release is a skipped fixture.
+        // Other languages keep the pure text path.
         let rust_tree = (ctx.lang == Language::Rust).then(|| {
             let mut parser = tree_sitter::Parser::new();
             crate::parsing::parse_with_grammar(&mut parser, Language::Rust, ctx.source.as_bytes())
@@ -288,7 +283,7 @@ impl TextCheck for Check {
                 // literal itself starts `ip.len()` bytes earlier.
                 let ip_offset = line_start + (next - ip.len());
                 if let Some(Some(tree)) = rust_tree.as_ref()
-                    && rust_offset_in_test_context(tree, ctx, ip_offset)
+                    && rust_offset_outside_release(tree, ctx, ip_offset)
                 {
                     continue;
                 }
@@ -533,12 +528,29 @@ mod tests {
     #[test]
     fn allows_ip_literals_in_test_files_issue_1270() {
         // Issue #1270: literal IPs in test code are fixtures (testing IP-field
-        // parsing/handling), not deployment config. `skip_in_test_dir` gates the
-        // rule off for test paths — exercise that gate via `run_rule_gated`.
+        // parsing/handling), not deployment config.
+        // TypeScript names its test files; the gated run honours that.
         use crate::rules::test_helpers::run_rule_gated;
-        let src = r#"let host = IpAddr::from_str("192.168.1.1").unwrap();"#;
-        assert!(run_rule_gated(&Check, src, "src/query/term_query/mod_test.rs").is_empty());
-        assert!(run_rule_gated(&Check, src, "tests/ip_query.rs").is_empty());
+        let ts = r#"const host = "192.168.1.1";"#;
+        assert!(run_rule_gated(&Check, ts, "src/ip.test.ts").is_empty());
+        // Rust gates them: `#[cfg(test)] mod mod_test;`, or the `tests/` target.
+        // The same module declared without the gate ships.
+        let src = r#"fn host() { let host = IpAddr::from_str("192.168.1.1").unwrap(); }"#;
+        let run = |declaration: &str, path: &str| {
+            crate::rules::test_helpers::run_rule_in_module_tree(
+                &Check,
+                &[
+                    ("Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                    ("src/lib.rs", "mod query;\n"),
+                    ("src/query/mod.rs", declaration),
+                    (path, src),
+                ],
+            )
+        };
+        assert!(run("#[cfg(test)]\nmod mod_test;\n", "src/query/mod_test.rs").is_empty());
+        assert_eq!(run("mod mod_test;\n", "src/query/mod_test.rs").len(), 1);
+        assert!(run("", "tests/ip_query.rs").is_empty());
+        assert_eq!(run("mod docs;\n", "src/query/docs/mod.rs").len(), 1);
     }
 
     #[test]

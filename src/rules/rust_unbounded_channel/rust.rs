@@ -20,69 +20,76 @@
 //!   takes a capacity, so calls with arguments are left alone. Any other
 //!   `channel()` — `oneshot`, `broadcast`, `watch`, a third-party channel —
 //!   is not mpsc and is not flagged.
+//!
+//! An `as` rename stands for the path it renames.
+//! `use tokio::sync::mpsc::unbounded_channel as uc;` makes `uc()` that call.
+//! A glob or another module's rename is not followed.
+//! Neither is one of another block.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::{UseScopes, is_outside_release, root_node};
 
 const KINDS: &[&str] = &["call_expression"];
 
 #[derive(Debug)]
 pub struct Check;
 
+/// The imports of a file, read on the first call.
+/// The inner `None` stands for a file without renames.
+type Imports = Option<Option<UseScopes>>;
+
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        Some(Box::new(Imports::None))
     }
 
     fn visit_node(
         &self,
         node: tree_sitter::Node,
         ctx: &CheckCtx,
-        _state: Option<&mut dyn std::any::Any>,
+        state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        let Some(function) = node.child_by_field_name("function") else {
+        let Some(mut function) = node.child_by_field_name("function") else {
             return;
         };
+        // A turbofish wraps the path: `unbounded_channel::<u8>()`.
+        if function.kind() == "generic_function"
+            && let Some(path) = function.child_by_field_name("function")
+        {
+            function = path;
+        }
         let Ok(text) = function.utf8_text(source_bytes) else {
             return;
         };
-        // Match on the last `::`-separated path segment so a bare predicate
-        // method like `range.is_unbounded()` (a `field_expression` whose text
-        // happens to end in `unbounded`) is not mistaken for a constructor.
-        let last_segment = text.rsplit("::").next().unwrap_or(text);
-        let is_unbounded = last_segment == "unbounded_channel"
-            || last_segment == "unbounded" && is_channel_unbounded_path(text)
-            || last_segment == "channel" && channel_is_std_mpsc(text, source_bytes);
+        let renamed = state
+            .and_then(|state| state.downcast_mut::<Imports>())
+            .map(|imports| through_renames(text, node, ctx, imports))
+            .unwrap_or_default();
+        let is_unbounded = if renamed.is_empty() {
+            builds_unbounded_channel(text, node, source_bytes)
+        } else {
+            renamed
+                .iter()
+                .any(|path| builds_unbounded_channel(path, node, source_bytes))
+        };
         if !is_unbounded {
             return;
-        }
-        if is_test_code(node, source_bytes, ctx) {
-            return;
-        }
-        // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
-        // always unbounded). Tokio's `mpsc::channel(N)` takes a capacity
-        // and is the right call. We distinguish by argument count:
-        // unbounded variants take zero args, tokio's bounded variant
-        // takes one.
-        if last_segment == "channel" {
-            let arg_count = node
-                .child_by_field_name("arguments")
-                .map(|args| {
-                    let mut cur = args.walk();
-                    args.named_children(&mut cur).count()
-                })
-                .unwrap_or(0);
-            if arg_count > 0 {
-                return;
-            }
         }
         if is_one_shot_rendezvous(node, source_bytes) {
             return;
         }
         if is_channel_provider_constructor(node, source_bytes) {
+            return;
+        }
+        // Tests and examples run no production load.
+        if is_outside_release(node, ctx) {
             return;
         }
         let pos = node.start_position();
@@ -100,6 +107,50 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// What `text` names, through the imports around `node`.
+/// Empty when none of them binds its first segment.
+fn through_renames(
+    text: &str,
+    node: tree_sitter::Node,
+    ctx: &CheckCtx,
+    imports: &mut Imports,
+) -> Vec<String> {
+    let imports = imports.get_or_insert_with(|| {
+        // A file without ` as ` renames nothing: skip the walk.
+        let has_rename = ctx.source.contains(" as ");
+        has_rename.then(|| UseScopes::read(root_node(node), ctx.source.as_bytes()))
+    });
+    let Some(scopes) = imports else {
+        return Vec::new();
+    };
+    let head = text.split("::").next().unwrap_or(text);
+    let tail = &text[head.len()..];
+    scopes
+        .paths_of(head, node)
+        .into_iter()
+        .map(|path| format!("{}{tail}", path.join("::")))
+        .collect()
+}
+
+/// Whether a call of `path` builds an unbounded channel.
+fn builds_unbounded_channel(path: &str, call: tree_sitter::Node, source: &[u8]) -> bool {
+    // The last `::` segment names the constructor.
+    // `range.is_unbounded()` has none, so it is not one.
+    match path.rsplit("::").next().unwrap_or(path) {
+        "unbounded_channel" => true,
+        "unbounded" => is_channel_unbounded_path(path),
+        // Tokio's bounded `mpsc::channel(N)` takes a capacity.
+        // `std::sync::mpsc::channel()` takes none.
+        "channel" => channel_is_std_mpsc(path, source) && !takes_arguments(call),
+        _ => false,
+    }
+}
+
+fn takes_arguments(call: tree_sitter::Node) -> bool {
+    call.child_by_field_name("arguments")
+        .is_some_and(|arguments| arguments.named_child_count() > 0)
 }
 
 /// True when a bare `unbounded()` constructor call belongs to a recognized
@@ -506,6 +557,12 @@ mod tests {
     }
 
     #[test]
+    fn flags_unbounded_channel_called_with_a_turbofish() {
+        let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
     fn flags_tokio_unbounded_channel() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel(); }";
         assert_eq!(run_on(source).len(), 1);
@@ -600,7 +657,19 @@ mod tests {
     #[test]
     fn allows_unbounded_channel_in_tests_dir() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
-        assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/my_test.rs").is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                source,
+                path,
+            )
+        };
+        assert!(run("tests/my_test.rs").is_empty());
+        assert!(run("benches/load.rs").is_empty());
+        // A `src/` module named after tests or demos ships.
+        assert_eq!(run("src/my_test.rs").len(), 1);
+        assert_eq!(run("src/demo/load.rs").len(), 1);
     }
 
     #[test]

@@ -20,7 +20,9 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["api"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: true,
+    // A Rust module named `docs` or `demo` still ships.
+    // The other backends skip relaxed directories themselves.
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

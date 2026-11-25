@@ -7,11 +7,17 @@ use crate::rules::backend::{CheckCtx, TextCheck};
 pub struct Check;
 
 impl TextCheck for Check {
+    /// The deprecation marker is a comment.
+    fn reads_sql_comments(&self) -> bool {
+        true
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         if !crate::rules::sql_helpers::is_migration_path(ctx.path) {
             return vec![];
         }
-        if !super::sql_drops_column(ctx.source) {
+        let code = crate::rules::sql_helpers::mask_sql_comments(ctx.source);
+        if !super::sql_drops_column(&code) {
             return vec![];
         }
         if super::file_marks_deprecation(ctx.source) {
@@ -64,6 +70,13 @@ mod tests {
     #[test]
     fn allows_drop_with_deprecation_marker() {
         let src = "-- deprecated in v1.2\nALTER TABLE users DROP COLUMN nickname;";
+        assert!(run("/app/migrations/001.sql", src).is_empty());
+    }
+
+    #[test]
+    fn ignores_drop_column_in_a_comment() {
+        let src = "-- ALTER TABLE users DROP COLUMN nickname;\n\
+                   /* ALTER TABLE users DROP COLUMN email; */";
         assert!(run("/app/migrations/001.sql", src).is_empty());
     }
 }

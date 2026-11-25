@@ -27,7 +27,9 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["rust"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: true,
+    // A `docs` or `demo` module may still open channels.
+    // Cargo's targets decide, in the backend.
+    skip_in_relaxed_dir: false,
 };
 pub fn register() -> RuleDef {
     crate::register_rust_only!(META, rust)

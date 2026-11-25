@@ -2,6 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_test_only;
 use crate::rules::sql_helpers::{RUST_STRING_KINDS, is_sql_ddl};
 use crate::rules::walker::collect_nodes_of_kinds;
 
@@ -14,26 +15,24 @@ impl AstCheck for Check {
             return Vec::new();
         }
         let source_bytes = ctx.source.as_bytes();
-        let mut diagnostics = Vec::new();
-        for node in collect_nodes_of_kinds(tree, RUST_STRING_KINDS) {
-            let Ok(text) = node.utf8_text(source_bytes) else {
-                continue;
-            };
-            if !is_sql_ddl(text) {
-                continue;
-            }
-            if !super::sql_drops_column(text) {
-                continue;
-            }
-            diagnostics.push(Diagnostic::at_node(
-                ctx.path,
-                &node,
-                super::META.id,
-                "DROP COLUMN without a prior deprecation release breaks running deploys — deprecate first, drop later.".into(),
-                Severity::Error,
-            ));
-        }
-        diagnostics
+        collect_nodes_of_kinds(tree, RUST_STRING_KINDS)
+            .into_iter()
+            .filter(|node| {
+                node.utf8_text(source_bytes)
+                    .is_ok_and(|text| is_sql_ddl(text) && super::sql_drops_column(text))
+            })
+            // A migration in a test is a fixture, never deployed.
+            .filter(|node| !is_test_only(*node, ctx))
+            .map(|node| {
+                Diagnostic::at_node(
+                    ctx.path,
+                    &node,
+                    super::META.id,
+                    "DROP COLUMN without a prior deprecation release breaks running deploys — deprecate first, drop later.".into(),
+                    Severity::Error,
+                )
+            })
+            .collect()
     }
 }
 
@@ -65,6 +64,33 @@ mod tests {
         let src = r#"fn f() { let m = "ALTER TABLE account DROP COLUMN legacy_flag;"; }"#;
         assert_eq!(run(src).len(), 1);
     }
+
+    #[test]
+    fn allows_drop_column_in_test_code() {
+        let src = "#[cfg(test)]\nmod tests {\n    const M: &str = \"ALTER TABLE account DROP COLUMN legacy_flag;\";\n}";
+        assert!(run(src).is_empty());
+        assert!(run_in_crate("tests/migrate.rs").is_empty());
+    }
+
+    #[test]
+    fn flags_drop_column_in_a_migration_named_after_tests() {
+        assert_eq!(
+            run_in_crate("src/m20250101_000001_drop_test_mode.rs").len(),
+            1
+        );
+        assert_eq!(run_in_crate("src/speed_test.rs").len(), 1);
+    }
+
+    fn run_in_crate(path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            crate::rules::test_helpers::LIB_CARGO_TOML,
+            FLAGGED,
+            path,
+        )
+    }
+
+    const FLAGGED: &str = r#"fn f() { let m = "ALTER TABLE account DROP COLUMN legacy_flag;"; }"#;
 
     #[test]
     fn allows_with_deprecation_marker() {

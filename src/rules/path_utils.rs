@@ -408,6 +408,13 @@ pub fn is_cargo_test_target_dir_path(path: &Path) -> bool {
     cargo_non_library_target_segment(path) == Some("tests")
 }
 
+/// True when `path` is under a `benches/` directory outside `src/`.
+/// Only `cargo bench` builds it.
+/// A module of `src/` named after benchmarks ships.
+pub fn is_cargo_bench_target_dir_path(path: &Path) -> bool {
+    cargo_non_library_target_segment(path) == Some("benches")
+}
+
 /// The `examples`/`benches`/`tests` segment naming the Cargo non-library target
 /// directory `path` belongs to. `None` when a `src` segment comes first (an
 /// ordinary module such as `src/tests/helper.rs`) or when the path names none of
@@ -499,6 +506,34 @@ pub fn is_developer_script_path(path: &Path) -> bool {
 /// Benchmark-harness directory names, matched as exact path segments so
 /// `benches-old/` or `workbench/` do not qualify.
 const BENCHMARK_DIR_SEGMENTS: &[&str] = &["benches", "bench", "benchmark", "benchmarks"];
+
+/// Directory names that hold only tests, as whole path segments.
+const TEST_DIR_SEGMENTS: &[&str] = &[
+    "tests",
+    "test",
+    "__tests__",
+    "spec",
+    "fixtures",
+    "e2e",
+    "mocks",
+    "__mocks__",
+];
+
+/// True when a directory of `path` is named for tests.
+/// The file name is not read.
+/// SQL names no test file.
+/// `migrations/V7__reset_speed_test.sql` is a migration.
+pub fn is_in_test_directory(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|dir| has_path_segment(dir, TEST_DIR_SEGMENTS))
+}
+
+/// True when a directory of `path` is named for benchmarks.
+/// The file name is not read, as in [`is_in_test_directory`].
+pub fn is_in_benchmark_directory(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|dir| has_path_segment(dir, BENCHMARK_DIR_SEGMENTS))
+}
 
 /// True when `path` is a benchmark source file: a [`BENCHMARK_DIR_SEGMENTS`]
 /// directory segment, a file stem carrying a `_bench`/`-bench` marker (e.g.
@@ -3064,5 +3099,44 @@ mod aux_path_tests {
         }
         assert!(!is_typescript_language_file(&PathBuf::from("a.vue")));
         assert!(!is_typescript_language_file(&PathBuf::from("noext")));
+    }
+
+    #[test]
+    fn test_and_benchmark_directories_ignore_the_file_name() {
+        for path in ["tests/reset.sql", "db/fixtures/seed.sql", "e2e/seed.sql"] {
+            assert!(is_in_test_directory(Path::new(path)), "{path}");
+        }
+        for path in [
+            "migrations/V7__reset_speed_test.sql",
+            "migrations/V9__ui.spec.sql",
+            "tests.sql",
+            "src/latest/reset.sql",
+        ] {
+            assert!(!is_in_test_directory(Path::new(path)), "{path}");
+        }
+        for path in ["benches/reset.sql", "db/benchmarks/load.sql"] {
+            assert!(is_in_benchmark_directory(Path::new(path)), "{path}");
+        }
+        for path in [
+            "migrations/V8__cpu_bench.sql",
+            "bench.sql",
+            "workbench/a.sql",
+        ] {
+            assert!(!is_in_benchmark_directory(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn cargo_bench_target_dir_is_outside_src() {
+        assert!(is_cargo_bench_target_dir_path(Path::new(
+            "benches/consts.rs"
+        )));
+        for path in [
+            "src/benches/consts.rs",
+            "src/reports/cpu_bench.rs",
+            "tests/a.rs",
+        ] {
+            assert!(!is_cargo_bench_target_dir_path(Path::new(path)), "{path}");
+        }
     }
 }

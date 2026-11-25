@@ -8,7 +8,8 @@
 //! Both `// comply-ignore: rule-a` and ESLint's
 //! `// eslint-disable-line rule-a` / `// eslint-disable-next-line rule-a`
 //! land in the same `LineParse`, so the caller resolves their target line
-//! identically.
+//! identically. comply's marker is also read in each language's comments.
+//! In SQL, `-- comply-ignore: rule-a` works too.
 //!
 //! Two string defences coexist because the two marker families ask different
 //! questions. comply's own marker carries its opener in its text, so it only
@@ -21,13 +22,22 @@
 //! Both work on one line at a time, so a string or a block comment opened on an
 //! earlier line is invisible here. The shape such a line leaves behind is what
 //! `is_block_comment_padding` recognises.
+//! The caller may also mark the file's comment bytes.
+//! Then a marker counts only in its language's comments.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::files::Language;
 use crate::ignore_comments::payload;
 use std::path::Path;
 
-const MARKER: &str = "// comply-ignore:";
-const FILE_MARKER: &str = "// comply-ignore-file:";
+const MARKER: &str = "comply-ignore:";
+const FILE_MARKER: &str = "comply-ignore-file:";
+
+/// A comment syntax a comply marker can be written in.
+/// The opener, and the closer of a block comment.
+pub type CommentSyntax = (&'static str, Option<&'static str>);
+
+const SLASHES: CommentSyntax = ("//", None);
 const ESLINT_DISABLE_NEXT_LINE: &str = "eslint-disable-next-line";
 const ESLINT_DISABLE_LINE: &str = "eslint-disable-line";
 
@@ -49,37 +59,91 @@ pub struct LineParse {
     pub bad_ignore: Option<Diagnostic>,
 }
 
-/// Parse one source line. Returns None if no honored directive is present.
-pub fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
-    parse_comply_marker(path, line, line_num).or_else(|| parse_eslint_disable(line, line_num))
+/// Parse one line of the file at `path`.
+/// A comply marker opens with one of `comments`.
+/// It counts where `in_comment` answers true.
+/// Returns None if no honored directive is present.
+pub fn parse(
+    path: &Path,
+    comments: &[CommentSyntax],
+    line: &str,
+    line_num: usize,
+    in_comment: &dyn Fn(usize) -> bool,
+) -> Option<LineParse> {
+    parse_comply_marker(path, comments, line, line_num, in_comment)
+        .or_else(|| parse_eslint_disable(line, line_num, in_comment))
 }
 
-fn parse_comply_marker(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
-    // Check the file-level marker first — it's a strict superset of the
-    // per-line marker text (`// comply-ignore-file:` contains the
-    // per-line `// comply-ignore:` as a substring with extra suffix),
-    // so we'd misclassify otherwise.
-    let (marker_byte, is_file_scope, marker_len) = if let Some(b) = line.find(FILE_MARKER) {
-        (b, true, FILE_MARKER.len())
-    } else {
-        (line.find(MARKER)?, false, MARKER.len())
-    };
+/// The comments a comply marker is read in at `path`.
+/// `//` counts where the caller's mask allows it.
+/// A language with other comments adds its own opener.
+pub fn marker_comments(path: &Path) -> &'static [CommentSyntax] {
+    match crate::files::language_of(path) {
+        // `/* -- … */` is a block comment.
+        // It can aim at the next line.
+        Some(Language::Sql) => &[SLASHES, ("/* --", Some("*/")), ("--", None)],
+        Some(Language::Yaml | Language::Toml | Language::Dockerfile | Language::Nginx) => {
+            &[SLASHES, ("#", None)]
+        }
+        Some(Language::Css) => &[SLASHES, ("/*", Some("*/"))],
+        Some(Language::Vue) => &[SLASHES, ("<!--", Some("-->"))],
+        _ => &[SLASHES],
+    }
+}
+
+/// Find the first `keyword` after an opener and a space.
+/// The opener is one of `comments`, where `in_comment` answers true.
+/// Returns the opener offset, its comment, and the keyword's end.
+fn find_marker(
+    line: &str,
+    comments: &[CommentSyntax],
+    keyword: &str,
+    in_comment: &dyn Fn(usize) -> bool,
+) -> Option<(usize, CommentSyntax, usize)> {
+    line.match_indices(keyword).find_map(|(at, _)| {
+        let before = line[..at].strip_suffix(' ')?;
+        let (prefix, comment) = comments
+            .iter()
+            .find_map(|&comment| Some((before.strip_suffix(comment.0)?, comment)))?;
+        in_comment(prefix.len()).then(|| (prefix.len(), comment, at.saturating_add(keyword.len())))
+    })
+}
+
+fn parse_comply_marker(
+    path: &Path,
+    comments: &[CommentSyntax],
+    line: &str,
+    line_num: usize,
+    in_comment: &dyn Fn(usize) -> bool,
+) -> Option<LineParse> {
+    // A line with both markers is read as file-level.
+    let (marker_byte, comment, is_file_scope, payload_start) =
+        find_marker(line, comments, FILE_MARKER, in_comment)
+            .map(|(at, comment, end)| (at, comment, true, end))
+            .or_else(|| {
+                find_marker(line, comments, MARKER, in_comment)
+                    .map(|(at, comment, end)| (at, comment, false, end))
+            })?;
     let prefix = &line[..marker_byte];
 
     if is_inside_string_literal(prefix) {
         return None;
     }
 
-    let parsed = payload::parse(&line[marker_byte + marker_len..]);
+    let rest = &line[payload_start..];
+    let (payload, after_comment) = comment
+        .1
+        .and_then(|closer| rest.split_once(closer))
+        .unwrap_or((rest, ""));
+    let parsed = payload::parse(payload);
     if parsed.rule_ids.is_empty() {
         return None;
     }
 
     // File-level marker → no specific target line.
-    // Trailing per-line marker (code before it on the same line) →
-    //   suppresses THIS line.
-    // Above-line marker (only whitespace before it) → suppresses NEXT line.
-    let is_trailing = !prefix.trim_start().is_empty();
+    // Trailing marker (after code or its block comment) → THIS line.
+    // Above-line marker (nothing but the comment) → suppresses NEXT line.
+    let is_trailing = !prefix.trim_start().is_empty() || !after_comment.trim().is_empty();
     let target_line = if is_file_scope {
         None
     } else {
@@ -95,6 +159,7 @@ fn parse_comply_marker(path: &Path, line: &str, line_num: usize) -> Option<LineP
             line_num,
             col,
             &parsed.rule_ids[0],
+            comment,
         ))
     } else {
         None
@@ -126,8 +191,15 @@ fn parse_comply_marker(path: &Path, line: &str, line_num: usize) -> Option<LineP
 /// blanket disable silence every comply rule on a line would hide findings the
 /// author never looked at. Such a directive is also what
 /// `eslint-comments/no-unlimited-disable` exists to flag.
-fn parse_eslint_disable(line: &str, line_num: usize) -> Option<LineParse> {
+fn parse_eslint_disable(
+    line: &str,
+    line_num: usize,
+    in_comment: &dyn Fn(usize) -> bool,
+) -> Option<LineParse> {
     let (comment, after_directive, target_line) = Comments::new(line).find_map(|comment| {
+        if !in_comment(comment.start) {
+            return None;
+        }
         let body = comment.body.trim_start();
         match strip_directive(body, ESLINT_DISABLE_NEXT_LINE) {
             Some(rest) => Some((comment, rest, line_num + 1)),
@@ -327,7 +399,11 @@ fn make_bad_ignore_diagnostic(
     line: usize,
     char_column: usize,
     rule_id: &str,
+    (opener, closer): CommentSyntax,
 ) -> Diagnostic {
+    let closer = closer
+        .map(|closer| format!(" {closer}"))
+        .unwrap_or_default();
     Diagnostic {
         path: std::sync::Arc::from(path),
         line,
@@ -335,7 +411,7 @@ fn make_bad_ignore_diagnostic(
         rule_id: "comply-ignore-missing-justification".into(),
         message: format!(
             "comply-ignore without justification — explain why this exception \
-             is needed: `// comply-ignore: {rule_id} — <reason>`"
+             is needed: `{opener} comply-ignore: {rule_id} — <reason>{closer}`"
         ),
         severity: Severity::Error,
         span: None,
@@ -345,6 +421,10 @@ fn make_bad_ignore_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(path: &Path, line: &str, line_num: usize) -> Option<LineParse> {
+        super::parse(path, marker_comments(path), line, line_num, &|_| true)
+    }
 
     #[test]
     fn above_line_marker_targets_next_line() {
@@ -693,5 +773,107 @@ mod tests {
         // form `eslint-disable rule-a`, which comply does not track.
         assert!(parse(Path::new("t.ts"), "/* eslint-disable no-console */", 1).is_none());
         assert!(parse(Path::new("t.ts"), "// eslint-disable no-console", 1).is_none());
+    }
+
+    #[test]
+    fn marker_opens_like_a_line_comment_of_the_file() {
+        for (path, opener) in [
+            ("db/001.sql", "--"),
+            ("ci.yml", "#"),
+            ("Cargo.toml", "#"),
+            ("Dockerfile", "#"),
+            ("nginx/site.conf", "#"),
+        ] {
+            let above = parse(
+                Path::new(path),
+                &format!("{opener} comply-ignore: rule-a — reason"),
+                3,
+            )
+            .unwrap();
+            assert_eq!(above.target_line, Some(4), "{path}");
+
+            let trailing = parse(
+                Path::new(path),
+                &format!("code {opener} comply-ignore: rule-a — reason"),
+                3,
+            )
+            .unwrap();
+            assert_eq!(trailing.target_line, Some(3), "{path}");
+
+            let file = parse(
+                Path::new(path),
+                &format!("{opener} comply-ignore-file: rule-a — reason"),
+                1,
+            )
+            .unwrap();
+            assert_eq!(
+                (file.rule_ids, file.target_line),
+                (vec!["rule-a".to_owned()], None)
+            );
+        }
+    }
+
+    #[test]
+    fn marker_in_a_block_comment_ends_at_its_closer() {
+        for (path, opener, closer) in [("a.css", "/*", "*/"), ("c.vue", "<!--", "-->")] {
+            let justified = parse(
+                Path::new(path),
+                &format!("{opener} comply-ignore: rule-a — reason {closer}"),
+                3,
+            )
+            .unwrap();
+            assert_eq!(justified.rule_ids, vec!["rule-a"], "{path}");
+            assert_eq!(justified.target_line, Some(4), "{path}");
+            assert!(justified.bad_ignore.is_none(), "{path}");
+
+            let bare = parse(
+                Path::new(path),
+                &format!("{opener} comply-ignore: rule-a {closer} code"),
+                3,
+            )
+            .unwrap();
+            assert_eq!(bare.rule_ids, vec!["rule-a"], "{path}");
+            assert_eq!(bare.target_line, Some(3), "{path}");
+            assert!(
+                bare.bad_ignore.unwrap().message.contains(&format!(
+                    "`{opener} comply-ignore: rule-a — <reason> {closer}`"
+                )),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn marker_opener_of_another_language_is_text() {
+        assert!(parse(Path::new("t.ts"), "x-- comply-ignore: rule-a — reason", 1).is_none());
+        assert!(parse(Path::new("t.ts"), "# comply-ignore: rule-a — reason", 1).is_none());
+        assert!(
+            parse(
+                Path::new("db/001.sql"),
+                "# comply-ignore: rule-a — reason",
+                1
+            )
+            .is_none()
+        );
+        assert!(parse(Path::new("ci.yml"), "-- comply-ignore: rule-a — reason", 1).is_none());
+    }
+
+    #[test]
+    fn slash_marker_still_reads_in_every_language() {
+        for path in ["t.ts", "db/001.sql", "ci.yml", "a.css"] {
+            let lp = parse(Path::new(path), "// comply-ignore: rule-a — reason", 1).unwrap();
+            assert_eq!(lp.target_line, Some(2), "{path}");
+        }
+    }
+
+    #[test]
+    fn missing_justification_shows_the_opener_of_the_file() {
+        let lp = parse(Path::new("db/001.sql"), "-- comply-ignore: rule-a", 1).unwrap();
+        assert!(
+            lp.bad_ignore
+                .unwrap()
+                .message
+                .contains("`-- comply-ignore: rule-a — <reason>`")
+        );
     }
 }

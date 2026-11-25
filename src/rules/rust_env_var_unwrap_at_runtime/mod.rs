@@ -22,7 +22,9 @@ pub const META: RuleMeta = RuleMeta {
     categories: &["rust", "configuration"],
 
     skip_in_test_dir: false,
-    skip_in_relaxed_dir: true,
+    // A module named `docs` or `demo` still ships.
+    // The backend reads Cargo's targets instead.
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

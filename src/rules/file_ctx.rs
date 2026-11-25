@@ -102,12 +102,27 @@ pub struct PathSegments {
     pub in_migration_dir: bool,
 }
 
+/// The claims of a path that its build confirms.
+/// A path names tests or demos.
+/// The build decides what ships.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BuildScope {
+    pub in_test_dir: bool,
+    pub is_relaxed_dir: bool,
+    /// A relaxed segment lies inside a release target's tree.
+    /// Every rule then reads `is_relaxed_dir` from the build.
+    pub in_release_target: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FileCtx {
     pub language: Option<Language>,
     pub directives: FileDirectives,
     pub rsc_context: RscContext,
     pub path_segments: PathSegments,
+    /// Set when a Rust or SQL path makes a claim.
+    /// Security and data rules read it, not the claim.
+    pub build_scope: Option<BuildScope>,
     pub is_generated: bool,
     pub is_minified: bool,
     pub is_migration: bool,
@@ -161,15 +176,49 @@ impl FileCtx {
             || crate::rules::path_utils::is_build_artifact_path(path);
         let is_minified = scan_minified(path, source);
         let is_migration = path_segments.in_migration_dir || implements_migration_interface(source);
+        let build_scope = build_scope(path, language, &path_segments, project);
         FileCtx {
             language: Some(language),
             directives,
             rsc_context,
             path_segments,
+            build_scope,
             is_generated,
             is_minified,
             is_migration,
         }
+    }
+}
+
+/// What the build confirms of the claims of `path`.
+/// Rust needs Cargo or a `#[cfg(test)]` gate.
+/// SQL needs a test directory.
+/// `None` for no claim, or another language.
+fn build_scope(
+    path: &Path,
+    language: Language,
+    segments: &PathSegments,
+    project: &ProjectCtx,
+) -> Option<BuildScope> {
+    use crate::rules::rust_helpers::{
+        in_release_target_tree, is_outside_release_file, is_test_only_file,
+    };
+    if !segments.in_test_dir && !segments.is_relaxed_dir {
+        return None;
+    }
+    match language {
+        Language::Rust => Some(BuildScope {
+            in_test_dir: segments.in_test_dir && is_test_only_file(path, project),
+            is_relaxed_dir: segments.is_relaxed_dir && is_outside_release_file(path, project),
+            in_release_target: segments.is_relaxed_dir && in_release_target_tree(path, project),
+        }),
+        Language::Sql => Some(BuildScope {
+            in_test_dir: segments.in_test_dir
+                && crate::rules::path_utils::is_in_test_directory(path),
+            is_relaxed_dir: segments.is_relaxed_dir,
+            in_release_target: false,
+        }),
+        _ => None,
     }
 }
 
@@ -2103,5 +2152,61 @@ mod tests {
             "app/a.tsx",
         );
         assert_ne!(rsc, RscContext::ServerComponent);
+    }
+
+    // The path names tests or demos.
+    // Cargo and the `mod` gates say what ships.
+    #[test]
+    fn build_scope_keeps_the_claims_the_build_confirms() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let files = [
+            ("Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod speed_test;\npub mod docs;\npub mod ab_test;\n",
+            ),
+            ("src/speed_test.rs", ""),
+            ("src/docs/mod.rs", ""),
+            ("src/ab_test/query_test.rs", ""),
+            ("tests/api.rs", ""),
+            ("examples/demo.rs", ""),
+            ("tools/tests/load.rs", ""),
+            ("docs/snippet.rs", ""),
+        ];
+        for (rel, src) in files {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, src).unwrap();
+        }
+        let project = ProjectCtx::empty();
+        let scope = |rel: &str| {
+            let path = dir.path().join(rel);
+            let language = Language::from_path(&path).unwrap();
+            FileCtx::build(&path, "", language, &project).build_scope
+        };
+        let test_only = BuildScope {
+            in_test_dir: true,
+            ..BuildScope::default()
+        };
+        let shipped = BuildScope::default();
+        assert_eq!(scope("src/speed_test.rs"), Some(test_only));
+        assert_eq!(scope("tests/api.rs"), Some(test_only));
+        assert_eq!(scope("src/ab_test/query_test.rs"), Some(shipped));
+        assert_eq!(scope("tools/tests/load.rs"), Some(shipped));
+        let shipped_docs = BuildScope {
+            in_release_target: true,
+            ..BuildScope::default()
+        };
+        assert_eq!(scope("src/docs/mod.rs"), Some(shipped_docs));
+        assert_eq!(scope("docs/snippet.rs"), Some(shipped));
+        let example = BuildScope {
+            is_relaxed_dir: true,
+            ..BuildScope::default()
+        };
+        assert_eq!(scope("examples/demo.rs"), Some(example));
+        assert_eq!(scope("src/lib.rs"), None);
+        assert_eq!(scope("migrations/V7__reset_speed_test.sql"), Some(shipped));
+        assert_eq!(scope("db/tests/seed.sql"), Some(test_only));
+        assert_eq!(scope("src/query.test.ts"), None);
     }
 }

@@ -9,7 +9,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_test_only;
 use crate::rules::sql_helpers::is_sql_string;
 
 use super::position::placeholder_is_identifier_position;
@@ -65,11 +65,10 @@ impl AstCheck for Check {
         if !has_risky_placeholder(format_string) {
             return;
         }
-        // A risky-looking interpolation inside a `#[cfg(test)]` module or
-        // `#[test]` fn is a query fixture fed to the code under test against an
-        // in-process session, never a production query over untrusted input, so
-        // the injection rationale does not apply.
-        if is_test_code(node, source_bytes, ctx) {
+        // A query in test-only code is a fixture.
+        // No untrusted input reaches it.
+        // A file named after tests, or `cfg_attr(test, …)`, still ships.
+        if is_test_only(node, ctx) {
             return;
         }
         let pos = node.start_position();

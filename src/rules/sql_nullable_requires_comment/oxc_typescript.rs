@@ -32,7 +32,7 @@ impl OxcCheck for Check {
             return;
         }
         let (base_line, _) = byte_offset_to_line_col(ctx.source, offset);
-        for line_offset in super::nullable_lines_without_comment(&text) {
+        for line_offset in super::nullable_lines_without_comment(&text, &text) {
             diagnostics.push(Diagnostic {
                 path: Arc::clone(&ctx.path_arc),
                 line: base_line + line_offset,

@@ -2,16 +2,17 @@
 //!
 //! Walk every `call_expression` matching `<recv>.unwrap()` (or `.expect(...)`)
 //! whose receiver is itself a `call_expression` to `env::var(...)` /
-//! `std::env::var(...)`. Skip when the call is inside a test context,
-//! inside `fn main`, or in a Cargo build script (`build.rs`) — all are
-//! explicitly allowed places to read env vars without graceful fallback.
+//! `std::env::var(...)`.
+//! Three places may read env vars without a graceful fallback.
+//! The first is code outside the release, per `is_outside_release`.
+//! The others are `fn main` and a Cargo build script.
 //! A build script runs at build time (single-threaded, with Cargo-set env
 //! vars guaranteed present), so panicking on a missing env var there
 //! correctly fails the build rather than degrading a running service.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_in_fn_main, is_test_code};
+use crate::rules::rust_helpers::{is_in_fn_main, is_outside_release};
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -52,10 +53,9 @@ impl AstCheck for Check {
         if !is_env_var_call(receiver, source) {
             return;
         }
-        if is_test_code(node, source, ctx)
-            || is_in_fn_main(node, source)
-            || crate::rules::path_utils::is_rust_build_script(ctx.path)
-        {
+        let startup_code = is_in_fn_main(node, source)
+            || crate::rules::path_utils::is_rust_build_script(ctx.path);
+        if startup_code || is_outside_release(node, ctx) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -137,24 +137,34 @@ fn t() { let url = std::env::var("URL").unwrap(); }"#;
     #[test]
     fn allows_env_var_in_tests_dir_helper() {
         let src = r#"pub fn setup() { env::var("PATH").expect("PATH not set"); }"#;
-        assert!(crate::rules::test_helpers::run_rule(&Check, src, "tests/utils/mocked_pagers.rs").is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                src,
+                path,
+            )
+        };
+        assert!(run("tests/utils/mocked_pagers.rs").is_empty());
+        assert!(run("examples/pager.rs").is_empty());
+        assert_eq!(run("src/utils/pager_test.rs").len(), 1);
     }
 
+    /// A crate named after tests ships to its dependents.
+    /// No `cfg(test)` or Cargo target keeps it out.
     #[test]
-    fn allows_env_var_in_kebab_case_integration_tests_dir() {
+    fn flags_env_var_in_a_crate_named_after_tests() {
         let src = r#"pub fn setup() { let r = std::env::var("NEXTEST_WORKSPACE_ROOT").expect("set"); }"#;
-        assert!(
-            crate::rules::test_helpers::run_rule(&Check, src, "integration-tests/foo/src/lib.rs")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn allows_env_var_in_kebab_case_test_helpers_dir() {
-        let src = r#"pub fn setup() { let p = env::var("PATH").unwrap(); }"#;
-        assert!(
-            crate::rules::test_helpers::run_rule(&Check, src, "test-helpers/src/lib.rs").is_empty()
-        );
+        for crate_dir in ["integration-tests/foo", "test-helpers"] {
+            let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+                &Check,
+                &[
+                    (&format!("{crate_dir}/Cargo.toml"), crate::rules::test_helpers::LIB_CARGO_TOML),
+                    (&format!("{crate_dir}/src/lib.rs"), src),
+                ],
+            );
+            assert_eq!(diagnostics.len(), 1, "{crate_dir}");
+        }
     }
 
     #[test]

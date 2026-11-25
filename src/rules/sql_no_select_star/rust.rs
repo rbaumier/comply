@@ -2,7 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_test_only;
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
 #[derive(Debug)]
@@ -27,10 +27,10 @@ impl AstCheck for Check {
         if !super::contains_select_star(text) {
             return;
         }
-        // `SELECT *` inside a `#[cfg(test)]` module or `#[test]` fn is a query
-        // fixture fed to the code under test, never run against a database, so
-        // the bandwidth/covering-index rationale does not apply.
-        if is_test_code(node, source_bytes, ctx) {
+        // `SELECT *` in test-only code is a fixture.
+        // It never runs in production.
+        // A file named after tests, or `cfg_attr(test, …)`, still ships.
+        if is_test_only(node, ctx) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -72,6 +72,22 @@ mod tests {
     fn flags_select_star() {
         let src = r#"fn f() { let q = "SELECT * FROM users"; }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_select_star_in_shipped_code_named_after_tests() {
+        let src = "#[cfg_attr(test, allow(dead_code))]\nfn f() { let q = \"SELECT * FROM users\"; }";
+        let run_in_crate = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                src,
+                path,
+            )
+        };
+        assert_eq!(run_in_crate("src/ab_test/query.rs").len(), 1);
+        assert_eq!(run_in_crate("src/speed_test.rs").len(), 1);
+        assert!(run_in_crate("tests/query.rs").is_empty());
     }
 
     #[test]

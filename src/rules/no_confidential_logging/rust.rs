@@ -203,10 +203,6 @@ fn has_sensitive_identifier(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
-    if crate::rules::rust_helpers::is_test_code(node, source, ctx) {
-        return;
-    }
-
     let Some(macro_node) = node.child_by_field_name("macro") else { return };
     let Ok(macro_name) = macro_node.utf8_text(source) else { return };
 
@@ -221,6 +217,11 @@ crate::ast_check! { on ["macro_invocation"] => |node, source, ctx, diagnostics|
     };
 
     if !has_sensitive_identifier(token_tree, source) {
+        return;
+    }
+
+    // Tests and examples log sentinel secrets, never production data.
+    if crate::rules::rust_helpers::is_outside_release(node, ctx) {
         return;
     }
 

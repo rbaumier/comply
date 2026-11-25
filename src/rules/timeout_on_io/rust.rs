@@ -6,7 +6,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_outside_release;
 
 /// Method-name suffixes that indicate I/O.
 const IO_METHODS: &[&str] = &[
@@ -44,16 +44,7 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
-            return;
-        }
-        if ctx.path.to_string_lossy().contains("/examples/") {
-            return;
-        }
         let source_bytes = ctx.source.as_bytes();
-        if is_test_code(node, source_bytes, ctx) {
-            return;
-        }
         // In tree-sitter-rust, `await` is a postfix unary: the AST node
         // kind is `await_expression` wrapping an inner expression.
         let Some(inner) = node.named_child(0) else {
@@ -65,6 +56,11 @@ impl AstCheck for Check {
         if is_wrapped_in_timeout(node, source_bytes)
             || is_reqwest_timeout_protected(inner, source_bytes)
         {
+            return;
+        }
+        // Tests and examples hang no production runtime.
+        // A module named after tests or examples ships.
+        if is_outside_release(node, ctx) {
             return;
         }
         let pos = node.start_position();
@@ -81,17 +77,6 @@ impl AstCheck for Check {
             span: None,
         });
     }
-}
-
-fn is_test_path(path: &std::path::Path) -> bool {
-    let lower = path.to_string_lossy().replace('\\', "/");
-    lower.starts_with("tests/")
-        || lower.starts_with("test/")
-        || lower.contains("/tests/")
-        || lower.contains("/test/")
-        || lower.contains("/__tests__/")
-        || lower.contains(".test.")
-        || lower.contains(".spec.")
 }
 
 fn is_io_call(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -277,10 +262,6 @@ mod tests {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
     }
 
-    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, path)
-    }
-
     #[test]
     fn flags_bare_reqwest_get() {
         let source = "async fn f() { let r = reqwest::get(url).await; }";
@@ -314,7 +295,19 @@ mod tests {
     #[test]
     fn allows_io_await_in_test_files() {
         let source = "async fn f() { let r = reqwest::get(url).await; }";
-        assert!(run_on_path(source, "tests/client.rs").is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                source,
+                path,
+            )
+        };
+        assert!(run("tests/client.rs").is_empty());
+        assert!(run("examples/client.rs").is_empty());
+        for path in ["src/client_test.rs", "src/test/client.rs", "src/examples/client.rs"] {
+            assert_eq!(run(path).len(), 1, "{path}");
+        }
     }
 
     #[test]

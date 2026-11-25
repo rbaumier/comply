@@ -498,6 +498,12 @@ fn parse_git_output(stdout: &[u8]) -> Result<Vec<SourceFile>> {
         .collect())
 }
 
+/// The language comply reads the file at `path` in.
+/// `None` for a file comply skips.
+pub(crate) fn language_of(path: &Path) -> Option<Language> {
+    classify(path).map(|file| file.language)
+}
+
 /// Returns None for unsupported extensions (silently skipped).
 fn classify(path: &Path) -> Option<SourceFile> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");

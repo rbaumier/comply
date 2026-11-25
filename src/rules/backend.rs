@@ -284,6 +284,13 @@ pub trait TextCheck: Send + Sync {
         None
     }
 
+    /// True when the check reads a `.sql` file's comments.
+    /// Every other check reads the file with its comments blanked.
+    /// A commented-out statement is then never taken for SQL.
+    fn reads_sql_comments(&self) -> bool {
+        false
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic>;
 }
 

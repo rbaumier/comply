@@ -12,8 +12,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["rust"],
 
-    skip_in_test_dir: true,
-    skip_in_relaxed_dir: true,
+    // A module named after tests may still run commands.
+    // Cargo's gates and targets decide, in the backend.
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {
