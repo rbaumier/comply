@@ -2928,10 +2928,7 @@ fn clippy_stopped_by_a_build_script_that_panics_is_an_error() {
 #[test]
 fn clippy_stopped_by_a_killed_build_script_is_an_error() {
     let dir = dependent_crates(&[
-        (
-            "a/src/lib.rs",
-            "use std::fmt;\npub const KEEP: u8 = 1;\n",
-        ),
+        ("a/src/lib.rs", "use std::fmt;\npub const KEEP: u8 = 1;\n"),
         (
             "b/build.rs",
             "//! Dies.\nfn main() {\n    std::process::abort()\n}\n",

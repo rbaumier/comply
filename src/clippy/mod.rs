@@ -360,8 +360,7 @@ const QUOTED_BUILD_ERRORS: usize = 5;
 /// Examples: a bad manifest, a build script that panics, a killed rustc.
 fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()> {
     let errors = build_errors(&output.stdout);
-    let is_explained =
-        output.status.success() || denied_lints(&output.stdout).next().is_some();
+    let is_explained = output.status.success() || denied_lints(&output.stdout).next().is_some();
     if errors.is_empty() && is_explained {
         return Ok(());
     }
