@@ -896,6 +896,90 @@ fn rules_reporting(files: &[(&str, &str)], file: &str, rules: &[&str]) -> Vec<St
 }
 
 #[test]
+fn a_module_one_release_root_declares_ships_whatever_gate_another_puts_on_it() {
+    // A `#[path]` declaration names its file.
+    // A `[lib] path` root declares modules too.
+    // One ungated declaration ships the file.
+    let helper = shipped_defects();
+    let tool = "#[path = \"../helper.rs\"]\nmod helper;\n\
+                fn main() {\n    println!(\"{}\", helper::check(\"a\", \"b\"));\n}\n";
+    let core_manifest = format!("{APP_MANIFEST}\n[lib]\npath = \"src/core.rs\"\n");
+    let gated = "#[cfg(test)]\nmod helper;\n";
+    let renamed = "#[cfg(test)]\nmod helper;\n#[path = \"helper.rs\"]\npub mod runtime;\n";
+    let projects = [
+        vec![
+            ("Cargo.toml", APP_MANIFEST),
+            ("src/lib.rs", gated),
+            ("src/bin/tool.rs", tool),
+        ],
+        vec![("Cargo.toml", APP_MANIFEST), ("src/lib.rs", renamed)],
+        vec![
+            ("Cargo.toml", core_manifest.as_str()),
+            ("src/core.rs", "pub mod helper;\n"),
+            ("src/main.rs", "#[cfg(test)]\nmod helper;\nfn main() {}\n"),
+        ],
+    ];
+    for mut files in projects {
+        files.push(("src/helper.rs", helper.as_str()));
+        assert_eq!(
+            rules_reporting(&files, "src/helper.rs", &SHIP_RULES),
+            SHIP_RULES,
+            "{files:?}"
+        );
+    }
+}
+
+#[test]
+fn a_file_outside_src_a_release_root_declares_ships() {
+    // `#[path]` can reach into `tests/` or `examples/`.
+    // An inline `mod` block nests the files it declares.
+    let helper = shipped_defects();
+    let no_examples = APP_MANIFEST.replace("edition", "autoexamples = false\nedition");
+    let server_manifest =
+        format!("{APP_MANIFEST}\n[[bin]]\nname = \"server\"\npath = \"examples/server.rs\"\n");
+    let server = "mod api {\n    pub mod auth;\n}\n\
+                  fn main() {\n    let _ = api::auth::check(\"a\", \"b\");\n}\n";
+    let projects = [
+        (
+            "tests/common/mod.rs",
+            vec![
+                ("Cargo.toml", APP_MANIFEST),
+                (
+                    "src/lib.rs",
+                    "#[path = \"../tests/common/mod.rs\"]\npub mod common;\n",
+                ),
+            ],
+        ),
+        (
+            "examples/common.rs",
+            vec![
+                ("Cargo.toml", no_examples.as_str()),
+                (
+                    "src/lib.rs",
+                    "#[path = \"../examples/common.rs\"]\npub mod common;\n",
+                ),
+            ],
+        ),
+        (
+            "examples/api/auth.rs",
+            vec![
+                ("Cargo.toml", server_manifest.as_str()),
+                ("src/lib.rs", ""),
+                ("examples/server.rs", server),
+            ],
+        ),
+    ];
+    for (shipped, mut files) in projects {
+        files.push((shipped, helper.as_str()));
+        assert_eq!(
+            rules_reporting(&files, shipped, &SHIP_RULES),
+            SHIP_RULES,
+            "{shipped}"
+        );
+    }
+}
+
+#[test]
 fn a_module_named_like_a_test_file_ships_unless_a_test_gate_declares_it() {
     // `src/test_*.rs` is a module, not a test target.
     // Only its `mod` declaration decides.

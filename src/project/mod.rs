@@ -2480,6 +2480,10 @@ pub struct CargoManifest {
     lib_path: Option<PathBuf>,
     /// `[[bin]] path` fields, relative to `manifest_dir`.
     bin_paths: Vec<PathBuf>,
+    /// `[[example]] path` fields, relative to `manifest_dir`.
+    example_paths: Vec<PathBuf>,
+    /// The files the package's targets reach, walked on first use.
+    module_reach: OnceLock<ModuleReach>,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
     /// dependency section.
     async_runtime: bool,
@@ -2583,14 +2587,18 @@ impl CargoManifest {
             .and_then(toml::Value::as_str)
             .map(PathBuf::from);
 
-        let bin_paths = value
-            .get("bin")
-            .and_then(toml::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|target| target.get("path").and_then(toml::Value::as_str))
-            .map(PathBuf::from)
-            .collect();
+        let target_paths = |table: &str| -> Vec<PathBuf> {
+            value
+                .get(table)
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|target| target.get("path").and_then(toml::Value::as_str))
+                .map(PathBuf::from)
+                .collect()
+        };
+        let bin_paths = target_paths("bin");
+        let example_paths = target_paths("example");
 
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
@@ -2665,6 +2673,8 @@ impl CargoManifest {
             explicit_target_paths,
             lib_path,
             bin_paths,
+            example_paths,
+            module_reach: OnceLock::new(),
             async_runtime,
             no_std_category,
             testing_crate,
@@ -2750,19 +2760,58 @@ impl CargoManifest {
             || self.declares_executable_at(file_path)
     }
 
-    /// True when a `[lib]` or `[[bin]]` declared by `path =` links `file_path`.
-    /// Its root links the modules it declares, down the tree.
-    /// A declaration gated on `test` links nothing.
+    /// True when the library or a binary links `file_path` by `mod` items.
+    /// See [`walk_module_tree`] for the declarations read.
     #[must_use]
     pub fn release_target_links(&self, file_path: &Path) -> bool {
+        let reach = self.module_reach();
+        !reach.complete || reach.release.contains(&self.package_relative(file_path))
+    }
+
+    /// True when the library, a binary or an example links `file_path`.
+    /// Tests and benches build with `cfg(test)`.
+    #[must_use]
+    pub fn non_test_target_links(&self, file_path: &Path) -> bool {
+        let reach = self.module_reach();
+        !reach.complete || reach.non_test.contains(&self.package_relative(file_path))
+    }
+
+    /// `file_path` relative to the manifest directory, without `.` segments.
+    fn package_relative(&self, file_path: &Path) -> PathBuf {
         let relative = file_path
             .strip_prefix(&self.manifest_dir)
             .unwrap_or(file_path);
-        let file = path_segments(relative);
-        self.lib_path
-            .iter()
-            .chain(&self.bin_paths)
-            .any(|root| root_links_module(&self.manifest_dir, &path_segments(root), &file))
+        path_segments(relative).iter().collect()
+    }
+
+    /// The files the package's targets reach, walked once.
+    fn module_reach(&self) -> &ModuleReach {
+        self.module_reach.get_or_init(|| {
+            let lib = self.lib_path.clone();
+            let mut release_roots = vec![
+                lib.unwrap_or_else(|| PathBuf::from("src/lib.rs")),
+                PathBuf::from("src/main.rs"),
+            ];
+            release_roots.extend(self.bin_paths.iter().cloned());
+            release_roots.extend(auto_target_roots(&self.manifest_dir, "src/bin"));
+            // An example left out by `autoexamples = false` is no test code either.
+            let mut example_roots = self.example_paths.clone();
+            example_roots.extend(auto_target_roots(&self.manifest_dir, "examples"));
+
+            let mut release = FxHashSet::default();
+            let mut complete = release_roots
+                .iter()
+                .all(|root| walk_module_tree(&self.manifest_dir, root, &mut release));
+            let mut non_test = release.clone();
+            complete &= example_roots
+                .iter()
+                .all(|root| walk_module_tree(&self.manifest_dir, root, &mut non_test));
+            ModuleReach {
+                release,
+                non_test,
+                complete,
+            }
+        })
     }
 
     /// True when the crate builds a library target: a `[lib]` table is declared,
@@ -7451,51 +7500,150 @@ fn source_gates_module_on_cfg_test(
     Some(gate(decl, bytes, "test"))
 }
 
-/// True when the crate root `root` reaches `file` by ungated `mod` items.
-/// Both are path segments under `manifest_dir`.
-fn root_links_module(manifest_dir: &Path, root: &[&str], file: &[&str]) -> bool {
-    if root == file {
-        return true;
-    }
-    let Some((_, root_dir)) = root.split_last() else {
-        return false;
-    };
-    let Some(names) = module_names(root_dir, file) else {
-        return false;
-    };
-    if names.len() > RUST_MODULE_CHAIN_MAX_DEPTH {
-        return false;
-    }
-    let mut module_dir: PathBuf = root_dir.iter().collect();
-    let mut parent: PathBuf = root.iter().collect();
-    for name in names {
-        let Ok(src) = std::fs::read_to_string(manifest_dir.join(&parent)) else {
-            return false;
-        };
-        let gate = crate::rules::rust_helpers::cfg_requires;
-        if source_gates_module_on_cfg_test(&src, name, gate) != Some(false) {
+/// Ceiling on the files one package's module walk reads.
+const MODULE_TREE_MAX_FILES: usize = 16_384;
+
+/// The files a package's targets reach by `mod` items.
+/// Paths are relative to the manifest directory.
+#[derive(Debug, Clone)]
+struct ModuleReach {
+    /// Reached from the library or a binary.
+    release: FxHashSet<PathBuf>,
+    /// Reached from those or from an example.
+    non_test: FxHashSet<PathBuf>,
+    /// False when a walk stopped at [`MODULE_TREE_MAX_FILES`].
+    /// Every file then counts as reached.
+    complete: bool,
+}
+
+/// Add to `reached` the files that `root` loads by ungated `mod` items.
+/// Paths are relative to `manifest_dir`.
+/// See [`declared_module_files`] for how Rust resolves them.
+/// False when `reached` outgrows [`MODULE_TREE_MAX_FILES`].
+fn walk_module_tree(manifest_dir: &Path, root: &Path, reached: &mut FxHashSet<PathBuf>) -> bool {
+    // A crate root owns its directory, as a `mod.rs` does.
+    let mut pending: Vec<(PathBuf, bool, usize)> = fold_relative(root)
+        .map(|root| (root, true, 0))
+        .into_iter()
+        .collect();
+    while let Some((file, owns_dir, depth)) = pending.pop() {
+        if !manifest_dir.join(&file).is_file() || !reached.insert(file.clone()) {
+            continue;
+        }
+        if reached.len() > MODULE_TREE_MAX_FILES {
             return false;
         }
-        module_dir.push(name);
-        let flat = module_dir.with_extension("rs");
-        parent = if manifest_dir.join(&flat).is_file() {
-            flat
-        } else {
-            module_dir.join("mod.rs")
+        let Ok(src) = std::fs::read_to_string(manifest_dir.join(&file)) else {
+            continue;
         };
+        if depth >= RUST_MODULE_CHAIN_MAX_DEPTH {
+            continue;
+        }
+        let Some(tree) = parse_rust_source(&src) else {
+            continue;
+        };
+        pending.extend(
+            declared_module_files(&file, owns_dir, tree.root_node(), src.as_bytes())
+                .into_iter()
+                .filter_map(|(child, child_owns_dir)| {
+                    Some((
+                        fold_relative(&child)?,
+                        child_owns_dir,
+                        depth.saturating_add(1),
+                    ))
+                }),
+        );
     }
     true
 }
 
-/// The module names from a crate root in `root_dir` down to `file`.
-/// `None` when `file` is no `.rs` file under `root_dir`.
-fn module_names<'a>(root_dir: &[&'a str], file: &[&'a str]) -> Option<Vec<&'a str>> {
-    let (last, dirs) = file.strip_prefix(root_dir)?.split_last()?;
-    let mut names = dirs.to_vec();
-    if *last != "mod.rs" {
-        names.push(last.strip_suffix(".rs")?);
+/// The files the ungated `mod` items of `file` may load.
+/// Each comes with whether it owns its directory.
+///
+/// - `mod a;` loads `a.rs` or `a/mod.rs` from the module's directory.
+/// - That is the file's directory for a `mod.rs` or a crate root.
+/// - Another file `x.rs` keeps its modules in `x/`.
+/// - `#[path = "p"]` loads `p` from the file's directory, and owns its own.
+/// - An inline `mod b { … }` adds `b/` for the items inside it.
+fn declared_module_files(
+    file: &Path,
+    owns_dir: bool,
+    root: tree_sitter::Node,
+    source: &[u8],
+) -> Vec<(PathBuf, bool)> {
+    let dir = file.parent().unwrap_or(Path::new(""));
+    let module_dir = match file.file_stem() {
+        Some(stem) if !owns_dir && file.file_name() != Some(OsStr::new("mod.rs")) => dir.join(stem),
+        _ => dir.to_path_buf(),
+    };
+    use crate::rules::rust_helpers::{cfg_requires, find_outer_attribute};
+    let mut found = Vec::new();
+    let mut scopes = vec![(root, PathBuf::new())];
+    while let Some((scope, inline)) = scopes.pop() {
+        let mut cursor = scope.walk();
+        for item in scope.named_children(&mut cursor) {
+            if item.kind() != "mod_item" || cfg_requires(item, source, "test") {
+                continue;
+            }
+            let Some(name) = item
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .map(|name| name.trim_start_matches("r#"))
+            else {
+                continue;
+            };
+            if let Some(body) = item.child_by_field_name("body") {
+                scopes.push((body, inline.join(name)));
+                continue;
+            }
+            let path = find_outer_attribute(item, source, attr_is_path_override)
+                .and_then(|attribute| attribute.split('"').nth(1));
+            match path {
+                Some(path) if inline.as_os_str().is_empty() => found.push((dir.join(path), true)),
+                Some(path) => found.push((module_dir.join(&inline).join(path), true)),
+                None => {
+                    let parent = module_dir.join(&inline);
+                    found.push((parent.join(format!("{name}.rs")), false));
+                    found.push((parent.join(name).join("mod.rs"), false));
+                }
+            }
+        }
     }
-    (!names.is_empty()).then_some(names)
+    found
+}
+
+/// `path` with its `.` and `..` segments folded.
+/// `None` when it climbs above its start.
+fn fold_relative(path: &Path) -> Option<PathBuf> {
+    let mut folded = PathBuf::new();
+    for segment in path_segments(path) {
+        if segment != ".." {
+            folded.push(segment);
+        } else if !folded.pop() {
+            return None;
+        }
+    }
+    Some(folded)
+}
+
+/// The targets Cargo finds in `dir`: each `*.rs` and each `*/main.rs`.
+/// Paths are relative to `manifest_dir`.
+fn auto_target_roots(manifest_dir: &Path, dir: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(manifest_dir.join(dir)) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .take(MODULE_TREE_MAX_FILES)
+        .map(|entry| {
+            let root = Path::new(dir).join(entry.file_name());
+            if root.extension().is_some_and(|ext| ext == "rs") {
+                root
+            } else {
+                root.join("main.rs")
+            }
+        })
+        .collect()
 }
 
 /// Parse `src` with the Rust grammar, or `None` when the grammar cannot be
@@ -10473,6 +10621,7 @@ tokio = "1"
         ] {
             assert!(!links(left_out), "{left_out}");
         }
+        assert!(manifest.non_test_target_links(&dir.path().join("examples/demo.rs")));
         let unlisted = CargoManifest::parse("[package]\nname = \"app\"\n", dir.path().into());
         assert!(
             !unlisted

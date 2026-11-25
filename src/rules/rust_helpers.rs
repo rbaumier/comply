@@ -543,7 +543,7 @@ pub fn is_cargo_bench_target(path: &Path, project: &ProjectCtx) -> bool {
 /// True when the top directory of `path` in its Cargo package passes `target_dir`.
 /// Cargo finds `tests/`, `benches/` and `examples/` targets there only.
 /// So `tools/benches/load.rs` is no target.
-/// A `[lib]` or `[[bin]]` declared by `path =` ships its files there.
+/// A file the library or a binary links is no target either.
 /// A file with no `Cargo.toml` ancestor answers false.
 fn in_cargo_package(path: &Path, project: &ProjectCtx, target_dir: fn(&Path) -> bool) -> bool {
     let Some(manifest) = project.nearest_cargo_manifest(path) else {
@@ -561,7 +561,7 @@ fn top_dir_in_package<'p>(path: &'p Path, manifest: &CargoManifest) -> Option<&'
 
 /// True when a release target of the package compiles from `path`'s tree.
 /// - the package's `src/`, where Cargo finds its default targets;
-/// - a `[lib]` or `[[bin]]` declared by `path =`, with its modules.
+/// - a file the library or a binary links by `mod` items.
 ///
 /// Test-only code still counts: see [`is_outside_release_file`].
 pub fn in_release_target_tree(path: &Path, project: &ProjectCtx) -> bool {
@@ -985,6 +985,18 @@ pub fn any_outer_attribute(item: Node, source: &[u8], predicate: impl Fn(&str) -
     any_preceding_attribute_item(item, |attribute_item| {
         attribute_item.utf8_text(source).is_ok_and(&predicate)
     })
+}
+
+/// The source text of the nearest outer attribute of `item` that `predicate` accepts.
+/// It reads the attributes [`any_outer_attribute`] reads.
+pub fn find_outer_attribute<'s>(
+    item: Node,
+    source: &'s [u8],
+    predicate: impl Fn(&str) -> bool,
+) -> Option<&'s str> {
+    preceding_attribute_items(item)
+        .filter_map(|attribute_item| attribute_item.utf8_text(source).ok())
+        .find(|text| predicate(text))
 }
 
 /// True if a single attribute's source text marks test code: a `#[test]` /
@@ -3714,8 +3726,12 @@ fn is_test_only_node(node: Node, source: &[u8]) -> bool {
 /// True when only test builds compile the file at `path`.
 /// Such is a Cargo `tests/` target.
 /// Such is a module gated on `test` by its `mod` chain.
+/// A file any library, binary or example links is not.
 pub fn is_test_only_file(path: &Path, project: &ProjectCtx) -> bool {
-    is_cargo_test_target(path, project) || project.rust_file_requires_cfg_test(path)
+    (is_cargo_test_target(path, project) || project.rust_file_requires_cfg_test(path))
+        && !project
+            .nearest_cargo_manifest(path)
+            .is_some_and(|manifest| manifest.non_test_target_links(path))
 }
 
 /// True when the package's library and binaries never link `node`.
