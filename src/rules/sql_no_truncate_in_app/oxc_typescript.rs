@@ -19,18 +19,25 @@ impl OxcCheck for Check {
         _semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.in_benchmark_dir() {
+        if ctx.file.in_benchmark_dir() || ctx.file.path_segments.in_test_dir {
             return;
         }
         let (text, offset) = match node.kind() {
             AstKind::StringLiteral(lit) => (lit.value.as_str().to_string(), lit.span.start as usize),
+            // The cooked value is the query the database receives.
+            // There, `\n` is a newline, which ends a `--` comment.
             AstKind::TemplateLiteral(tpl) => {
-                let s: String = tpl.quasis.iter().map(|q| q.value.raw.as_str()).collect::<Vec<_>>().join(" ");
+                let s: String = tpl
+                    .quasis
+                    .iter()
+                    .map(|q| q.value.cooked.as_ref().unwrap_or(&q.value.raw).as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 (s, tpl.span.start as usize)
             }
             _ => return,
         };
-        if !super::sql_uses_truncate(&text) {
+        if super::truncate_statements(&text).is_empty() {
             return;
         }
         if !super::looks_like_sql_truncate(&text) {
@@ -85,6 +92,13 @@ mod tests {
     }
 
     #[test]
+    fn allows_truncate_privilege_and_trigger_event() {
+        let src = r#"const a = "REVOKE TRUNCATE ON audit_log FROM writer;";
+const b = `CREATE TRIGGER g BEFORE TRUNCATE ON audit_log FOR EACH STATEMENT EXECUTE FUNCTION g();`;"#;
+        assert!(run_on(src).is_empty());
+    }
+
+    #[test]
     fn allows_tailwind_truncate_class() {
         let src = r#"const cls = "truncate flex items-center";"#;
         assert!(run_on(src).is_empty());
@@ -96,5 +110,14 @@ mod tests {
         let found =
             crate::rules::test_helpers::run_rule_gated(&Check, src, "bench/reset.bench.ts");
         assert!(found.is_empty());
+    }
+
+    #[test]
+    fn allows_truncate_in_test_file() {
+        let src = r#"const q = "TRUNCATE TABLE users";"#;
+        let found = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/reset.test.ts");
+        assert!(found.is_empty());
+        let found = crate::rules::test_helpers::run_rule_gated(&Check, src, "src/reset.ts");
+        assert_eq!(found.len(), 1);
     }
 }

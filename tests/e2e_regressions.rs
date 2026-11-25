@@ -220,6 +220,222 @@ fn sql_migration_rules_skip_test_dirs_and_host_code() {
     );
 }
 
+/// `line:column` of each `sql-no-truncate-in-app` finding.
+/// Comply runs on `source`, alone at `file`.
+fn truncate_positions(file: &str, source: &str) -> Vec<String> {
+    let dir = TempDir::new().expect("failed to create temp dir");
+    let path = dir.path().join(file);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, source).unwrap();
+    let output = common::comply().arg(dir.path()).output().unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains("[sql-no-truncate-in-app]"))
+        .filter_map(|line| line.split(&format!("{file}:")).nth(1))
+        .filter_map(|rest| rest.split(": ").next())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn sql_truncate_as_comment_trigger_event_or_privilege_is_not_reported() {
+    let migration = "-- A row trigger never sees TRUNCATE.\n\
+                     /* TRUNCATE would empty the trail. */\n\
+                     CREATE OR REPLACE TRIGGER audit_log_guard_truncate\n\
+                     \x20   BEFORE TRUNCATE ON audit.audit_log\n\
+                     \x20   FOR EACH STATEMENT EXECUTE FUNCTION audit.guard();\n\
+                     CREATE TRIGGER audit_log_guard_delete\n\
+                     \x20   AFTER DELETE OR TRUNCATE ON audit.audit_log\n\
+                     \x20   FOR EACH STATEMENT EXECUTE FUNCTION audit.guard();\n\
+                     REVOKE TRUNCATE ON audit.audit_log FROM netir_writer;\n\
+                     GRANT SELECT, TRUNCATE ON audit.audit_log TO netir_owner;\n";
+
+    let positions = truncate_positions("migrations/003.sql", migration);
+    assert!(positions.is_empty(), "{positions:#?}");
+}
+
+#[test]
+fn sql_truncate_statement_is_reported_on_its_own_line() {
+    let migration = "-- Reset.\n\
+                     TRUNCATE TABLE a;\n\
+                     TRUNCATE b, c CASCADE;\n\
+                     TRUNCATE ONLY d;\n\
+                     SELECT '--'; TRUNCATE f;\n\
+                     CREATE FUNCTION wipe() RETURNS void LANGUAGE plpgsql AS $$\n\
+                     BEGIN\n\
+                     \x20   -- TRUNCATE in a comment is no statement.\n\
+                     \x20   TRUNCATE e;\n\
+                     END;\n\
+                     $$;\n";
+
+    assert_eq!(
+        truncate_positions("migrations/003.sql", migration),
+        ["2:1", "3:1", "4:1", "5:14", "9:5"]
+    );
+}
+
+#[test]
+fn sql_truncate_that_postgres_or_mysql_runs_is_reported() {
+    // Each TRUNCATE runs on the engine named.
+    // One engine's comment can be the other's code.
+    // So it must stay visible.
+    let cases = [
+        // PostgreSQL: `\'` escapes the quote of an `E'…'` string.
+        (
+            "SELECT E'it\\'s -- x'; TRUNCATE TABLE users;\n",
+            vec!["1:23"],
+        ),
+        // PostgreSQL: the closing `$$` ends what opened inside the string.
+        ("SELECT $$ /* $$;\nTRUNCATE TABLE users;\n", vec!["2:1"]),
+        ("SELECT $$--$$; TRUNCATE TABLE users;\n", vec!["1:16"]),
+        (
+            "COMMENT ON TABLE users IS $$User's table$$;\n\
+             UPDATE settings SET pat = '/*';\n\
+             TRUNCATE TABLE sessions;\n\
+             TRUNCATE TABLE tokens;\n",
+            vec!["3:1", "4:1"],
+        ),
+        // MySQL runs the content of `/*! … */`.
+        ("/*!40000 TRUNCATE TABLE users */;\n", vec!["1:10"]),
+        // MySQL: the first `*/` closes the comment.
+        ("/* a /* b */ TRUNCATE TABLE users; -- */\n", vec!["1:14"]),
+        // MySQL: a backslash escapes the quote of a `'…'` string.
+        (
+            "SELECT 'it\\'s -- x'; TRUNCATE TABLE users;\n",
+            vec!["1:22"],
+        ),
+        // MySQL: `--` opens a comment only before a blank.
+        ("SELECT 5--1; TRUNCATE TABLE users;\n", vec!["1:14"]),
+        // An unclosed `/*` is an error to both: it hides nothing.
+        ("SELECT 1; /* forgot\nTRUNCATE TABLE users;\n", vec!["2:1"]),
+    ];
+    for (migration, expected) in cases {
+        assert_eq!(
+            truncate_positions("migrations/003.sql", migration),
+            expected,
+            "{migration}"
+        );
+    }
+}
+
+#[test]
+fn sql_truncate_in_a_mariadb_versioned_comment_is_reported() {
+    // MariaDB runs the content of `/*M! … */`, as MySQL runs `/*! … */`.
+    let migration = "/*M!100100 TRUNCATE TABLE audit_log */;\n";
+    assert_eq!(
+        truncate_positions("migrations/010.sql", migration),
+        ["1:12"]
+    );
+}
+
+#[test]
+fn sql_truncate_that_postgres_runs_with_backslash_escapes_is_reported() {
+    // With `standard_conforming_strings` off, PostgreSQL reads `\'` as a quote.
+    // Its string then closes after `--`.
+    // `#` is no comment to it.
+    let migration = "SELECT 'a\\' -- ' # 1; TRUNCATE TABLE audit_log;\n";
+    assert_eq!(
+        truncate_positions("migrations/011.sql", migration),
+        ["1:23"]
+    );
+}
+
+#[test]
+fn sql_truncate_in_a_hyphenated_name_is_no_statement() {
+    // A rule id like `sql-no-truncate-in-app` holds the word.
+    // It runs nothing.
+    let named = "SELECT 'sql-no-truncate-in-app';\n";
+    assert!(truncate_positions("migrations/012.sql", named).is_empty());
+    // To PostgreSQL, `--x` is a comment.
+    // The statement goes on.
+    let commented = "TRUNCATE--x\nTABLE audit_log;\n";
+    assert_eq!(truncate_positions("migrations/013.sql", commented), ["1:1"]);
+}
+
+#[test]
+fn sql_truncate_followed_by_on_or_a_comma_or_a_parenthesis_is_no_statement() {
+    // `ON`, `OR` or `,` follow a privilege or trigger event.
+    // `(` follows MySQL's function.
+    // A statement is followed by `TABLE`, `ONLY` or a name.
+    // The word before it does not matter.
+    let migration = "DELETE FROM dbo.after\n\
+                     TRUNCATE TABLE users\n\
+                     DELETE FROM t; -- or\n\
+                     TRUNCATE TABLE sessions;\n\
+                     CREATE PROCEDURE p() BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION TRUNCATE TABLE t; END;\n\
+                     GRANT TRUNCATE, SELECT ON t TO u;\n\
+                     REVOKE GRANT OPTION FOR TRUNCATE ON t FROM u;\n\
+                     CREATE TRIGGER g BEFORE TRUNCATE OR DELETE ON t FOR EACH STATEMENT EXECUTE FUNCTION g();\n\
+                     SELECT TRUNCATE(price, 2) FROM items;\n";
+
+    assert_eq!(
+        truncate_positions("migrations/003.sql", migration),
+        ["2:1", "4:1", "5:66"]
+    );
+}
+
+#[test]
+fn sql_truncate_in_rust_and_ts_literals_is_read_after_their_escapes() {
+    // Once the literal is decoded, `\n` is a newline.
+    // It ends `--` comments and splits `TRUNCATE` from the prior word.
+    let rust = "pub fn a() -> &'static str { \"BEGIN;\\nTRUNCATE TABLE users;\\nCOMMIT;\" }\n\
+                pub fn b() -> &'static str { \"-- TRUNCATE TABLE users;\\nSELECT 1\" }\n";
+    assert_eq!(truncate_positions("src/q.rs", rust), ["1:30"]);
+
+    let ts = "export const a = `DELETE FROM sessions; -- reset\\n  TRUNCATE TABLE users;`;\n\
+              export const b = `BEGIN;\\nTRUNCATE TABLE users;`;\n\
+              export const c = `SELECT $$ /* $$; TRUNCATE TABLE users;`;\n\
+              export const d = `-- TRUNCATE TABLE users;\\nSELECT ${1}`;\n\
+              export const e = \"-- TRUNCATE TABLE users;\\nSELECT 1\";\n";
+    assert_eq!(truncate_positions("src/q.ts", ts), ["1:18", "2:18", "3:18"]);
+}
+
+#[test]
+fn sql_truncate_in_a_module_named_after_benchmarks_is_reported() {
+    // Cargo builds benchmarks from the package's top `benches/` only.
+    // A `src/` module named after benchmarks ships.
+    let reset = "pub const RESET: &str = \"TRUNCATE TABLE cpu_runs;\";\n";
+    assert_eq!(
+        truncate_positions("src/reports/cpu_bench.rs", reset),
+        ["1:25"]
+    );
+}
+
+#[test]
+fn sql_truncate_in_a_migration_named_after_tests_is_reported() {
+    // SQL names no test file.
+    // Only a test directory exempts it.
+    let truncate = "TRUNCATE TABLE speed_samples;\n";
+    assert_eq!(
+        truncate_positions("migrations/V7__reset_speed_test.sql", truncate),
+        ["1:1"]
+    );
+    assert!(truncate_positions("db/tests/reset.sql", truncate).is_empty());
+}
+
+#[test]
+fn sql_truncate_in_a_module_a_binary_ships_is_reported() {
+    // `lib.rs` builds `helper` for its tests only.
+    // `main.rs` builds it into the release binary.
+    let dir = rust_crate(&[
+        ("src/lib.rs", "#[cfg(test)]\nmod helper;\n"),
+        (
+            "src/main.rs",
+            "mod helper;\nfn main() {\n    println!(\"{}\", helper::RESET);\n}\n",
+        ),
+        (
+            "src/helper.rs",
+            "pub const RESET: &str = \"TRUNCATE TABLE sessions;\";\n",
+        ),
+    ]);
+    let output = common::comply().arg(dir.path()).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let reported = stdout.lines().any(|line| {
+        line.contains("src/helper.rs:1:25") && line.contains("[sql-no-truncate-in-app]")
+    });
+    assert!(reported, "{stdout}");
+}
+
 #[test]
 fn vue_and_tsx_backends_of_a_rule_anchor_on_the_same_construct() {
     // One defect, one element, two file types: `a11y-alt-text` reports the

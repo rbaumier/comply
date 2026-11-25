@@ -3387,8 +3387,9 @@ pub struct ProjectCtx {
     // "Is this `.rs` file compiled only under `cfg(test)`?" — keyed by the file
     // path asked about. Answering walks the `mod` declaration chain up to the
     // crate root, reading one parent module file per link off disk, so the
-    // answer is memoized. See `rust_file_is_cfg_test_gated`.
-    rust_cfg_test_gated_cache: Mutex<FxHashMap<PathBuf, bool>>,
+    // answer is memoized, per path and per reading of the gate. See
+    // `rust_file_is_cfg_test_gated` and `rust_file_requires_cfg_test`.
+    rust_cfg_test_gated_cache: Mutex<FxHashMap<(PathBuf, bool), bool>>,
 
     // "Does this package register a global rate-limit middleware?" — i.e. an
     // `app.use(<rateLimiter>)` / `router.use(<rateLimiter>)` whose argument is a
@@ -6043,14 +6044,32 @@ impl ProjectCtx {
     /// whose provenance is unknown stays treated as production code. Memoized
     /// per queried path.
     pub fn rust_file_is_cfg_test_gated(&self, path: &Path) -> bool {
-        if let Some(&cached) = self.rust_cfg_test_gated_cache.lock().unwrap().get(path) {
+        self.rust_module_chain_gated(path, false)
+    }
+
+    /// Like [`Self::rust_file_is_cfg_test_gated`], but a gate counts only when
+    /// its predicate requires `test` (see `rust_helpers::cfg_requires`).
+    /// `#[cfg(any(test, feature = "x"))] mod m;` builds `m` with the feature
+    /// alone, so it does not count.
+    pub fn rust_file_requires_cfg_test(&self, path: &Path) -> bool {
+        self.rust_module_chain_gated(path, true)
+    }
+
+    fn rust_module_chain_gated(&self, path: &Path, requires: bool) -> bool {
+        let key = (path.to_path_buf(), requires);
+        if let Some(&cached) = self.rust_cfg_test_gated_cache.lock().unwrap().get(&key) {
             return cached;
         }
-        let is_gated = rust_module_chain_is_cfg_test_gated(path);
+        let gate = if requires {
+            crate::rules::rust_helpers::cfg_requires
+        } else {
+            crate::rules::rust_helpers::cfg_gates_compilation
+        };
+        let is_gated = rust_module_chain_is_cfg_test_gated(path, gate);
         self.rust_cfg_test_gated_cache
             .lock()
             .unwrap()
-            .insert(path.to_path_buf(), is_gated);
+            .insert(key, is_gated);
         is_gated
     }
 
@@ -7269,28 +7288,45 @@ pub(crate) fn rust_module_parent_candidates(path: &Path) -> Option<(String, Vec<
 /// bound only caps the disk reads a pathologically deep layout would cost.
 pub(crate) const RUST_MODULE_CHAIN_MAX_DEPTH: usize = 32;
 
-/// True when some link in the chain of `mod` declarations reaching `path` from
-/// the crate root is gated on `cfg(test)`. Walks child → parent, reading each
-/// parent module file off disk; stops at the crate root, at the first
-/// unresolvable link, or at the depth cap.
-fn rust_module_chain_is_cfg_test_gated(path: &Path) -> bool {
-    let mut current = path.to_path_buf();
+/// A reading of a `cfg` gate on `test`: `rust_helpers::cfg_gates_compilation`
+/// or `rust_helpers::cfg_requires`.
+type CfgTestGate = fn(tree_sitter::Node, &[u8], &str) -> bool;
+
+/// True when only test builds reach `path` by `mod` declarations.
+/// Each declaring parent gates it on `test`, or is test-only.
+/// A crate root or an undeclared file ships.
+fn rust_module_chain_is_cfg_test_gated(path: &Path, gate: CfgTestGate) -> bool {
+    let mut frontier = vec![path.to_path_buf()];
+    let mut seen = FxHashSet::default();
     for _ in 0..RUST_MODULE_CHAIN_MAX_DEPTH {
-        let Some((module_name, candidates)) = rust_module_parent_candidates(&current) else {
-            return false;
-        };
-        let declaration = candidates.into_iter().find_map(|candidate| {
-            let src = std::fs::read_to_string(&candidate).ok()?;
-            let gated = source_gates_module_on_cfg_test(&src, &module_name)?;
-            Some((candidate, gated))
-        });
-        let Some((parent_file, is_gated)) = declaration else {
-            return false;
-        };
-        if is_gated {
+        let mut ungated_parents = Vec::new();
+        for file in &frontier {
+            let Some((module_name, candidates)) = rust_module_parent_candidates(file) else {
+                return false;
+            };
+            let declarations: Vec<(PathBuf, bool)> = candidates
+                .into_iter()
+                .filter_map(|candidate| {
+                    let src = std::fs::read_to_string(&candidate).ok()?;
+                    let gated = source_gates_module_on_cfg_test(&src, &module_name, gate)?;
+                    Some((candidate, gated))
+                })
+                .collect();
+            if declarations.is_empty() {
+                return false;
+            }
+            ungated_parents.extend(
+                declarations
+                    .into_iter()
+                    .filter(|(_, gated)| !gated)
+                    .map(|(parent, _)| parent)
+                    .filter(|parent| seen.insert(parent.clone())),
+            );
+        }
+        if ungated_parents.is_empty() {
             return true;
         }
-        current = parent_file;
+        frontier = ungated_parents;
     }
     false
 }
@@ -7317,17 +7353,19 @@ fn source_declares_module_private(parent_src: &str, name: &str) -> Option<bool> 
 }
 
 /// Whether `parent_src` gates its file-backed module `mod <name>;` on
-/// `cfg(test)`: `Some(true)` when the declaration carries a `cfg` predicate
-/// activating `test` or sits in a file headed by `#![cfg(test)]`, `Some(false)`
-/// when neither does, `None` when the module is not declared here (so the caller
-/// tries the next candidate parent file).
-fn source_gates_module_on_cfg_test(parent_src: &str, name: &str) -> Option<bool> {
+/// `cfg(test)`, as `gate` reads it: `Some(true)` when the declaration carries
+/// such a `cfg` predicate or sits in a file headed by `#![cfg(test)]`,
+/// `Some(false)` when neither does, `None` when the module is not declared here
+/// (so the caller tries the next candidate parent file).
+fn source_gates_module_on_cfg_test(
+    parent_src: &str,
+    name: &str,
+    gate: CfgTestGate,
+) -> Option<bool> {
     let tree = parse_rust_source(parent_src)?;
     let bytes = parent_src.as_bytes();
     let decl = find_file_backed_mod(tree.root_node(), name, bytes)?;
-    Some(crate::rules::rust_helpers::cfg_gates_compilation(
-        decl, bytes, "test",
-    ))
+    Some(gate(decl, bytes, "test"))
 }
 
 /// Parse `src` with the Rust grammar, or `None` when the grammar cannot be
@@ -10896,67 +10934,73 @@ prost-build = "0.13"
 
     #[test]
     fn source_gates_module_on_cfg_test_reads_the_declaration_gate() {
-        assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(test)]\nmod unit;", "unit"),
-            Some(true)
-        );
+        use crate::rules::rust_helpers::cfg_gates_compilation;
+        let lax = |src: &str, name: &str| {
+            source_gates_module_on_cfg_test(src, name, cfg_gates_compilation)
+        };
+        assert_eq!(lax("#[cfg(test)]\nmod unit;", "unit"), Some(true));
         // Compound predicates activating `test` count too.
         assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(all(test, unix))]\nmod unit;", "unit"),
+            lax("#[cfg(all(test, unix))]\nmod unit;", "unit"),
             Some(true)
         );
         // A `#![cfg(test)]` file header gates every module it declares.
-        assert_eq!(
-            source_gates_module_on_cfg_test("#![cfg(test)]\nmod unit;", "unit"),
-            Some(true)
-        );
+        assert_eq!(lax("#![cfg(test)]\nmod unit;", "unit"), Some(true));
         // No attribute activating `test` → the file ships in release builds.
-        assert_eq!(
-            source_gates_module_on_cfg_test("mod unit;", "unit"),
-            Some(false)
-        );
-        assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(not(test))]\nmod unit;", "unit"),
-            Some(false)
-        );
+        assert_eq!(lax("mod unit;", "unit"), Some(false));
+        assert_eq!(lax("#[cfg(not(test))]\nmod unit;", "unit"), Some(false));
         // `cfg_attr` applies another attribute conditionally; the module itself
         // is compiled either way, so it is not a gate.
         assert_eq!(
-            source_gates_module_on_cfg_test(
-                "#[cfg_attr(test, allow(dead_code))]\nmod unit;",
-                "unit"
-            ),
+            lax("#[cfg_attr(test, allow(dead_code))]\nmod unit;", "unit"),
             Some(false)
         );
         // A feature *value* that spells `test` is not the `test` cfg option.
         assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(feature = \"test-util\")]\nmod unit;", "unit"),
+            lax("#[cfg(feature = \"test-util\")]\nmod unit;", "unit"),
             Some(false)
         );
         // Not declared here → the caller tries the next candidate parent file.
-        assert_eq!(source_gates_module_on_cfg_test("mod other;", "unit"), None);
+        assert_eq!(lax("mod other;", "unit"), None);
         // An inline module is not the parent of a split file.
-        assert_eq!(
-            source_gates_module_on_cfg_test("#[cfg(test)]\nmod unit {}", "unit"),
-            None
-        );
+        assert_eq!(lax("#[cfg(test)]\nmod unit {}", "unit"), None);
         // Nesting adds a path component: `mod harness { mod unit; }` backs
         // `<dir>/harness/unit.rs`, never the `<dir>/unit.rs` being walked.
         assert_eq!(
-            source_gates_module_on_cfg_test(
-                "#[cfg(test)]\nmod harness {\n    mod unit;\n}",
-                "unit"
-            ),
+            lax("#[cfg(test)]\nmod harness {\n    mod unit;\n}", "unit"),
             None
         );
         // A `#[path]` override decouples the module name from the file backing
         // it, so the declaration says nothing about `<dir>/unit.rs`.
         assert_eq!(
-            source_gates_module_on_cfg_test(
-                "#[cfg(test)]\n#[path = \"stubs/u.rs\"]\nmod unit;",
-                "unit"
-            ),
+            lax("#[cfg(test)]\n#[path = \"stubs/u.rs\"]\nmod unit;", "unit"),
             None
+        );
+    }
+
+    #[test]
+    fn source_gates_module_on_cfg_test_can_require_test() {
+        use crate::rules::rust_helpers::cfg_requires;
+        let requires =
+            |src: &str, name: &str| source_gates_module_on_cfg_test(src, name, cfg_requires);
+        assert_eq!(requires("#[cfg(test)]\nmod unit;", "unit"), Some(true));
+        assert_eq!(
+            requires("#[cfg(all(test, unix))]\nmod unit;", "unit"),
+            Some(true)
+        );
+        assert_eq!(requires("#![cfg(test)]\nmod unit;", "unit"), Some(true));
+        // The feature alone builds the module.
+        assert_eq!(
+            requires("#[cfg(any(test, feature = \"seed\"))]\nmod unit;", "unit"),
+            Some(false)
+        );
+        assert_eq!(
+            requires("#[cfg(not(test))]\nmod unit;", "unit"),
+            Some(false)
+        );
+        assert_eq!(
+            requires("#[cfg_attr(test, allow(dead_code))]\nmod unit;", "unit"),
+            Some(false)
         );
     }
 
@@ -11013,6 +11057,41 @@ prost-build = "0.13"
         fs::write(&leaf, "").unwrap();
 
         assert!(ProjectCtx::empty().rust_file_is_cfg_test_gated(&leaf));
+    }
+
+    // The library and the binary both declare modules.
+    // One ungated chain makes a file ship.
+    #[test]
+    fn rust_file_requires_cfg_test_only_when_every_declaration_does() {
+        use std::fs;
+        let dir = tempfile::TempDir::new().unwrap();
+        let files = [
+            (
+                "src/lib.rs",
+                "#[cfg(test)]\nmod helper;\n#[cfg(test)]\nmod fake;\nmod deep;\n",
+            ),
+            (
+                "src/main.rs",
+                "mod helper;\n#[cfg(test)]\nmod fake;\n#[cfg(test)]\nmod deep;\n",
+            ),
+            ("src/helper.rs", ""),
+            ("src/fake.rs", ""),
+            ("src/deep/mod.rs", "mod leaf;\n"),
+            ("src/deep/leaf.rs", ""),
+            ("src/orphan.rs", ""),
+        ];
+        for (rel, src) in files {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, src).unwrap();
+        }
+        let ctx = ProjectCtx::empty();
+        let requires = |rel: &str| ctx.rust_file_requires_cfg_test(&dir.path().join(rel));
+        assert!(!requires("src/helper.rs"));
+        assert!(requires("src/fake.rs"));
+        assert!(!requires("src/deep/leaf.rs"));
+        assert!(!requires("src/orphan.rs"));
+        assert!(!ctx.rust_file_is_cfg_test_gated(&dir.path().join("src/helper.rs")));
     }
 
     #[test]

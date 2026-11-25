@@ -536,11 +536,37 @@ pub fn is_test_only_rust_file(path: &Path, project: &ProjectCtx) -> bool {
 /// directory named `tests` does not. A file with no `Cargo.toml` ancestor owns
 /// no target and answers false.
 fn is_cargo_test_target(path: &Path, project: &ProjectCtx) -> bool {
+    in_cargo_package(
+        path,
+        project,
+        crate::rules::path_utils::is_cargo_test_target_dir_path,
+    )
+}
+
+/// True when `path` sits under the `benches/` directory of its Cargo package.
+/// The package root anchors it, as in [`is_cargo_test_target`].
+pub fn is_cargo_bench_target(path: &Path, project: &ProjectCtx) -> bool {
+    in_cargo_package(
+        path,
+        project,
+        crate::rules::path_utils::is_cargo_bench_target_dir_path,
+    )
+}
+
+/// True when the top directory of `path` in its Cargo package passes `target_dir`.
+/// Cargo finds `tests/`, `benches/` and `examples/` targets there only.
+/// So `tools/benches/load.rs` is no target.
+/// A file with no `Cargo.toml` ancestor answers false.
+fn in_cargo_package(path: &Path, project: &ProjectCtx, target_dir: fn(&Path) -> bool) -> bool {
     let Some(manifest) = project.nearest_cargo_manifest(path) else {
         return false;
     };
-    path.strip_prefix(manifest.manifest_dir())
-        .is_ok_and(crate::rules::path_utils::is_cargo_test_target_dir_path)
+    let top_dir = path
+        .strip_prefix(manifest.manifest_dir())
+        .ok()
+        .and_then(Path::parent)
+        .and_then(|dir| dir.components().next());
+    top_dir.is_some_and(|dir| target_dir(Path::new(dir.as_os_str())))
 }
 
 /// True if the author gated `node`'s compilation on the configuration option
@@ -564,10 +590,30 @@ fn is_cargo_test_target(path: &Path, project: &ProjectCtx) -> bool {
 /// this on `<flag>`", not "this is provably absent from every release build".
 /// Rules reasoning about what ships in the binary want this one: a `#[cfg(test)]`
 /// module, or a `#[cfg(debug_assertions)]` panic the release profile compiles
-/// out.
+/// out. [`cfg_requires`] answers the stricter question.
 pub fn cfg_gates_compilation(node: Node, source: &[u8], flag: &str) -> bool {
-    let gates = |text: &str| cfg_predicate_activates(text, flag.as_bytes(), CFG_GATE_KEYWORDS);
-    if file_has_inner_attribute(node, source, gates) {
+    cfg_scope_matches(node, source, |text| {
+        cfg_predicate_activates(text, flag.as_bytes(), CFG_GATE_KEYWORDS)
+    })
+}
+
+/// True if a `cfg` gate on `node` or on a scope containing it builds `node`
+/// only when `flag` is set. The scopes are those of [`cfg_gates_compilation`].
+///
+/// - `cfg(<flag>)` and `cfg(all(<flag>, …))` require it.
+/// - `cfg(any(…))` requires it when every member does.
+/// - `cfg(any(<flag>, feature = "x"))` does not: the feature alone builds it.
+/// - `not(…)`, `key = "value"` and other options require nothing.
+pub fn cfg_requires(node: Node, source: &[u8], flag: &str) -> bool {
+    cfg_scope_matches(node, source, |text| {
+        cfg_attribute_requires(text, flag.as_bytes())
+    })
+}
+
+/// True if an attribute satisfying `gates` sits on `node`, on a scope
+/// containing it, or heads the file.
+fn cfg_scope_matches(node: Node, source: &[u8], gates: impl Fn(&str) -> bool) -> bool {
+    if file_has_inner_attribute(node, source, &gates) {
         return true;
     }
     let mut current = Some(node);
@@ -575,14 +621,104 @@ pub fn cfg_gates_compilation(node: Node, source: &[u8], flag: &str) -> bool {
         // `any_outer_attribute` stops at the first non-attribute sibling and
         // `module_body_has_inner_attribute` self-guards on `mod_item`, so a node
         // that cannot carry an attribute simply answers false.
-        if any_outer_attribute(scope, source, gates)
-            || module_body_has_inner_attribute(scope, source, gates)
+        if any_outer_attribute(scope, source, &gates)
+            || module_body_has_inner_attribute(scope, source, &gates)
         {
             return true;
         }
         current = scope.parent();
     }
     false
+}
+
+/// Deepest predicate nesting [`cfg_attribute_requires`] reads.
+/// A deeper predicate requires nothing.
+const CFG_PREDICATE_MAX_DEPTH: usize = 32;
+
+/// True if `attribute` is `#[cfg(…)]` or `#![cfg(…)]` and its predicate
+/// requires the option `flag`. See [`cfg_requires`].
+fn cfg_attribute_requires(attribute: &str, flag: &[u8]) -> bool {
+    let Some(rest) = attribute.trim_start().strip_prefix('#') else {
+        return false;
+    };
+    let rest = rest.strip_prefix('!').unwrap_or(rest).trim_start();
+    let Some(rest) = rest.strip_prefix('[') else {
+        return false;
+    };
+    let Some(rest) = rest.trim_start().strip_prefix("cfg") else {
+        return false;
+    };
+    let Some(predicate) = rest.trim_start().strip_prefix('(') else {
+        return false;
+    };
+    let mut i = 0;
+    predicate_requires(predicate.as_bytes(), &mut i, flag, 0) == Some(true)
+}
+
+/// Read the cfg predicate at `*i` and move `*i` past it.
+/// Answer whether it holds only when `flag` is set.
+/// `None` when the text there is no predicate.
+fn predicate_requires(bytes: &[u8], i: &mut usize, flag: &[u8], depth: usize) -> Option<bool> {
+    if depth > CFG_PREDICATE_MAX_DEPTH {
+        return None;
+    }
+    skip_ascii_whitespace(bytes, i);
+    let start = *i;
+    while bytes.get(*i).copied().is_some_and(is_ident_byte) {
+        *i = i.saturating_add(1);
+    }
+    let word = &bytes[start..*i];
+    if word.is_empty() {
+        return None;
+    }
+    skip_ascii_whitespace(bytes, i);
+    match bytes.get(*i) {
+        Some(b'(') => {
+            *i = i.saturating_add(1);
+            let (mut members, mut required) = (0usize, 0usize);
+            loop {
+                skip_ascii_whitespace(bytes, i);
+                if bytes.get(*i) == Some(&b')') {
+                    *i = i.saturating_add(1);
+                    break;
+                }
+                members = members.saturating_add(1);
+                if predicate_requires(bytes, i, flag, depth.saturating_add(1))? {
+                    required = required.saturating_add(1);
+                }
+                skip_ascii_whitespace(bytes, i);
+                match bytes.get(*i) {
+                    Some(b',') => *i = i.saturating_add(1),
+                    Some(b')') => {
+                        *i = i.saturating_add(1);
+                        break;
+                    }
+                    _ => return None,
+                }
+            }
+            Some(match word {
+                b"all" => required > 0,
+                b"any" => members > 0 && required == members,
+                _ => false,
+            })
+        }
+        Some(b'=') => {
+            *i = i.saturating_add(1);
+            skip_ascii_whitespace(bytes, i);
+            if bytes.get(*i) != Some(&b'"') {
+                return None;
+            }
+            *i = end_of_string_literal(bytes, *i);
+            Some(false)
+        }
+        _ => Some(word == flag),
+    }
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], i: &mut usize) {
+    while bytes.get(*i).is_some_and(u8::is_ascii_whitespace) {
+        *i = i.saturating_add(1);
+    }
 }
 
 /// True if `item` is a module whose body opens with an inner attribute (`#![…]`)
@@ -3547,6 +3683,25 @@ pub fn is_test_code(node: Node, source: &[u8], ctx: &crate::rules::backend::Chec
     is_under_tests_dir(ctx.path) || is_in_test_context(node, source)
 }
 
+/// True when only a test build compiles `node`, so no release build ships it.
+///
+/// - a `cfg` gate that requires `test` ([`cfg_requires`]), on `node`, an
+///   enclosing scope or the file;
+/// - an enclosing `#[test]` function;
+/// - a Cargo integration-test target, the `tests/` of the package;
+/// - a module reached through a `mod` declaration whose gate requires `test`.
+///
+/// A file or module named after tests still ships, and so does code under
+/// `#[cfg_attr(test, …)]` or `#[cfg(any(test, feature = "x"))]`.
+/// Rules that protect production data use this, not [`is_test_code`].
+pub fn is_test_only(node: Node, ctx: &crate::rules::backend::CheckCtx) -> bool {
+    let source = ctx.source.as_bytes();
+    cfg_requires(node, source, "test")
+        || is_in_test_macro_fn(node, source)
+        || is_cargo_test_target(ctx.path, ctx.project)
+        || ctx.project.rust_file_requires_cfg_test(ctx.path)
+}
+
 /// True when `node` sits in code compiled into a Rust library target that some
 /// other Rust crate links against — as opposed to an application entry point,
 /// build-time tooling, or a test.
@@ -3903,6 +4058,48 @@ pub fn string_literal_value<'a>(node: Node<'a>, source: &'a [u8]) -> Option<&'a 
         }
     }
     node.utf8_text(source).ok().map(|t| t.trim_matches('"'))
+}
+
+/// The value of a `string_literal` or `raw_string_literal` node, as the
+/// program sees it: delimiters dropped, escapes resolved (`\n`, `\"`, `\x41`,
+/// `\u{e9}`…), a line-ending `\` dropped with the whitespace after it.
+pub fn string_literal_decoded(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let mut value = String::new();
+    let mut after_line_end = false;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        let text = child.utf8_text(source).ok()?;
+        match child.kind() {
+            "string_content" if after_line_end => value.push_str(text.trim_start()),
+            "string_content" => value.push_str(text),
+            "escape_sequence" => value.extend(rust_escape_value(text)),
+            _ => {}
+        }
+        after_line_end = child.kind() == "escape_sequence"
+            && text
+                .strip_prefix('\\')
+                .is_some_and(|rest| rest.starts_with(['\n', '\r']));
+    }
+    Some(value)
+}
+
+/// The character a Rust escape sequence stands for; `None` for the
+/// line-ending `\`, which stands for nothing.
+fn rust_escape_value(escape: &str) -> Option<char> {
+    let body = escape.strip_prefix('\\')?;
+    match body {
+        "n" => Some('\n'),
+        "r" => Some('\r'),
+        "t" => Some('\t'),
+        "0" => Some('\0'),
+        "\\" | "\"" | "'" => body.chars().next(),
+        _ => {
+            let hex = body
+                .strip_prefix('x')
+                .or_else(|| body.strip_prefix("u{")?.strip_suffix('}'))?;
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+        }
+    }
 }
 
 /// Lexical path equality that folds away `.`/`..` components, so
@@ -10995,6 +11192,30 @@ pub fn last_type_argument(type_text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_literal_decoded_resolves_escapes_and_drops_delimiters() {
+        let source = "const A: &str = \"a\\nb\\t\\\"c\\\\ \\x41\\u{e9} \\\n    d\";\n\
+                      const B: &str = r#\"x\\ny\"#;\n\
+                      const C: &str = \"\";\n";
+        let tree = parse(source);
+        let mut values = Vec::new();
+        let mut stack = vec![tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if matches!(node.kind(), "string_literal" | "raw_string_literal") {
+                values.push(string_literal_decoded(node, source.as_bytes()).unwrap());
+                continue;
+            }
+            let mut cursor = node.walk();
+            stack.extend(
+                node.children(&mut cursor)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev(),
+            );
+        }
+        assert_eq!(values, ["a\nb\t\"c\\ A\u{e9} d", "x\\ny", ""]);
+    }
 
     #[test]
     fn strip_type_borrows_peels_borrows_lifetimes_and_mut() {
