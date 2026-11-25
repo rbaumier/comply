@@ -3,7 +3,7 @@
 //! Splits the file on `;` so DDL detection is per-statement (`CREATE
 //! TABLE` blocks span multiple lines), then runs `find_bad_boolean_columns`
 //! on each DDL statement. Each offending column emits one diagnostic
-//! anchored at the statement's start line.
+//! anchored at the line declaring it.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{CheckCtx, TextCheck};
@@ -37,8 +37,14 @@ impl TextCheck for Check {
     }
 }
 
-fn push_for_buf(buf: &str, ctx: &CheckCtx, line: usize, out: &mut Vec<Diagnostic>) {
-    for col in super::find_bad_boolean_columns(buf) {
+fn push_for_buf(buf: &str, ctx: &CheckCtx, start_line: usize, out: &mut Vec<Diagnostic>) {
+    // The finder reads one line at a time.
+    let columns = buf.lines().enumerate().flat_map(|(offset, line)| {
+        super::find_bad_boolean_columns(line)
+            .into_iter()
+            .map(move |col| (start_line.saturating_add(offset), col))
+    });
+    for (line, col) in columns {
         out.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
             line,
@@ -78,6 +84,13 @@ mod tests {
     fn allows_has_prefix() {
         let src = "CREATE TABLE t (has_admin BOOLEAN NOT NULL);";
         assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn reports_each_column_on_its_own_line() {
+        let src = "\nCREATE TABLE t (\n  id INT,\n  active BOOLEAN,\n  admin BOOL NOT NULL\n);";
+        let lines: Vec<usize> = run(src).iter().map(|d| d.line).collect();
+        assert_eq!(lines, [4, 5]);
     }
 
     #[test]

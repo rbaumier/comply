@@ -613,6 +613,21 @@ fn sql_comply_ignore_marker_counts_in_a_routine_body_and_a_block_comment() {
     assert_eq!(truncate_positions("migrations/011.sql", slashes), ["2:1"]);
 }
 
+#[test]
+fn sql_boolean_column_prefix_is_reported_on_the_line_declaring_the_column() {
+    // The `;` in the comment ends no statement.
+    // comply-ignore: sql-boolean-column-prefix — the defect under test.
+    let migration = "-- Holds wait for diarization; see the worker.\n\
+                     CREATE TABLE holds (\n\
+                     \x20 id BIGINT PRIMARY KEY,\n\
+                     \x20 active BOOLEAN NOT NULL\n\
+                     );\n";
+    assert_eq!(
+        positions("sql-boolean-column-prefix", "migrations/012.sql", migration),
+        ["4:1"]
+    );
+}
+
 /// The three rules that read SQL in Rust string literals.
 const SQL_RUST_RULES: [&str; 3] = [
     "sql-no-drop-column-without-expand",
