@@ -2097,6 +2097,70 @@ fn diff_only_survives_a_non_utf8_file_in_the_diff_issue_8502() {
 }
 
 #[test]
+fn a_linted_file_that_is_not_utf8_is_refused_by_name() {
+    for file in [
+        "q.sql",
+        "a.css",
+        "c.yml",
+        "Dockerfile",
+        "nginx/site.conf",
+        "Net.vue",
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"# caf\xe9\n").unwrap();
+        common::comply()
+            .current_dir(dir.path())
+            .arg(".")
+            .assert()
+            .code(2)
+            .stdout(predicate::str::contains("all clear").not())
+            .stderr(predicate::str::contains(file))
+            .stderr(predicate::str::contains("valid UTF-8"))
+            .stderr(predicate::str::contains("crashed unexpectedly").not());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linted_file_without_read_permission_is_refused_by_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("q.sql");
+    fs::write(&file, "SELECT id FROM users;\n").unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    common::comply()
+        .current_dir(dir.path())
+        .arg(".")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("q.sql"));
+}
+
+#[test]
+fn an_unread_path_comply_lints_nothing_of_stops_no_run() {
+    // A submodule can be named like a script.
+    // A staged file can be gone from the working tree.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    fs::create_dir_all(root.join("vendor")).unwrap();
+    fs::write(root.join("vendor/q.sql"), b"-- caf\xe9\n").unwrap();
+    fs::write(root.join("gone.sql"), "SELECT id FROM users;\n").unwrap();
+    git(root, &["add", "-A"]);
+    fs::remove_file(root.join("gone.sql")).unwrap();
+    fs::create_dir_all(root.join("three.css")).unwrap();
+    let submodule = format!("160000,{},three.css", "1".repeat(40));
+    git(root, &["update-index", "--add", "--cacheinfo", &submodule]);
+    common::comply()
+        .current_dir(root)
+        .arg("--staged")
+        .assert()
+        .success();
+}
+
+#[test]
 fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
     // A TypeScript project with a tsconfig.json but no typescript-go API package
     // in its node_modules is every repo you clone. comply diagnoses that gap

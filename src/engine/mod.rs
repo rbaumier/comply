@@ -2,9 +2,8 @@
 //!
 //! How it works:
 //! 1. Collect all registered rules from `rules::all_rule_defs()`.
-//! 2. For each file, read its contents once via `lint_one_file`. Files that
-//!    aren't valid UTF-8 are skipped with a stderr warning so a single
-//!    binary-ish file can't kill the entire scan.
+//! 2. For each file, read its contents once via `lint_one_file`. A file that
+//!    is not UTF-8 stops the run. A skipped one would hide findings.
 //! 3. Pick the backends whose `Language` matches this file.
 //! 4. If any TreeSitter backend is applicable, parse with the right grammar
 //!    once (LANGUAGE_TYPESCRIPT for .ts/.js, LANGUAGE_TSX for .tsx/.jsx).
@@ -20,10 +19,11 @@ use oxc_walk::{oxc_pre_enabled, run_oxc_checks};
 use prefilter::{PrefilterFinders, build_finders, source_matches_prefilter};
 use walk::{run_legacy_checks, run_multiplexed_walk};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use rayon::iter::Either;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,8 +36,9 @@ use crate::files::{Language, SourceFile};
 use crate::project::ProjectCtx;
 use crate::rules::backend::AstCheck;
 use crate::rules::backend::OxcCheck;
-use crate::rules::file_ctx::FileCtx;
+use crate::rules::file_ctx::{FileCtx, scan_path};
 use crate::rules::{self, RuleDef, backend::Backend, backend::CheckCtx, meta::RuleMeta};
+use crate::toolchain::ToolchainError;
 
 const LARGE_PROJECT_FILE_COUNT: usize = 1_000;
 const ENGINE_LARGE_PROJECT_BUDGET: Duration = Duration::from_secs(55);
@@ -236,28 +237,23 @@ pub fn lint_files_with_project(
     let deadline = (files.len() > LARGE_PROJECT_FILE_COUNT)
         .then(|| Instant::now() + ENGINE_LARGE_PROJECT_BUDGET);
     let timed_out = AtomicBool::new(false);
-    let mut diagnostics: Vec<Diagnostic> = files
+    let (unread, linted): (Vec<anyhow::Error>, Vec<Vec<Diagnostic>>) = files
         .par_iter()
         .map_init(WorkerState::new, |worker, file| {
             if let Some(deadline) = deadline
                 && Instant::now() > deadline
             {
                 timed_out.store(true, Ordering::Relaxed);
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let Some(ld) = lang_dispatches.get(&file.language) else {
-                return Vec::new();
+                return Ok(Vec::new());
             };
-            match lint_one_file_with_dispatch(file, ld, worker, config, project) {
-                Ok(file_diags) => file_diags,
-                Err(e) => {
-                    eprintln!("comply: skipping {}: {e:#}", file.path.display());
-                    Vec::new()
-                }
-            }
+            lint_one_file_with_dispatch(file, ld, worker, config, project)
         })
-        .flatten()
-        .collect();
+        .partition_map(Either::from);
+    ensure_all_read(&unread)?;
+    let mut diagnostics: Vec<Diagnostic> = linted.into_iter().flatten().collect();
 
     if timed_out.load(Ordering::Relaxed) {
         eprintln!(
@@ -538,6 +534,39 @@ fn dispatch_with_lang(
     diagnostics
 }
 
+/// Cap on the unread files one refusal names.
+const UNREAD_FILES_NAMED: usize = 20;
+
+/// Refuses a run that could not read a linted file.
+fn ensure_all_read(unread: &[anyhow::Error]) -> Result<()> {
+    if unread.is_empty() {
+        return Ok(());
+    }
+    let named = unread.iter().take(UNREAD_FILES_NAMED);
+    let named: Vec<String> = named.map(|failure| format!("{failure:#}")).collect();
+    Err(ToolchainError::Unusable {
+        what: format!(
+            "{} file(s) could not be linted.\n{}\n\
+             Save each as UTF-8, or list it in `.complyignore`",
+            unread.len(),
+            named.join("\n")
+        ),
+    }
+    .into())
+}
+
+/// Whether a file that fails with `kind` hides findings.
+/// A deleted file or a submodule holds none.
+/// Neither does a file no rule lints.
+fn hides_findings(kind: ErrorKind, file: &SourceFile, ld: &LangDispatch) -> bool {
+    let path = scan_path(&file.path);
+    let is_file = !matches!(
+        kind,
+        ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::IsADirectory
+    );
+    is_file && !ld.applicable.is_empty() && !path.is_vendored && !path.is_linter_spec_fixture
+}
+
 /// Where a masked finding sits in `source`, counted in characters.
 /// The mask blanks each byte of a comment.
 /// A multibyte character there spans several masked columns.
@@ -589,9 +618,17 @@ fn lint_one_file_with_dispatch(
     // `fs::read_to_string` allocate a fresh one per file. `File::read_to_string`
     // appends, so clear() first keeps capacity and just reuses the heap chunk.
     worker.source_buf.clear();
-    std::fs::File::open(&file.path)
-        .and_then(|mut f| f.read_to_string(&mut worker.source_buf))
-        .with_context(|| format!("failed to read {}", file.path.display()))?;
+    let read =
+        std::fs::File::open(&file.path).and_then(|mut f| f.read_to_string(&mut worker.source_buf));
+    if let Err(failure) = read {
+        let is_hiding = hides_findings(failure.kind(), file, ld);
+        let failure = anyhow::Error::new(failure).context(file.path.display().to_string());
+        if is_hiding {
+            return Err(failure);
+        }
+        eprintln!("comply: skipping {failure:#}");
+        return Ok(Vec::new());
+    }
     // The post-filter re-reads every discovered file solely to run this same
     // substring check; record clean files now so it can skip the read for them.
     if !crate::ignore_comments::has_suppression_marker(&worker.source_buf) {
