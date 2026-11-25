@@ -861,9 +861,77 @@ fn rust_rules_judge_a_docs_module_the_library_ships() {
     }
 }
 
+const LIST_FILES: &str = "pub fn list() -> std::io::Result<std::process::Output> {\n    \
+                          std::process::Command::new(\"ls\").output()\n}\n";
+const SELECT_ALL: &str = "pub fn by_id(id: &str) -> String {\n    format!(\"SELECT * FROM users WHERE id = {}\", id)\n}\n";
+const RESET_SESSIONS: &str = "pub const RESET: &str = \"TRUNCATE TABLE sessions;\";\n";
+
+/// Rules that judge only the code a build ships.
+const SHIP_RULES: [&str; 6] = [
+    "db-no-string-concat-sql",
+    "no-timing-attack",
+    "rust-undocumented-unsafe",
+    "sql-no-select-star",
+    "sql-no-truncate-in-app",
+    "timeout-on-external-command",
+];
+
+/// One defect for each rule of [`SHIP_RULES`].
+fn shipped_defects() -> String {
+    format!("{PLAIN_COMPARE}{UNSAFE_READ}{LIST_FILES}{SELECT_ALL}{RESET_SESSIONS}")
+}
+
+/// The `rules` reporting `file` in a project of `files`.
+fn rules_reporting(files: &[(&str, &str)], file: &str, rules: &[&str]) -> Vec<String> {
+    let lines = report(files);
+    rules
+        .iter()
+        .filter(|rule| {
+            lines.iter().any(|line| {
+                line.starts_with(&format!("{file}:")) && line.contains(&format!("[{rule}]"))
+            })
+        })
+        .map(|rule| (*rule).to_owned())
+        .collect()
+}
+
+#[test]
+fn a_module_named_like_a_test_file_ships_unless_a_test_gate_declares_it() {
+    // `src/test_*.rs` is a module, not a test target.
+    // Only its `mod` declaration decides.
+    let queue = "pub fn queue() -> usize {\n    let (tx, rx) = std::sync::mpsc::channel();\n    \
+                 for i in 0..3u8 {\n        let _ = tx.send(i);\n    }\n    \
+                 drop(tx);\n    rx.try_iter().count()\n}\n";
+    let body = format!("{}{queue}", shipped_defects());
+    let main = "mod test_dir_leftover;\n#[cfg(test)]\nmod test_gated;\n\
+                fn main() {\n    let _ = test_dir_leftover::queue();\n}\n";
+    let files = [
+        ("Cargo.toml", APP_MANIFEST),
+        ("src/main.rs", main),
+        ("src/test_dir_leftover.rs", body.as_str()),
+        ("src/test_gated.rs", body.as_str()),
+    ];
+    let mut rules = SHIP_RULES.to_vec();
+    rules.push("rust-unbounded-channel");
+    assert_eq!(
+        rules_reporting(&files, "src/test_dir_leftover.rs", &rules),
+        rules
+    );
+    assert!(rules_reporting(&files, "src/test_gated.rs", &rules).is_empty());
+}
+
 /// What comply reports for `rule` in a project of `files`.
 /// Each line leaves out the project root.
 fn findings(files: &[(&str, &str)], rule: &str) -> Vec<String> {
+    report(files)
+        .into_iter()
+        .filter(|line| line.contains(&format!("[{rule}]")))
+        .collect()
+}
+
+/// What comply reports in a project of `files`.
+/// Each line leaves out the project root.
+fn report(files: &[(&str, &str)]) -> Vec<String> {
     let dir = TempDir::new().expect("failed to create temp dir");
     for (name, content) in files {
         let path = dir.path().join(name);
@@ -878,7 +946,6 @@ fn findings(files: &[(&str, &str)], rule: &str) -> Vec<String> {
     ];
     stdout
         .lines()
-        .filter(|line| line.contains(&format!("[{rule}]")))
         .filter_map(|line| {
             roots
                 .iter()
