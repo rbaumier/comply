@@ -4,6 +4,8 @@
 //! Rules ask "what counts as an entry point?" and get the union of every
 //! matching framework's declarations.
 
+pub mod react_router;
+
 use crate::project::PackageJson;
 use serde::Deserialize;
 use std::path::Path;
@@ -66,13 +68,22 @@ pub struct MagicExports {
 pub struct RouteMagicExports {
     /// Names consumed in file-system-routed route files (Nuxt Nitro
     /// `server/api`/`server/routes`/`server/middleware` modules, `plugins/*`,
-    /// and `middleware/*`).
+    /// and `middleware/*`) and in React Router route modules.
     #[serde(default)]
     pub route_files: Vec<String>,
     /// Names consumed in route-parameter matcher files (Vue Router
     /// `src/params/*`).
     #[serde(default)]
     pub param_matchers: Vec<String>,
+    /// Names read only from the root route, React Router's `root.tsx`.
+    #[serde(default)]
+    pub root_route: Vec<String>,
+    /// Names consumed in the route config (React Router `routes.ts`).
+    #[serde(default)]
+    pub route_config: Vec<String>,
+    /// Names consumed in the server entry (React Router `entry.server.tsx`).
+    #[serde(default)]
+    pub server_entry: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -103,6 +114,7 @@ const RAW: &[(&str, &str)] = &[
     ("i18n", include_str!("i18n.toml")),
     ("nuxt", include_str!("nuxt.toml")),
     ("vue-router", include_str!("vue-router.toml")),
+    ("react-router", include_str!("react-router.toml")),
 ];
 
 fn registry() -> &'static [FrameworkDef] {
@@ -119,7 +131,6 @@ fn registry() -> &'static [FrameworkDef] {
     })
 }
 
-#[cfg(test)]
 pub fn get_framework(name: &str) -> Option<&'static FrameworkDef> {
     registry().iter().find(|def| def.name == name)
 }

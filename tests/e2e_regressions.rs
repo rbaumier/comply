@@ -374,6 +374,441 @@ fn sql_truncate_followed_by_on_or_a_comma_or_a_parenthesis_is_no_statement() {
     );
 }
 
+/// What comply reports for `rule` in a project of `files`.
+/// Each line leaves out the project root.
+fn findings(files: &[(&str, &str)], rule: &str) -> Vec<String> {
+    let dir = TempDir::new().expect("failed to create temp dir");
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    let output = common::comply().arg(dir.path()).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let roots = [
+        fs::canonicalize(dir.path()).unwrap().display().to_string(),
+        dir.path().display().to_string(),
+    ];
+    stdout
+        .lines()
+        .filter(|line| line.contains(&format!("[{rule}]")))
+        .filter_map(|line| {
+            roots
+                .iter()
+                .find_map(|root| line.strip_prefix(root.as_str()))
+        })
+        .map(|rest| rest.trim_start_matches('/').to_owned())
+        .collect()
+}
+
+/// The files reported `unused-file` in a project of `files`.
+/// They are relative to its root, and sorted.
+fn unused_files(files: &[(&str, &str)]) -> Vec<String> {
+    let mut found: Vec<String> = findings(files, "unused-file")
+        .iter()
+        .filter_map(|line| line.split(':').next())
+        .map(str::to_owned)
+        .collect();
+    found.sort();
+    found
+}
+
+/// `<file> <export>` for each `dead-export` finding, sorted.
+/// The project is made of `files`.
+fn dead_exports(files: &[(&str, &str)]) -> Vec<String> {
+    let mut found: Vec<String> = findings(files, "dead-export")
+        .iter()
+        .filter_map(|line| {
+            Some(format!(
+                "{} {}",
+                line.split(':').next()?,
+                line.split('`').nth(1)?
+            ))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// The manifest of a React Router 7 app in framework mode.
+const REACT_ROUTER_PACKAGE: &str = r#"{"name":"web","private":true,"type":"module","dependencies":{"react-router":"^7.9.3"},"devDependencies":{"@react-router/dev":"^7.9.5"}}"#;
+
+#[test]
+fn react_router_conventions_and_routes_ts_modules_are_entry_points() {
+    let found = unused_files(&[
+        (
+            "front/package.json",
+            r#"{"name":"front","private":true,"type":"module","dependencies":{"react-router":"^7.9.3"},"devDependencies":{"@react-router/dev":"^7.9.5"}}"#,
+        ),
+        (
+            "front/react-router.config.ts",
+            "export default { ssr: false };\n",
+        ),
+        (
+            "front/app/root.tsx",
+            "import { Shell } from \"./components/shell\";\nexport default function App() { return Shell; }\n",
+        ),
+        (
+            "front/app/components/shell.tsx",
+            "export const Shell = null;\n",
+        ),
+        (
+            "front/app/entry.client.tsx",
+            "import { boot } from \"./lib/boot\";\nboot();\n",
+        ),
+        (
+            "front/app/lib/boot.ts",
+            "export function boot() { return 1; }\n",
+        ),
+        (
+            "front/app/routes.ts",
+            "import { type RouteConfig, index, layout, route } from \"@react-router/dev/routes\";\n\
+             // route(\"/old\", \"routes/orphan.tsx\"),\n\
+             export default [\n\
+             \x20 route(\"/home\", \"routes/home.tsx\"),\n\
+             \x20 layout(\"layouts/frame.tsx\", [index(\"routes/index.tsx\")]),\n\
+             ] satisfies RouteConfig;\n",
+        ),
+        (
+            "front/app/routes/home.tsx",
+            "import { format } from \"../lib/format\";\nexport default function Home() { return format(\"home\"); }\n",
+        ),
+        (
+            "front/app/lib/format.ts",
+            "export function format(s: string) { return s; }\n",
+        ),
+        (
+            "front/app/routes/index.tsx",
+            "export default function Index() { return null; }\n",
+        ),
+        (
+            "front/app/layouts/frame.tsx",
+            "export default function Frame() { return null; }\n",
+        ),
+        (
+            "front/app/routes/orphan.tsx",
+            "export default function Orphan() { return null; }\n",
+        ),
+        ("front/app/lib/dead.ts", "export const dead = 1;\n"),
+    ]);
+    assert_eq!(
+        found,
+        ["front/app/lib/dead.ts", "front/app/routes/orphan.tsx"]
+    );
+}
+
+#[test]
+fn react_router_app_directory_is_read_from_its_config() {
+    let configs = [
+        "import type { Config } from \"@react-router/dev/config\";\n\
+         export default {\n\
+         \x20 // appDirectory: \"app\",\n\
+         \x20 appDirectory: \"./src\",\n\
+         } satisfies Config;\n",
+        "export default { \"appDirectory\": \"./src\" };\n",
+    ];
+    for config in configs {
+        let found = unused_files(&[
+            (
+                "package.json",
+                r#"{"name":"web","private":true,"type":"module","dependencies":{"react-router":"^7.9.3"}}"#,
+            ),
+            ("react-router.config.ts", config),
+            (
+                "src/root.tsx",
+                "export default function App() { return null; }\n",
+            ),
+            (
+                "src/entry.server.tsx",
+                "export default function handleRequest() { return null; }\n",
+            ),
+            (
+                "src/routes.ts",
+                "import { route } from \"@react-router/dev/routes\";\nexport default [route(\"/\", \"./pages/home.tsx\")];\n",
+            ),
+            (
+                "src/pages/home.tsx",
+                "export default function Home() { return null; }\n",
+            ),
+            ("src/orphan.tsx", "export const orphan = 1;\n"),
+            (
+                "app/root.tsx",
+                "export default function Stale() { return null; }\n",
+            ),
+        ]);
+        assert_eq!(found, ["app/root.tsx", "src/orphan.tsx"], "{config}");
+    }
+}
+
+#[test]
+fn react_router_string_outside_a_route_file_argument_names_no_route_module() {
+    // Only the file argument of `route()`, `index()` and `layout()` counts.
+    // A path pattern, option or constant names no module.
+    let found = unused_files(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        (
+            "app/root.tsx",
+            "export default function App() { return null; }\n",
+        ),
+        (
+            "app/routes.ts",
+            "import { index, layout, route as page } from \"@react-router/dev/routes\";\n\
+             const ARCHIVED = [\"routes/archived.tsx\"];\n\
+             export default [\n\
+             \x20 page(\"routes/pattern.tsx\", \"routes/live.tsx\", { id: \"routes/id.tsx\" }),\n\
+             \x20 layout(\"layouts/frame.tsx\", [index(\"routes/home.tsx\")]),\n\
+             ];\n",
+        ),
+        (
+            "app/routes/live.tsx",
+            "export default function Live() { return null; }\n",
+        ),
+        (
+            "app/routes/home.tsx",
+            "export default function Home() { return null; }\n",
+        ),
+        (
+            "app/layouts/frame.tsx",
+            "export default function Frame() { return null; }\n",
+        ),
+        (
+            "app/routes/archived.tsx",
+            "export default function Archived() { return null; }\n",
+        ),
+        (
+            "app/routes/pattern.tsx",
+            "export default function Pattern() { return null; }\n",
+        ),
+        (
+            "app/routes/id.tsx",
+            "export default function Id() { return null; }\n",
+        ),
+    ]);
+    assert_eq!(
+        found,
+        [
+            "app/routes/archived.tsx",
+            "app/routes/id.tsx",
+            "app/routes/pattern.tsx"
+        ]
+    );
+}
+
+#[test]
+fn react_router_routes_split_across_imported_files_are_entry_points() {
+    // Paths in a config `routes.ts` imports are app-relative too.
+    let found = unused_files(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        (
+            "app/root.tsx",
+            "export default function App() { return null; }\n",
+        ),
+        (
+            "app/routes.ts",
+            "import { type RouteConfig, prefix, route } from \"@react-router/dev/routes\";\n\
+             import { adminRoutes } from \"./config/admin\";\n\
+             export default [\n\
+             \x20 route(\"/\", \"routes/home.tsx\"),\n\
+             \x20 ...prefix(\"/admin\", adminRoutes),\n\
+             ] satisfies RouteConfig;\n",
+        ),
+        (
+            "app/config/admin.ts",
+            "import { route } from \"@react-router/dev/routes\";\n\
+             import { billing } from \"./billing\";\n\
+             export const adminRoutes = [route(\"users\", \"routes/admin/users.tsx\"), ...billing];\n",
+        ),
+        (
+            "app/config/billing.ts",
+            "import { index } from \"@react-router/dev/routes\";\n\
+             export const billing = [index(\"routes/admin/billing.tsx\")];\n",
+        ),
+        (
+            "app/routes/home.tsx",
+            "export default function Home() { return null; }\n",
+        ),
+        (
+            "app/routes/admin/users.tsx",
+            "export default function Users() { return null; }\n",
+        ),
+        (
+            "app/routes/admin/billing.tsx",
+            "export default function Billing() { return null; }\n",
+        ),
+        (
+            "app/routes/admin/orphan.tsx",
+            "export default function Orphan() { return null; }\n",
+        ),
+    ]);
+    assert_eq!(found, ["app/routes/admin/orphan.tsx"]);
+}
+
+#[test]
+fn react_router_flat_routes_are_the_entries_of_its_routes_directory() {
+    // `flatRoutes()` routes each file directly in its directory.
+    // Each folder there adds its `route` module, else its `index`.
+    // Other folder files, deeper files and ignored files are not.
+    let page = "export default function Page() { return null; }\n";
+    let found = unused_files(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        ("app/root.tsx", page),
+        (
+            "app/routes.ts",
+            "import { type RouteConfig } from \"@react-router/dev/routes\";\n\
+             import { flatRoutes } from \"@react-router/fs-routes\";\n\
+             export default flatRoutes() satisfies RouteConfig;\n",
+        ),
+        ("app/routes/_index.tsx", page),
+        ("app/routes/blog.$slug.tsx", page),
+        (
+            "app/routes/app.projects/route.tsx",
+            "import { Card } from \"./project-card\";\nexport default function Projects() { return Card; }\n",
+        ),
+        (
+            "app/routes/app.projects/project-card.tsx",
+            "export const Card = null;\n",
+        ),
+        ("app/routes/app.projects/stale.tsx", page),
+        ("app/routes/docs/index.tsx", page),
+        ("app/routes/docs/nested/page.tsx", page),
+    ]);
+    assert_eq!(
+        found,
+        [
+            "app/routes/app.projects/stale.tsx",
+            "app/routes/docs/nested/page.tsx"
+        ]
+    );
+
+    let found = unused_files(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        ("app/root.tsx", page),
+        (
+            "app/routes.ts",
+            "import { type RouteConfig, route } from \"@react-router/dev/routes\";\n\
+             import { flatRoutes } from \"@react-router/fs-routes\";\n\
+             export default [\n\
+             \x20 route(\"/hello\", \"./routes/hello.tsx\"),\n\
+             \x20 ...(await flatRoutes({ rootDirectory: \"fs-routes\", ignoredRouteFiles: [\"**/*.draft.tsx\"] })),\n\
+             ] satisfies RouteConfig;\n",
+        ),
+        ("app/routes/hello.tsx", page),
+        ("app/routes/other.tsx", page),
+        ("app/fs-routes/about.tsx", page),
+        ("app/fs-routes/about.draft.tsx", page),
+    ]);
+    assert_eq!(
+        found,
+        ["app/fs-routes/about.draft.tsx", "app/routes/other.tsx"]
+    );
+}
+
+#[test]
+fn react_router_flat_routes_with_a_glob_beyond_globset_names_no_route() {
+    // React Router reads `ignoredRouteFiles` with minimatch.
+    // globset does not read an extglob.
+    // So the routes are unknown.
+    // The files stay ordinary files.
+    let page = "export default function Page() { return null; }\n";
+    let found = unused_files(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        ("app/root.tsx", page),
+        (
+            "app/routes.ts",
+            "import { type RouteConfig } from \"@react-router/dev/routes\";\n\
+             import { flatRoutes } from \"@react-router/fs-routes\";\n\
+             export default flatRoutes({ ignoredRouteFiles: [\"**/*.@(draft|wip).tsx\"] }) satisfies RouteConfig;\n",
+        ),
+        ("app/routes/about.tsx", page),
+        ("app/routes/about.draft.tsx", page),
+    ]);
+    assert_eq!(
+        found,
+        ["app/routes/about.draft.tsx", "app/routes/about.tsx"]
+    );
+}
+
+#[test]
+fn react_router_flat_routes_with_options_beyond_literals_names_no_route() {
+    // A variable may skip files or move the directory.
+    // So the routes are unknown, as for an extglob.
+    let page = "export default function Page() { return null; }\n";
+    let calls = [
+        "const IGNORED = [\"**/*.draft.tsx\"];\nexport default flatRoutes({ ignoredRouteFiles: IGNORED });\n",
+        "const DRAFT = \"**/*.draft.tsx\";\nexport default flatRoutes({ ignoredRouteFiles: [DRAFT] });\n",
+        "const OPTIONS = { ignoredRouteFiles: [\"**/*.draft.tsx\"] };\nexport default flatRoutes(OPTIONS);\n",
+        "const OPTIONS = { ignoredRouteFiles: [\"**/*.draft.tsx\"] };\nexport default flatRoutes({ ...OPTIONS });\n",
+    ];
+    for call in calls {
+        let routes = format!("import {{ flatRoutes }} from \"@react-router/fs-routes\";\n{call}");
+        let found = unused_files(&[
+            ("package.json", REACT_ROUTER_PACKAGE),
+            ("app/root.tsx", page),
+            ("app/routes.ts", &routes),
+            ("app/routes/about.tsx", page),
+            ("app/routes/about.draft.tsx", page),
+        ]);
+        assert_eq!(
+            found,
+            ["app/routes/about.draft.tsx", "app/routes/about.tsx"],
+            "{call}"
+        );
+    }
+}
+
+#[test]
+fn react_router_route_module_exports_are_read_by_name() {
+    // React Router reads these route module exports by name.
+    // `Layout` is read in the root route only.
+    // `routes.ts` and `entry.server` have their own names.
+    // Elsewhere, such a name is ordinary.
+    let found = dead_exports(&[
+        ("package.json", REACT_ROUTER_PACKAGE),
+        (
+            "app/root.tsx",
+            "export const links = () => [];\n\
+             export function Layout() { return null; }\n\
+             export function ErrorBoundary() { return null; }\n\
+             export default function App() { return null; }\n",
+        ),
+        (
+            "app/entry.server.tsx",
+            "export const streamTimeout = 5000;\n\
+             export function handleError() { return null; }\n\
+             export default function handleRequest() { return null; }\n\
+             export const extra = 1;\n",
+        ),
+        (
+            "app/routes.ts",
+            "import { route } from \"@react-router/dev/routes\";\n\
+             export default [route(\"/demo\", \"routes/demo.tsx\")];\n",
+        ),
+        (
+            "app/routes/demo.tsx",
+            "import { used } from \"../lib/meta\";\n\
+             export async function clientLoader() { return used; }\n\
+             export const meta = () => [];\n\
+             export const handle = { crumb: \"demo\" };\n\
+             export default function Demo() { return null; }\n\
+             export function Layout() { return null; }\n\
+             export const helper = 1;\n",
+        ),
+        (
+            "app/lib/meta.ts",
+            "export const used = 1;\nexport const meta = 2;\n",
+        ),
+    ]);
+    assert_eq!(
+        found,
+        [
+            "app/entry.server.tsx extra",
+            "app/lib/meta.ts meta",
+            "app/routes/demo.tsx Layout",
+            "app/routes/demo.tsx helper"
+        ]
+    );
+}
+
 #[test]
 fn sql_truncate_in_rust_and_ts_literals_is_read_after_their_escapes() {
     // Once the literal is decoded, `\n` is a newline.

@@ -3297,6 +3297,10 @@ pub struct ProjectCtx {
     // answer is identical for every file under the same package.json.
     path_frameworks_cache: Mutex<FxHashMap<PathBuf, Vec<&'static FrameworkDef>>>,
 
+    // The React Router app of each package that detects React Router, keyed
+    // by its manifest directory. Read once: every file of the package asks.
+    react_router_apps: Mutex<FxHashMap<PathBuf, Arc<crate::frameworks::react_router::App>>>,
+
     // `lib.entryFile` declared in each `ng-package.json`, keyed by that file's
     // directory. ng-packagr Angular libraries declare their public-API entry
     // here, not in `package.json` `main`/`exports` (those are emitted to the
@@ -4094,6 +4098,31 @@ impl ProjectCtx {
         detected
     }
 
+    /// The React Router app owning `path`: the one of its nearest
+    /// `package.json`, when that package detects React Router.
+    pub fn react_router_app(
+        &self,
+        path: &Path,
+    ) -> Option<Arc<crate::frameworks::react_router::App>> {
+        if !self
+            .frameworks_for_path(path)
+            .iter()
+            .any(|fw| fw.name == "react-router")
+        {
+            return None;
+        }
+        let manifest_dir = self.nearest_package_json_dir(path)?;
+        if let Some(app) = self.react_router_apps.lock().unwrap().get(&manifest_dir) {
+            return Some(Arc::clone(app));
+        }
+        let app = Arc::new(crate::frameworks::react_router::App::read(&manifest_dir));
+        self.react_router_apps
+            .lock()
+            .unwrap()
+            .insert(manifest_dir, Arc::clone(&app));
+        Some(app)
+    }
+
     /// Magic export names recognized for `path`: the union of the root-detected
     /// frameworks' magic exports and those of the framework owning `path` via its
     /// nearest `package.json`. A magic export (Next.js `metadata`/`default`,
@@ -4107,6 +4136,7 @@ impl ProjectCtx {
             names.extend(fw.magic_exports.names.iter().map(String::as_str));
         }
         self.extend_route_magic_exports(path, &mut names);
+        self.extend_react_router_exports(path, &mut names);
         if self.is_vitest_global_setup_file(path) {
             names.extend(VITEST_GLOBAL_SETUP_EXPORTS.iter().copied());
         }
@@ -4324,6 +4354,31 @@ impl ProjectCtx {
                         .iter()
                         .map(String::as_str),
                 );
+            }
+        }
+    }
+
+    /// Add the exports React Router reads by name from `path` when its app
+    /// loads it as a route module, the root route, the route config or the
+    /// server entry. A same-named export in any other module stays flaggable.
+    fn extend_react_router_exports(&self, path: &Path, names: &mut FxHashSet<&str>) {
+        let Some(app) = self.react_router_app(path) else {
+            return;
+        };
+        let Some(react_router) = crate::frameworks::get_framework("react-router") else {
+            return;
+        };
+        let exports = &react_router.route_magic_exports;
+        let is = |file: &Option<PathBuf>| file.as_deref() == Some(path);
+        let read_by_name = [
+            (app.route_modules.contains(path), &exports.route_files),
+            (is(&app.root), &exports.root_route),
+            (is(&app.route_config), &exports.route_config),
+            (is(&app.server_entry), &exports.server_entry),
+        ];
+        for (applies, exports) in read_by_name {
+            if applies {
+                names.extend(exports.iter().map(String::as_str));
             }
         }
     }
