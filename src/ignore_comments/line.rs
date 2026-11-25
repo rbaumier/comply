@@ -23,7 +23,7 @@
 //! earlier line is invisible here. The shape such a line leaves behind is what
 //! `is_block_comment_padding` recognises.
 //! The caller may also mark the file's comment bytes.
-//! SQL does so. Its strings span lines; `$$` quotes are untracked here.
+//! Then a marker counts only in its language's comments.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::Language;
@@ -79,7 +79,9 @@ pub fn parse(
 /// A language with other comments adds its own opener.
 pub fn marker_comments(path: &Path) -> &'static [CommentSyntax] {
     match crate::files::language_of(path) {
-        Some(Language::Sql) => &[SLASHES, ("--", None)],
+        // `/* -- … */` is a block comment.
+        // It can aim at the next line.
+        Some(Language::Sql) => &[SLASHES, ("/* --", Some("*/")), ("--", None)],
         Some(Language::Yaml | Language::Toml | Language::Dockerfile | Language::Nginx) => {
             &[SLASHES, ("#", None)]
         }

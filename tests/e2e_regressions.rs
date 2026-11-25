@@ -275,6 +275,90 @@ fn dockerfile_comply_ignore_marker_is_a_hash_comment() {
 }
 
 #[test]
+fn a_comply_ignore_marker_counts_only_in_a_comment_of_its_language() {
+    // Each case comments the marker, then writes it as text.
+    // In text, it changes nothing the rule reports.
+    let compose = "services:\n  web:\n    image: nginx:1.25.3\n";
+    let package = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+    let ip = "const host = \"10.1.2.3\";\n";
+    let vue = |script: String| {
+        format!(
+            "<script setup lang=\"ts\">\n{script}</script>\n<template><p>{{{{ host }}}}</p></template>\n"
+        )
+    };
+    let cases = [
+        (
+            "ops/compose.yml",
+            "compose-no-privileged",
+            format!("{compose}    # @\n    privileged: true\n"),
+            format!("{compose}    command: |\n      # @\n      run\n    privileged: true\n"),
+        ),
+        (
+            "ops/compose.yml",
+            "compose-no-privileged",
+            format!("{compose}    # @\n    privileged: true\n"),
+            format!("{compose}    labels:\n      a# @\n    privileged: true\n"),
+        ),
+        (
+            "Cargo.toml",
+            "cargo-release-profile-lto",
+            format!("# @\n{package}"),
+            format!("{package}description = \"\"\"\n# @\n\"\"\"\n"),
+        ),
+        (
+            "src/lib.rs",
+            "no-timing-attack",
+            format!("// @\n{PLAIN_COMPARE}"),
+            format!("pub const DOC: &str = r#\"\n// @\n\"#;\n{PLAIN_COMPARE}"),
+        ),
+        (
+            "web/net.ts",
+            "no-hardcoded-ip",
+            format!("// @\n{ip}"),
+            format!("const doc = `\n// @\n`;\n{ip}"),
+        ),
+        (
+            "web/Net.vue",
+            "no-hardcoded-ip",
+            vue(format!("// @\n{ip}")),
+            vue(format!("const doc = `\n// @\n`;\n{ip}")),
+        ),
+        (
+            "app.css",
+            "css-no-empty-block",
+            "/* @ */\n.b {}\n".to_owned(),
+            ".a { content: \"x\\\n/* @ */\"; }\n.b {}\n".to_owned(),
+        ),
+        (
+            "Dockerfile",
+            "dockerfile-apk-no-cache",
+            "FROM alpine:3.20\n# @\nRUN apk add curl\n".to_owned(),
+            "FROM alpine:3.20\nCOPY <<EOF /etc/motd\n# @\nEOF\nRUN apk add curl\n".to_owned(),
+        ),
+        (
+            "nginx/site.conf",
+            "nginx-add-header-always",
+            "server {\n  # @\n  add_header X-Frame-Options DENY;\n}\n".to_owned(),
+            "server {\n  add_header X-Note \"a\n# @\";\n  add_header X-Frame-Options DENY;\n}\n"
+                .to_owned(),
+        ),
+    ];
+    for (file, rule, comment, text) in cases {
+        let marker = format!("comply-ignore-file: {rule} — kept on purpose");
+        let (comment, text) = (comment.replace('@', &marker), text.replace('@', &marker));
+        assert_eq!(
+            positions(rule, file, &comment),
+            Vec::<String>::new(),
+            "{file}:\n{comment}"
+        );
+        let reported = positions(rule, file, &text);
+        assert!(!reported.is_empty(), "{file}:\n{text}");
+        let plain = text.replace("comply-ignore", "comply-notice");
+        assert_eq!(reported, positions(rule, file, &plain), "{file}:\n{text}");
+    }
+}
+
+#[test]
 fn sql_rules_read_statements_not_comments() {
     // A statement in a comment is no statement.
     // A commented word does not change the statement beside it.
@@ -505,6 +589,28 @@ fn sql_truncate_after_a_marker_in_a_string_is_reported_where_it_runs() {
                      -- comply-ignore: sql-no-truncate-in-app — z\n\
                      '); TRUNCATE TABLE audit_log;\n";
     assert_eq!(truncate_positions("migrations/009.sql", migration), ["3:5"]);
+}
+
+#[test]
+fn sql_comply_ignore_marker_counts_in_a_routine_body_and_a_block_comment() {
+    // A `DO` block or a function body runs as plpgsql.
+    // There, `--` opens a comment.
+    // A lone block comment aims at the next line.
+    let honored = [
+        "DO $$ BEGIN\n  -- comply-ignore: sql-no-truncate-in-app — rebuilt\n  TRUNCATE users;\nEND $$;\n",
+        "CREATE FUNCTION wipe() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n  \
+         -- comply-ignore: sql-no-truncate-in-app — rebuilt\n  TRUNCATE users;\nEND;\n$$;\n",
+        "/* -- comply-ignore: sql-no-truncate-in-app — rebuilt */\nTRUNCATE TABLE users;\n",
+    ];
+    for migration in honored {
+        assert!(
+            truncate_positions("migrations/010.sql", migration).is_empty(),
+            "{migration}"
+        );
+    }
+    // `//` opens no SQL comment, so its marker is text.
+    let slashes = "// comply-ignore: sql-no-truncate-in-app — rebuilt\nTRUNCATE TABLE users;\n";
+    assert_eq!(truncate_positions("migrations/011.sql", slashes), ["2:1"]);
 }
 
 /// The three rules that read SQL in Rust string literals.

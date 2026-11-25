@@ -15,6 +15,7 @@
 //! suppresses nothing.
 
 mod eslint_config;
+mod language_comments;
 mod line;
 mod payload;
 
@@ -66,19 +67,14 @@ fn scan_directives(path: &Path, source: &str) -> ScannedDirectives {
     let mut marker_lines = FxHashSet::default();
     let mut last_line = 0;
     let comments = line::marker_comments(path);
-    // In SQL, every reading must see the directive's comment.
-    // A string can span lines.
-    // A `$$` string may be no function body.
-    let sql_comments =
-        (crate::files::language_of(path) == Some(crate::files::Language::Sql)).then(|| {
-            use crate::rules::sql_helpers::{DollarBody, sql_comment_bytes};
-            sql_comment_bytes(source, DollarBody::Text)
-        });
+    // A string or a block scalar can span lines.
+    // So the file's own grammar tells its comments apart.
+    let language_comments = language_comments::bytes(path, source);
     let mut line_start = 0usize;
     for (idx, raw_line) in source.lines().enumerate() {
         last_line = idx + 1;
         let in_comment = |at: usize| {
-            sql_comments
+            language_comments
                 .as_ref()
                 .is_none_or(|comment| comment.get(line_start.saturating_add(at)) == Some(&true))
         };

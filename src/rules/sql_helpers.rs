@@ -292,15 +292,16 @@ pub(crate) fn mask_sql_comments(source: &str) -> String {
 /// How PostgreSQL takes a `$$ … $$` body.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DollarBody {
-    /// A function body or a `DO` block, which runs.
+    /// Every body runs as code, like a `DO` block.
     Code,
-    /// Any other dollar string: its content is text.
-    Text,
+    /// Only a body right after `DO` or `AS` runs.
+    /// Any other dollar string's content is text.
+    Routine,
 }
 
 /// Marks the bytes of `source` all readings call comments.
 /// Readings: MySQL, and PostgreSQL with `standard_conforming_strings` on or off.
-/// With [`DollarBody::Text`], a dollar-quoted body holds no comment.
+/// With [`DollarBody::Routine`], a dollar string holds no comment.
 pub(crate) fn sql_comment_bytes(source: &str, dollar_body: DollarBody) -> Vec<bool> {
     let bytes = source.as_bytes();
     let readings = [Dialect::Postgres, Dialect::PostgresLegacy, Dialect::MySql]
@@ -355,7 +356,7 @@ impl<'a> SqlLexer<'a> {
                 (b'"', _) => self.quoted(i, !postgres, close),
                 (b'`', _) if !postgres => self.quoted(i, false, close),
                 (b'$', _) if postgres => match (dollar_tag(bytes, i), close) {
-                    (Some(tag), None) if self.dollar_body == DollarBody::Text => {
+                    (Some(tag), None) if !self.runs_body_at(i) => {
                         self.dollar_string(i.saturating_add(tag.len()), tag, None)
                     }
                     (Some(tag), None) => self.code(i.saturating_add(tag.len()), Some(tag)),
@@ -375,6 +376,26 @@ impl<'a> SqlLexer<'a> {
             };
         }
         i
+    }
+
+    /// Whether the dollar body opening at `dollar` runs.
+    /// A routine body follows `DO` or `AS`.
+    /// Blanks and comments may sit between.
+    fn runs_body_at(&self, dollar: usize) -> bool {
+        if self.dollar_body == DollarBody::Code {
+            return true;
+        }
+        let before = &self.bytes[..dollar];
+        let word_end = (0..dollar)
+            .rev()
+            .find(|&i| !before[i].is_ascii_whitespace() && !self.comment[i])
+            .map_or(0, |i| i.saturating_add(1));
+        let word_start = before[..word_end]
+            .iter()
+            .rposition(|byte| !is_ident_byte(*byte))
+            .map_or(0, |i| i.saturating_add(1));
+        let word = &before[word_start..word_end];
+        word.eq_ignore_ascii_case(b"do") || word.eq_ignore_ascii_case(b"as")
     }
 
     fn closes(&self, i: usize, close: Option<&[u8]>) -> bool {
@@ -824,7 +845,23 @@ mod tests {
                 .collect::<String>()
         };
         assert_eq!(comments(DollarBody::Code), "-- x -- y");
-        assert_eq!(comments(DollarBody::Text), "-- y");
+        assert_eq!(comments(DollarBody::Routine), "-- y");
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_a_routine_body_as_code() {
+        let comments = |sql: &str| {
+            let comment = sql_comment_bytes(sql, DollarBody::Routine);
+            sql.char_indices()
+                .filter(|&(i, _)| comment[i])
+                .map(|(_, c)| c)
+                .collect::<String>()
+        };
+        assert_eq!(comments("DO $$ -- x $$;"), "-- x ");
+        assert_eq!(comments("do /* y */ $b$ -- x $b$;"), "/* y */-- x ");
+        assert_eq!(comments("CREATE FUNCTION f() AS $$ -- x $$;"), "-- x ");
+        assert_eq!(comments("SELECT 'as' $$ -- x $$;"), "");
+        assert_eq!(comments("SELECT alias $$ -- x $$;"), "");
     }
 
     #[test]
