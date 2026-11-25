@@ -20,26 +20,39 @@
 //!   takes a capacity, so calls with arguments are left alone. Any other
 //!   `channel()` — `oneshot`, `broadcast`, `watch`, a third-party channel —
 //!   is not mpsc and is not flagged.
+//!
+//! An `as` rename stands for the path it renames.
+//! `use tokio::sync::mpsc::unbounded_channel as uc;` makes `uc()` that call.
+//! A glob or another module's rename is not followed.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
 use crate::rules::rust_helpers::is_outside_release;
+use rustc_hash::FxHashMap;
 
 const KINDS: &[&str] = &["call_expression"];
 
 #[derive(Debug)]
 pub struct Check;
 
+/// The path behind each `as` rename of a file.
+type Renames = FxHashMap<String, Vec<String>>;
+
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
         Some(KINDS)
+    }
+
+    fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
+        // Read on the first call.
+        Some(Box::new(None::<Renames>))
     }
 
     fn visit_node(
         &self,
         node: tree_sitter::Node,
         ctx: &CheckCtx,
-        _state: Option<&mut dyn std::any::Any>,
+        state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
@@ -55,13 +68,17 @@ impl AstCheck for Check {
         let Ok(text) = function.utf8_text(source_bytes) else {
             return;
         };
+        let renamed = state
+            .and_then(|state| state.downcast_mut::<Option<Renames>>())
+            .and_then(|renames| through_rename(text, node, ctx, renames));
+        let path = renamed.as_deref().unwrap_or(text);
         // Match on the last `::`-separated path segment so a bare predicate
         // method like `range.is_unbounded()` (a `field_expression` whose text
         // happens to end in `unbounded`) is not mistaken for a constructor.
-        let last_segment = text.rsplit("::").next().unwrap_or(text);
+        let last_segment = path.rsplit("::").next().unwrap_or(path);
         let is_unbounded = last_segment == "unbounded_channel"
-            || last_segment == "unbounded" && is_channel_unbounded_path(text)
-            || last_segment == "channel" && channel_is_std_mpsc(text, source_bytes);
+            || last_segment == "unbounded" && is_channel_unbounded_path(path)
+            || last_segment == "channel" && channel_is_std_mpsc(path, source_bytes);
         if !is_unbounded {
             return;
         }
@@ -107,6 +124,33 @@ impl AstCheck for Check {
             span: None,
         });
     }
+}
+
+/// `text` once an `as` rename resolves its first segment.
+/// `None` when no rename of the file binds that segment.
+fn through_rename(
+    text: &str,
+    node: tree_sitter::Node,
+    ctx: &CheckCtx,
+    renames: &mut Option<Renames>,
+) -> Option<String> {
+    let renames = renames.get_or_insert_with(|| {
+        // A file without ` as ` renames nothing: skip the walk.
+        if ctx.source.contains(" as ") {
+            crate::rules::rust_helpers::use_renames(node, ctx.source.as_bytes())
+        } else {
+            FxHashMap::default()
+        }
+    });
+    let (head, tail) = text
+        .split_once("::")
+        .map_or((text, None), |(head, tail)| (head, Some(tail)));
+    let mut path = renames.get(head)?.join("::");
+    if let Some(tail) = tail {
+        path.push_str("::");
+        path.push_str(tail);
+    }
+    Some(path)
 }
 
 /// True when a bare `unbounded()` constructor call belongs to a recognized

@@ -1125,6 +1125,42 @@ fn a_module_named_like_a_test_file_ships_unless_a_test_gate_declares_it() {
     assert!(rules_reporting(&files, "src/test_gated.rs", &rules).is_empty());
 }
 
+#[test]
+fn rust_unbounded_channel_reports_each_unbounded_constructor_and_no_bounded_one() {
+    // An `as` rename names the same constructor.
+    let body = |statement: &str| {
+        format!(
+            "pub fn run() {{\n    {statement}\n    for i in 0..3 {{\n        \
+             let _ = tx.send(i);\n    }}\n    drop(rx);\n}}\n"
+        )
+    };
+    let unbounded = [
+        "let (tx, rx) = std::sync::mpsc::channel::<u8>();",
+        "let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>();",
+        "let (tx, rx): (tokio::sync::mpsc::UnboundedSender<u8>, _) = \
+         tokio::sync::mpsc::unbounded_channel();",
+        "let (tx, rx) = crossbeam::channel::unbounded::<u8>();",
+        "let (tx, rx): (crossbeam::channel::Sender<u8>, _) = crossbeam::channel::unbounded();",
+        "let (tx, rx): (crossbeam_channel::Sender<u8>, _) = crossbeam_channel::unbounded();",
+        "use tokio::sync::mpsc::unbounded_channel as uc;\n    let (tx, rx) = uc::<u8>();",
+        "use crossbeam_channel::unbounded as ub;\n    let (tx, rx) = ub::<u8>();",
+        "use std::sync::mpsc::channel as chan;\n    let (tx, rx) = chan::<u8>();",
+        "use tokio::sync::mpsc as queue;\n    let (tx, rx) = queue::unbounded_channel::<u8>();",
+    ];
+    let bounded = [
+        "let (tx, rx) = std::sync::mpsc::sync_channel::<u8>(4);",
+        "let (tx, rx) = tokio::sync::mpsc::channel::<u8>(4);",
+        "let (tx, rx) = crossbeam::channel::bounded::<u8>(4);",
+        "use tokio::sync::mpsc::channel as uc;\n    let (tx, rx) = uc::<u8>(4);",
+    ];
+    let reported = |statement: &&str| {
+        !positions("rust-unbounded-channel", "src/queue.rs", &body(statement)).is_empty()
+    };
+    let missed: Vec<_> = unbounded.iter().filter(|s| !reported(s)).collect();
+    let flagged: Vec<_> = bounded.iter().filter(|s| reported(s)).collect();
+    assert_eq!((missed, flagged), (vec![], vec![]));
+}
+
 /// What comply reports for `rule` in a project of `files`.
 /// Each line leaves out the project root.
 fn findings(files: &[(&str, &str)], rule: &str) -> Vec<String> {

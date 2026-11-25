@@ -7,6 +7,7 @@
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
+use rustc_hash::FxHashMap;
 use tree_sitter::Node;
 
 use crate::project::{
@@ -1747,6 +1748,23 @@ fn resolve_path_through_use(path: Node, segments: &[String], source: &[u8]) -> V
     resolved.push(upstream.clone());
     resolved.extend_from_slice(tail);
     resolved
+}
+
+/// The path each `as` rename of the file stands for.
+/// `use a::b as c;` maps `c` to `a::b`.
+/// A plain import or a glob renames nothing.
+pub fn use_renames(node: Node, source: &[u8]) -> FxHashMap<String, Vec<String>> {
+    let mut leaves = Vec::new();
+    collect_use_leaves(root_node(node), source, &mut leaves);
+    let mut renames = FxHashMap::default();
+    for leaf in leaves {
+        if let Some(upstream) = leaf.source_name {
+            let mut path = leaf.module;
+            path.push(upstream);
+            renames.entry(leaf.local).or_insert(path);
+        }
+    }
+    renames
 }
 
 /// The leaves one `use_declaration` binds. The declaration's own
