@@ -350,18 +350,142 @@ fn a_comply_ignore_marker_counts_only_in_a_comment_of_its_language() {
         ),
     ];
     for (file, rule, comment, text) in cases {
-        let marker = format!("comply-ignore-file: {rule} — kept on purpose");
-        let (comment, text) = (comment.replace('@', &marker), text.replace('@', &marker));
-        assert_eq!(
-            positions(rule, file, &comment),
-            Vec::<String>::new(),
-            "{file}:\n{comment}"
-        );
-        let reported = positions(rule, file, &text);
-        assert!(!reported.is_empty(), "{file}:\n{text}");
-        let plain = text.replace("comply-ignore", "comply-notice");
-        assert_eq!(reported, positions(rule, file, &plain), "{file}:\n{text}");
+        assert_only_a_comment_silences(rule, file, &comment, &text);
     }
+}
+
+/// A marker in `comment` silences `rule`.
+/// One in `text` does not.
+/// `@` stands for the marker.
+fn assert_only_a_comment_silences(rule: &str, file: &str, comment: &str, text: &str) {
+    let marker = format!("comply-ignore-file: {rule} — kept on purpose");
+    let (comment, text) = (comment.replace('@', &marker), text.replace('@', &marker));
+    assert_eq!(
+        positions(rule, file, &comment),
+        Vec::<String>::new(),
+        "{file}:\n{comment}"
+    );
+    let reported = positions(rule, file, &text);
+    assert!(!reported.is_empty(), "{file}:\n{text}");
+    let plain = text.replace("comply-ignore", "comply-notice");
+    assert_eq!(reported, positions(rule, file, &plain), "{file}:\n{text}");
+}
+
+#[test]
+fn a_dockerfile_marker_after_an_instruction_is_text() {
+    for instruction in [
+        "ARG A=b # @",
+        "ENV NOTE x # @",
+        "ENV NOTE=x # @",
+        "EXPOSE 80 # @",
+        "FROM alpine:3.20 # @",
+        "LABEL a=b \\\n  note=x # @",
+        "LABEL note=x # @",
+        "USER app # @",
+        "WORKDIR /app # @",
+    ] {
+        assert_only_a_comment_silences(
+            "dockerfile-apk-no-cache",
+            "Dockerfile",
+            "FROM alpine:3.20\nRUN echo a && \\\n  # @\n  echo b\nRUN apk add curl\n",
+            &format!("FROM alpine:3.20\n{instruction}\nRUN apk add curl\n"),
+        );
+    }
+}
+
+#[test]
+fn a_css_marker_in_a_bare_url_is_text() {
+    for url in ["url(\n/* @ */\n)", "URL(data:image/svg+xml,/* @ */)"] {
+        assert_only_a_comment_silences(
+            "css-no-empty-block",
+            "app.css",
+            ".a { background: url(\"a.png\"); } /* @ */\n.b {}\n",
+            &format!(".a {{ background: {url}; }}\n.b {{}}\n"),
+        );
+    }
+}
+
+#[test]
+fn an_nginx_marker_in_a_word_or_a_lua_block_is_text() {
+    let header = "server {\n  add_header X-Frame-Options DENY;\n}\n";
+    let lua = "content_by_lua_block {\n  local s = [[ }\n  # @\n  ]] -- }\n}\n";
+    for text in ["return 301 ${host}# @\n;", "rewrite ^/(a{2}# @\n) /x;", lua] {
+        assert_only_a_comment_silences(
+            "nginx-add-header-always",
+            "nginx/site.conf",
+            &format!("server {{ content_by_lua_block {{ a = {{}} }} }} # @\n{header}"),
+            &format!("server {{ {text} }}\n{header}"),
+        );
+    }
+}
+
+#[test]
+fn a_vue_marker_outside_a_comment_is_text() {
+    let image = "<img src=\"x.png\">";
+    for text in [
+        "<p title=\"\n<!-- @ -->\n\">a</p>",
+        "<p>{{ `\n<!-- @ -->\n` }}</p>",
+        "<textarea>\n<!-- @ -->\n</textarea>",
+        "<p>\n// @\n</p>",
+    ] {
+        assert_only_a_comment_silences(
+            "a11y-alt-text",
+            "web/Net.vue",
+            &format!("<template>\n<p>a</p> <!-- @ -->\n{image}\n</template>\n"),
+            &format!("<template>\n{text}\n{image}\n</template>\n"),
+        );
+    }
+    for block in [
+        "<style>\n.a { content: \"\\\n<!-- @ -->\"; }\n</style>",
+        "<style>\n.a { content: \"\\\n// @\"; }\n</style>",
+        "<docs>\n// @\n<!-- @ -->\n</docs>",
+    ] {
+        assert_only_a_comment_silences(
+            "a11y-alt-text",
+            "web/Net.vue",
+            &format!("<template>{image}</template>\n<style>\n/* // @ */\n</style>\n"),
+            &format!("<template>{image}</template>\n{block}\n"),
+        );
+    }
+}
+
+#[test]
+fn a_sql_marker_in_copy_data_or_another_language_is_text() {
+    let truncate = "TRUNCATE TABLE sessions;\n";
+    for text in [
+        "COPY notes (body) FROM stdin;\n-- @\n\\.\n",
+        "CREATE FUNCTION f() RETURNS text LANGUAGE plperl AS $$\nmy $s = q{\n-- @\n};\n$$;\n",
+        "CREATE FUNCTION f() RETURNS text AS $$\nmy $s = q{\n-- @\n};\n$$ LANGUAGE plperl;\n",
+    ] {
+        assert_only_a_comment_silences(
+            "sql-no-truncate-in-app",
+            "migrations/012.sql",
+            &format!("COPY notes (body) FROM stdin;\nit's\n\\.\n-- @\n{truncate}"),
+            &format!("{text}{truncate}"),
+        );
+    }
+}
+
+#[test]
+fn a_javascript_marker_in_jsx_text_is_text() {
+    let ip = "export const host = \"10.1.2.3\";\n";
+    assert_only_a_comment_silences(
+        "no-hardcoded-ip",
+        "web/net.js",
+        &format!("export const Note = () => <p>it's</p>;\n// @\n{ip}"),
+        &format!("export const Note = () => <p>\n// @\n</p>;\n{ip}"),
+    );
+}
+
+#[test]
+fn an_eslint_config_counts_only_in_a_comment() {
+    let (rule, file) = ("no-hardcoded-ip", "web/net.ts");
+    let ip = "export const host = \"10.1.2.3\";\n";
+    let config = format!("/* eslint {rule}: 0 */");
+    let comment = format!("{config}\n{ip}");
+    let text = format!("export const doc = `\n{config}\n`;\n{ip}");
+    assert!(positions(rule, file, &comment).is_empty());
+    assert_eq!(positions(rule, file, &text), ["4:22"]);
 }
 
 #[test]

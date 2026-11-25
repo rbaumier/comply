@@ -295,7 +295,9 @@ pub(crate) enum DollarBody {
     /// Every body runs as code, like a `DO` block.
     Code,
     /// Only a body right after `DO` or `AS` runs.
+    /// It runs as SQL or PL/pgSQL.
     /// Any other dollar string's content is text.
+    /// So are the data lines of a `COPY … FROM stdin`.
     Routine,
 }
 
@@ -326,6 +328,8 @@ struct SqlLexer<'a> {
     dialect: Dialect,
     dollar_body: DollarBody,
     comment: Vec<bool>,
+    /// Where the current statement starts.
+    statement: usize,
 }
 
 impl<'a> SqlLexer<'a> {
@@ -335,6 +339,7 @@ impl<'a> SqlLexer<'a> {
             dialect,
             dollar_body,
             comment: vec![false; bytes.len()],
+            statement: 0,
         };
         lexer.code(0, None);
         lexer.comment
@@ -356,7 +361,7 @@ impl<'a> SqlLexer<'a> {
                 (b'"', _) => self.quoted(i, !postgres, close),
                 (b'`', _) if !postgres => self.quoted(i, false, close),
                 (b'$', _) if postgres => match (dollar_tag(bytes, i), close) {
-                    (Some(tag), None) if !self.runs_body_at(i) => {
+                    (Some(tag), None) if !self.runs_body_at(i, tag) => {
                         self.dollar_string(i.saturating_add(tag.len()), tag, None)
                     }
                     (Some(tag), None) => self.code(i.saturating_add(tag.len()), Some(tag)),
@@ -372,16 +377,55 @@ impl<'a> SqlLexer<'a> {
                 }
                 (b'#', _) if !postgres => self.line_comment(i, close),
                 (b'/', Some(b'*')) => self.block_comment(i, close),
+                (b';', _) if close.is_none() => {
+                    self.statement = self.after_copy_data(i);
+                    self.statement
+                }
                 _ => next,
             };
         }
         i
     }
 
-    /// Whether the dollar body opening at `dollar` runs.
+    /// Where the text after the `;` at `semicolon` starts.
+    /// The data of a `COPY … FROM stdin` ends at a `\.` line.
+    fn after_copy_data(&self, semicolon: usize) -> usize {
+        let next = semicolon.saturating_add(1);
+        if self.dollar_body == DollarBody::Code {
+            return next;
+        }
+        let statement = self.words(self.statement, semicolon);
+        let is_copy = statement.iter().any(|word| word == "copy")
+            && statement.windows(2).any(|pair| pair == ["from", "stdin"]);
+        if !is_copy {
+            return next;
+        }
+        let mut at = next;
+        for line in self.bytes[next..].split_inclusive(|byte| *byte == b'\n') {
+            at = at.saturating_add(line.len());
+            if line.trim_ascii_end() == b"\\." {
+                break;
+            }
+        }
+        at
+    }
+
+    /// The lowercase words from `start` to `end`, outside comments.
+    fn words(&self, start: usize, end: usize) -> Vec<String> {
+        let code: Vec<u8> = (start..end)
+            .map(|i| if self.comment[i] { b' ' } else { self.bytes[i] })
+            .collect();
+        code.split(|byte| !is_ident_byte(*byte))
+            .filter(|word| !word.is_empty())
+            .map(|word| String::from_utf8_lossy(word).to_lowercase())
+            .collect()
+    }
+
+    /// Whether the body opening at `dollar` runs as SQL.
+    /// PL/pgSQL counts as SQL.
     /// A routine body follows `DO` or `AS`.
     /// Blanks and comments may sit between.
-    fn runs_body_at(&self, dollar: usize) -> bool {
+    fn runs_body_at(&self, dollar: usize, tag: &[u8]) -> bool {
         if self.dollar_body == DollarBody::Code {
             return true;
         }
@@ -395,7 +439,37 @@ impl<'a> SqlLexer<'a> {
             .rposition(|byte| !is_ident_byte(*byte))
             .map_or(0, |i| i.saturating_add(1));
         let word = &before[word_start..word_end];
-        word.eq_ignore_ascii_case(b"do") || word.eq_ignore_ascii_case(b"as")
+        let is_do = word.eq_ignore_ascii_case(b"do");
+        (is_do || word.eq_ignore_ascii_case(b"as"))
+            && self.is_sql_body(dollar, tag).unwrap_or(is_do)
+    }
+
+    /// Whether the body opening at `dollar` is SQL or PL/pgSQL.
+    /// `None` when its statement names no language.
+    /// An unclear end of statement is another language.
+    fn is_sql_body(&self, dollar: usize, tag: &[u8]) -> Option<bool> {
+        let body = dollar.saturating_add(tag.len());
+        let end = self.bytes[body..]
+            .windows(tag.len())
+            .position(|window| window == tag)
+            .map(|len| body.saturating_add(len).saturating_add(tag.len()));
+        let Some(end) = end else {
+            return Some(false);
+        };
+        let tail = self.bytes[end..].split(|byte| *byte == b';').next();
+        let tail = tail.unwrap_or_default();
+        let has_comment = tail.windows(2).any(|pair| pair == b"--" || pair == b"/*");
+        let quotes = tail.iter().filter(|byte| **byte == b'\'').count();
+        if has_comment || quotes % 2 == 1 {
+            return Some(false);
+        }
+        let language = |words: Vec<String>| {
+            let mut named = words.windows(2).filter(|pair| pair[0] == "language");
+            named.next_back().map(|pair| pair[1].clone())
+        };
+        language(self.words(end, end.saturating_add(tail.len())))
+            .or_else(|| language(self.words(self.statement, dollar)))
+            .map(|language| language == "sql" || language == "plpgsql")
     }
 
     fn closes(&self, i: usize, close: Option<&[u8]>) -> bool {
@@ -859,9 +933,44 @@ mod tests {
         };
         assert_eq!(comments("DO $$ -- x $$;"), "-- x ");
         assert_eq!(comments("do /* y */ $b$ -- x $b$;"), "/* y */-- x ");
-        assert_eq!(comments("CREATE FUNCTION f() AS $$ -- x $$;"), "-- x ");
+        let function = "CREATE FUNCTION f(language text) RETURNS void";
+        for (before, after) in [
+            ("LANGUAGE plpgsql", ""),
+            ("", "LANGUAGE 'sql' SET search_path = ''"),
+            ("LANGUAGE /* y */ SQL", "STABLE"),
+        ] {
+            let sql = format!("{function} {before} AS $$ -- x $$ {after};");
+            assert!(comments(&sql).ends_with("-- x "), "{sql}");
+        }
         assert_eq!(comments("SELECT 'as' $$ -- x $$;"), "");
         assert_eq!(comments("SELECT alias $$ -- x $$;"), "");
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_another_language_as_text() {
+        let function = "CREATE FUNCTION f() RETURNS text";
+        for sql in [
+            format!("{function} LANGUAGE plperl AS $$ -- x $$;"),
+            format!("{function} AS $$ -- x $$ LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$ SET a = ';' LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$ /* ; */ LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$;"),
+            "SELECT 1; DO $$ -- x $$ LANGUAGE plperl;".to_owned(),
+        ] {
+            let comment = sql_comment_bytes(&sql, DollarBody::Routine);
+            let at = sql.find("-- x").expect("the body");
+            assert!(!comment[at], "{sql}");
+        }
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_copy_data_as_text() {
+        let sql = "COPY t (a) FROM stdin;\n-- it's data\n\\.\n-- real\n";
+        let comment = sql_comment_bytes(sql, DollarBody::Routine);
+        assert!(!comment[sql.find("-- it's").expect("the data")]);
+        assert!(comment[sql.find("-- real").expect("the comment")]);
+        let masked = mask_sql_comments(sql);
+        assert!(!masked.contains("it's"), "a rule still skips such a line");
     }
 
     #[test]
