@@ -112,7 +112,7 @@ pub fn lint_files(
         let mut output = run(Pass::Lint)?;
         ensure_config_accepted(&clippy_conf, &output.stdout)?;
         ensure_compiled(&root, &output)?;
-        if !output.status.success() {
+        if denied_lints(&output.stdout).next().is_some() {
             ensure_packages_linted(&root, &files_in_ws, &file_filter, &output.stdout)?;
             ensure_compiled(&root, &run(Pass::Check)?)?;
             output = run(Pass::Capped)?;
@@ -279,6 +279,8 @@ fn invoke_clippy(
         "--keep-going",
         "--message-format=json",
         "--quiet",
+        // `is_unused_dependency_denied` reads cargo's errors as plain text.
+        "--color=never",
         // `build.warnings` would hide the warnings, or fail on them.
         "--config",
         "build.warnings=\"warn\"",
@@ -355,12 +357,14 @@ const QUOTED_BUILD_ERRORS: usize = 5;
 /// rustc's own errors carry no `clippy::` code, so `parse_clippy_jsonl`
 /// drops them. A workspace that fails to compile therefore yielded zero
 /// diagnostics and comply printed "all clear" on code clippy never saw.
-/// Only a denied clippy lint explains a failure without a build error.
+/// Only a denied lint explains a failure without a build error.
 /// Any other is refused with cargo's stderr.
 /// Examples: a bad manifest, a build script that panics, a killed rustc.
 fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()> {
     let errors = build_errors(&output.stdout);
-    let is_explained = output.status.success() || denied_lints(&output.stdout).next().is_some();
+    let is_explained = output.status.success()
+        || denied_lints(&output.stdout).next().is_some()
+        || is_unused_dependency_denied(output.status.code(), &output.stderr);
     if errors.is_empty() && is_explained {
         return Ok(());
     }
@@ -380,6 +384,27 @@ fn ensure_compiled(workspace: &Path, output: &std::process::Output) -> Result<()
         ),
     }
     .into())
+}
+
+/// Cargo's exit code for a build that failed.
+const CARGO_FAILED: i32 = 101;
+
+/// Whether cargo's unused-dependency lint alone failed the run.
+/// Cargo judges a package once it is built.
+/// Any other failure prints an `error` line of its own.
+fn is_unused_dependency_denied(code: Option<i32>, stderr: &[u8]) -> bool {
+    const FINDING: &str = "error: unused dependency `";
+    const TALLY: &str = "error: could not finalize `";
+    let stderr = String::from_utf8_lossy(stderr);
+    let errors: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("error"))
+        .collect();
+    code == Some(CARGO_FAILED)
+        && errors.iter().any(|line| line.starts_with(FINDING))
+        && errors
+            .iter()
+            .all(|line| line.starts_with(FINDING) || line.starts_with(TALLY))
 }
 
 /// Refuse a run whose denied lint hid a package of `files`.
@@ -628,6 +653,32 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_denied_unused_dependency_explains_a_cargo_failure() {
+        let lint = "error: unused dependency `idle`\n  --> Cargo.toml:9:1\n   |\n   \
+                    = note: `cargo::unused_dependencies` is set to `deny` in `[lints]`\n\
+                    error: could not finalize `app` (manifest) due to 1 previous error\n";
+        assert!(is_unused_dependency_denied(Some(101), lint.as_bytes()));
+        // A killed cargo judged nothing for sure.
+        assert!(!is_unused_dependency_denied(None, lint.as_bytes()));
+        for other in [
+            "error: could not compile `b` (lib)\n",
+            "error: failed to run custom build command for `b v0.1.0`\n",
+            "error[E0583]: file not found for module `gone`\n",
+        ] {
+            let stderr = format!("{lint}{other}");
+            assert!(
+                !is_unused_dependency_denied(Some(101), stderr.as_bytes()),
+                "{other}"
+            );
+        }
+        assert!(!is_unused_dependency_denied(Some(101), b""));
+        assert!(!is_unused_dependency_denied(
+            Some(101),
+            b"error: could not finalize `app` (manifest) due to 1 previous error\n"
+        ));
+    }
 
     #[test]
     fn build_errors_keeps_rustc_errors_and_leaves_denied_clippy_lints() {

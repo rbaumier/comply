@@ -3041,6 +3041,61 @@ fn rustc_lint_denied_behind_a_denied_clippy_lint_is_an_error() {
     }
 }
 
+/// `fixture` denies its unused dependency `idle`.
+/// `members` joins `idle` in the workspace.
+fn idle_dependency_manifest(members: &str) -> String {
+    format!(
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lints.cargo]\nunused_dependencies = \"deny\"\n\n\
+         [dependencies]\nidle = {{ path = \"idle\" }}\n\n\
+         [workspace]\nmembers = [\"idle\"{members}]\n"
+    )
+}
+
+const IDLE: [(&str, &str); 2] = [
+    (
+        "idle/Cargo.toml",
+        "[package]\nname = \"idle\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ),
+    ("idle/src/lib.rs", "//! Unused.\n"),
+];
+
+// From 1.100, cargo fails a run whose crates all built.
+#[test]
+fn denied_cargo_lint_does_not_hide_the_findings() {
+    let manifest = idle_dependency_manifest("");
+    for attribute in ["", "#![deny(clippy::len_zero)]\n"] {
+        let source = format!("{attribute}{LEN_ZERO}");
+        let mut files = vec![("Cargo.toml", manifest.as_str()), ("src/lib.rs", &source)];
+        files.extend(IDLE);
+        let (code, findings, stderr) = clippy_findings(&files);
+        assert_eq!(code, Some(1), "{attribute}: {stderr}");
+        assert_eq!(findings.len(), 1, "{attribute}: {findings:?}");
+    }
+}
+
+#[test]
+fn denied_cargo_lint_excuses_no_other_failure() {
+    let manifest = idle_dependency_manifest(", \"dies\"");
+    let mut files = vec![
+        ("Cargo.toml", manifest.as_str()),
+        ("src/lib.rs", LEN_ZERO),
+        (
+            "dies/Cargo.toml",
+            "[package]\nname = \"dies\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("dies/src/lib.rs", "//! Never built.\n"),
+        (
+            "dies/build.rs",
+            "fn main() {\n    std::process::abort()\n}\n",
+        ),
+    ];
+    files.extend(IDLE);
+    let (code, _, stderr) = clippy_findings(&files);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("custom build command"), "{stderr}");
+}
+
 // A cargo config may deny warnings, or hide them.
 #[test]
 fn cargo_build_warnings_setting_does_not_change_the_findings() {
