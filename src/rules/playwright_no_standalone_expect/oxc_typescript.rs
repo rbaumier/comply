@@ -34,8 +34,8 @@ fn is_expect_call(callee: &Expression) -> bool {
     }
 }
 
-/// Returns true if the function node at `node_id` is declared at module (program) level.
-/// `ancestor_kinds` starts from the direct parent (does not include the node itself).
+/// Whether the function at `node_id` is declared at module level.
+/// `ancestor_kinds` starts from the direct parent, not the node.
 fn is_module_level_function(
     node_id: oxc_semantic::NodeId,
     semantic: &oxc_semantic::Semantic,
@@ -50,7 +50,8 @@ fn is_module_level_function(
     false
 }
 
-/// Walk up semantic parent nodes to check if this node is inside a test/hook callback.
+/// Whether `node` sits inside a test or hook callback.
+/// Walks up its semantic parents.
 fn is_inside_test_or_hook<'a>(
     node: &oxc_semantic::AstNode<'a>,
     semantic: &'a oxc_semantic::Semantic<'a>,
@@ -62,7 +63,7 @@ fn is_inside_test_or_hook<'a>(
             break;
         }
         let parent = semantic.nodes().get_node(parent_id);
-        // Check if parent is a function/arrow that is an argument to test/it/hook.
+        // Is the parent a test or hook callback?
         match parent.kind() {
             AstKind::ArrowFunctionExpression(_) | AstKind::Function(_) => {
                 // Check if grandparent is a CallExpression argument list.
@@ -87,8 +88,9 @@ fn is_inside_test_or_hook<'a>(
                             }
                     }
                 }
-                // A module-level function kept for later (declaration, constant,
-                // table row) is a helper; one passed to a call runs now.
+                // A module-level function is a helper when it is kept.
+                // A declaration, a constant and a table row keep one.
+                // A call given one runs it now.
                 if !matches!(
                     semantic.nodes().ancestor_kinds(parent_id).next(),
                     Some(AstKind::CallExpression(_))
