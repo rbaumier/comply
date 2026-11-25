@@ -2655,30 +2655,42 @@ fn clippy_toml_beside_dot_clippy_toml_is_an_error_naming_both() {
 #[cfg(unix)]
 #[test]
 fn cargo_shear_that_checks_nothing_is_an_error() {
+    shear_run("echo 'Error: Metadata error: `cargo metadata` exited with an error:'\nexit 2\n")
+        .code(2)
+        .stderr(predicate::str::contains("cargo shear could not check"))
+        .stderr(predicate::str::contains("It exited with 2"))
+        .stderr(predicate::str::contains("Metadata error"));
+}
+
+// Exit 1 announces a finding.
+#[cfg(unix)]
+#[test]
+fn cargo_shear_that_exits_1_without_a_finding_is_an_error() {
+    shear_run("echo '{\"findings\":[]}'\necho 'out of memory' >&2\nexit 1\n")
+        .code(2)
+        .stderr(predicate::str::contains("cargo shear could not check"))
+        .stderr(predicate::str::contains("It exited with 1"))
+        .stderr(predicate::str::contains("out of memory"));
+}
+
+/// Runs comply where `cargo shear` is the shell lines `shear`.
+#[cfg(unix)]
+fn shear_run(shear: &str) -> assert_cmd::assert::Assert {
     use std::os::unix::fs::PermissionsExt;
     let dir = rust_crate(&[("src/lib.rs", "pub fn f() {}\n")]);
     let bin = TempDir::new().unwrap();
-    let shear = bin.path().join("cargo-shear");
-    fs::write(
-        &shear,
-        "#!/bin/sh\ncase \"$*\" in *--version*) echo 'cargo-shear 1.14.0'; exit 0;; esac\n\
-         echo 'Error: Metadata error: `cargo metadata` exited with an error:'\nexit 2\n",
-    )
-    .unwrap();
-    fs::set_permissions(&shear, fs::Permissions::from_mode(0o755)).unwrap();
+    let script = bin.path().join("cargo-shear");
+    let version = "case \"$*\" in *--version*) echo 'cargo-shear 1.14.0'; exit 0;; esac";
+    fs::write(&script, format!("#!/bin/sh\n{version}\n{shear}")).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs = vec![bin.path().to_path_buf()];
     dirs.extend(std::env::split_paths(&path));
-
     common::comply()
         .current_dir(dir.path())
         .env("PATH", std::env::join_paths(dirs).unwrap())
         .arg(".")
         .assert()
-        .code(2)
-        .stderr(predicate::str::contains("cargo shear could not check"))
-        .stderr(predicate::str::contains("It exited with 2"))
-        .stderr(predicate::str::contains("Metadata error"));
 }
 
 // Plain clippy reads a member's own clippy.toml for that member.

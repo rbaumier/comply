@@ -106,9 +106,9 @@ enum ShearFailure {
 }
 
 /// The report of `cargo shear --format=json`.
-/// Exit 0 means no finding, exit 1 some.
-/// Any other code, or no report, fails.
-/// Read as clean, it would hide unused dependencies.
+/// Exit 0 means no error, exit 1 some.
+/// Any other code fails, as does exit 1 without a finding.
+/// Read as clean, either would hide unused dependencies.
 fn read_report(
     code: Option<i32>,
     stdout: &[u8],
@@ -128,10 +128,18 @@ fn read_report(
             output: excerpt(),
         });
     }
-    serde_json::from_slice(stdout).map_err(|source| ShearFailure::Unreadable {
-        source,
-        output: excerpt(),
-    })
+    let report: ShearReport =
+        serde_json::from_slice(stdout).map_err(|source| ShearFailure::Unreadable {
+            source,
+            output: excerpt(),
+        })?;
+    if code == Some(1) && report.findings.is_empty() {
+        return Err(ShearFailure::Exit {
+            code,
+            output: excerpt(),
+        });
+    }
+    Ok(report)
 }
 
 /// Check whether the dep named in a shear message is declared as
@@ -297,6 +305,16 @@ mod tests {
             detail.contains("no matching package named `nope`"),
             "{detail}"
         );
+    }
+
+    #[test]
+    fn refuses_exit_code_1_without_a_finding() {
+        let stderr = b"error: out of memory\n";
+        let detail = read_report(Some(1), br#"{"findings":[]}"#, stderr)
+            .unwrap_err()
+            .to_string();
+        assert!(detail.starts_with("It exited with 1:"), "{detail}");
+        assert!(detail.contains("out of memory"), "{detail}");
     }
 
     #[test]
