@@ -296,8 +296,8 @@ pub(crate) enum DollarBody {
     Code,
     /// Only a body right after `DO` or `AS` runs.
     /// It runs as SQL or PL/pgSQL.
-    /// Any other dollar string's content is text.
-    /// So are the data lines of a `COPY … FROM stdin`.
+    /// Other dollar strings are text.
+    /// So are `COPY … FROM stdin` data lines.
     Routine,
 }
 
