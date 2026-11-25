@@ -14,8 +14,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["deployment", "axum"],
 
-    skip_in_test_dir: true,
-    skip_in_relaxed_dir: true,
+    // A module named after tests or examples still ships.
+    // The backend reads Cargo's gates and targets instead.
+    skip_in_test_dir: false,
+    skip_in_relaxed_dir: false,
 };
 
 pub fn register() -> RuleDef {

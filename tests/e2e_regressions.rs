@@ -220,9 +220,9 @@ fn sql_migration_rules_skip_test_dirs_and_host_code() {
     );
 }
 
-/// `line:column` of each `sql-no-truncate-in-app` finding.
-/// Comply runs on `source`, alone at `file`.
-fn truncate_positions(file: &str, source: &str) -> Vec<String> {
+/// `line:column` of each `rule` finding of comply on `source`.
+/// `source` is written at `file` in an empty project.
+fn positions(rule: &str, file: &str, source: &str) -> Vec<String> {
     let dir = TempDir::new().expect("failed to create temp dir");
     let path = dir.path().join(file);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -230,11 +230,86 @@ fn truncate_positions(file: &str, source: &str) -> Vec<String> {
     let output = common::comply().arg(dir.path()).output().unwrap();
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|line| line.contains("[sql-no-truncate-in-app]"))
+        .filter(|line| line.contains(&format!("[{rule}]")))
         .filter_map(|line| line.split(&format!("{file}:")).nth(1))
         .filter_map(|rest| rest.split(": ").next())
         .map(str::to_owned)
         .collect()
+}
+
+fn truncate_positions(file: &str, source: &str) -> Vec<String> {
+    positions("sql-no-truncate-in-app", file, source)
+}
+
+#[test]
+fn sql_comply_ignore_markers_are_sql_comments() {
+    let migration = "-- comply-ignore-file: sql-create-index-concurrently — the table is empty at deploy\n\
+                     CREATE INDEX idx_a ON t(a);\n\
+                     -- comply-ignore: sql-no-truncate-in-app — resets the fixture table\n\
+                     TRUNCATE TABLE fixtures;\n\
+                     TRUNCATE TABLE sessions; -- comply-ignore: sql-no-truncate-in-app\n";
+    let file = "migrations/005.sql";
+
+    assert!(positions("sql-create-index-concurrently", file, migration).is_empty());
+    assert!(truncate_positions(file, migration).is_empty());
+    assert_eq!(
+        positions("comply-ignore-missing-justification", file, migration),
+        ["5:26"]
+    );
+}
+
+#[test]
+fn dockerfile_comply_ignore_marker_is_a_hash_comment() {
+    let dockerfile = "FROM alpine:3.20\n\
+                      # comply-ignore: dockerfile-absolute-workdir — the base image sets an absolute WORKDIR\n\
+                      WORKDIR app\n\
+                      WORKDIR src\n";
+
+    let lines: Vec<String> = positions("dockerfile-absolute-workdir", "Dockerfile", dockerfile)
+        .iter()
+        .filter_map(|position| position.split(':').next())
+        .map(str::to_owned)
+        .collect();
+
+    assert_eq!(lines, ["4"]);
+}
+
+#[test]
+fn sql_rules_read_statements_not_comments() {
+    // A statement in a comment is no statement.
+    // A commented word does not change the statement beside it.
+    // The rules that ask for a comment still read it.
+    let migration = "-- CREATE INDEX idx_old ON users(email);\n\
+                     /* DROP TABLE legacy;\n\
+                     \x20  ALTER TABLE users DROP COLUMN nickname; */\n\
+                     -- Lookups by email from the sign-in form.\n\
+                     CREATE INDEX idx_email ON users(email); -- CONCURRENTLY next time\n\
+                     CREATE TABLE notes (\n\
+                     \x20 id BIGINT PRIMARY KEY,\n\
+                     \x20 /* archived_at TIMESTAMP, */\n\
+                     \x20 title TEXT NOT NULL\n\
+                     );\n";
+    let rules = [
+        "sql-create-index-concurrently",
+        "sql-drop-table-no-cascade-warning",
+        "sql-no-drop-column-without-expand",
+        "sql-index-needs-rationale-comment",
+        "sql-nullable-requires-comment",
+    ];
+
+    let found: Vec<(&str, Vec<String>)> = rules
+        .into_iter()
+        .map(|rule| (rule, positions(rule, "migrations/004.sql", migration)))
+        .collect();
+
+    let expected: Vec<(&str, Vec<String>)> = rules
+        .into_iter()
+        .map(|rule| match rule {
+            "sql-create-index-concurrently" => (rule, vec!["5:1".to_owned()]),
+            _ => (rule, Vec::new()),
+        })
+        .collect();
+    assert_eq!(found, expected);
 }
 
 #[test]
@@ -372,6 +447,418 @@ fn sql_truncate_followed_by_on_or_a_comma_or_a_parenthesis_is_no_statement() {
         truncate_positions("migrations/003.sql", migration),
         ["2:1", "4:1", "5:66"]
     );
+}
+
+#[test]
+fn sql_comply_ignore_marker_in_a_dollar_string_is_text() {
+    // To PostgreSQL, `$$ … $$` is a string.
+    // The marker in it is text.
+    let truncate = "SELECT $$ -- comply-ignore: sql-no-truncate-in-app — not a comment $$; \
+                    TRUNCATE TABLE audit_log;\n";
+    assert_eq!(truncate_positions("migrations/006.sql", truncate), ["1:72"]);
+
+    let drop = "SELECT $$ -- comply-ignore: sql-no-drop-column-without-expand — z $$; \
+                ALTER TABLE accounts DROP COLUMN legacy_flag;\n";
+    assert_eq!(
+        positions(
+            "sql-no-drop-column-without-expand",
+            "migrations/007.sql",
+            drop
+        ),
+        ["1:1"]
+    );
+}
+
+#[test]
+fn sql_finding_after_a_comment_with_a_multibyte_character_keeps_its_column() {
+    // The mask blanks `é` to two spaces.
+    // The column is counted in the file.
+    let migration = "/* purge é */ TRUNCATE TABLE sessions;\n";
+    assert_eq!(
+        truncate_positions("migrations/014.sql", migration),
+        ["1:15"]
+    );
+}
+
+#[test]
+fn sql_comply_ignore_marker_in_a_string_over_lines_is_text() {
+    // The string opened on line 1 closes on line 3.
+    // The rule reports a line, at column 1.
+    let migration = "INSERT INTO notes(body) VALUES ('a\n\
+                     -- comply-ignore: sql-create-index-concurrently — z\n\
+                     '); CREATE INDEX idx_email ON users(email);\n";
+    assert_eq!(
+        positions(
+            "sql-create-index-concurrently",
+            "migrations/008.sql",
+            migration
+        ),
+        ["3:1"]
+    );
+}
+
+#[test]
+fn sql_truncate_after_a_marker_in_a_string_is_reported_where_it_runs() {
+    // The rule id in the string names `truncate`.
+    // It runs nothing.
+    let migration = "INSERT INTO notes(body) VALUES ('a\n\
+                     -- comply-ignore: sql-no-truncate-in-app — z\n\
+                     '); TRUNCATE TABLE audit_log;\n";
+    assert_eq!(truncate_positions("migrations/009.sql", migration), ["3:5"]);
+}
+
+/// The three rules that read SQL in Rust string literals.
+const SQL_RUST_RULES: [&str; 3] = [
+    "sql-no-drop-column-without-expand",
+    "sql-index-needs-rationale-comment",
+    "sql-no-truncate-in-app",
+];
+
+/// Sorted `file:line:column` of each `rule` finding in `files`.
+fn located(files: &[(&str, &str)], rule: &str) -> Vec<String> {
+    let mut found: Vec<String> = findings(files, rule)
+        .iter()
+        .filter_map(|line| line.split(": ").next())
+        .map(str::to_owned)
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn sql_rules_report_rust_code_that_ships_whatever_its_name() {
+    // A migration or a module named after tests ships.
+    // `cfg_attr(test, …)` applies an attribute: the item ships too.
+    let migration = "migration/src/m20250101_000001_drop_test_mode.rs";
+    let files = [
+        (
+            migration,
+            "pub const UP: &str = \"ALTER TABLE accounts DROP COLUMN test_mode;\";\n\
+             pub const IDX: &str = \"CREATE INDEX idx_accounts_email ON accounts(email);\";\n",
+        ),
+        (
+            "src/ab_test/reset.rs",
+            "pub fn reset() -> &'static str {\n    \"TRUNCATE TABLE experiments;\"\n}\n",
+        ),
+        (
+            "src/db.rs",
+            "#[cfg_attr(test, allow(dead_code))]\n\
+             pub fn purge_sessions() -> &'static str {\n    \"TRUNCATE TABLE sessions;\"\n}\n",
+        ),
+    ];
+
+    let found = SQL_RUST_RULES.map(|rule| located(&files, rule));
+    assert_eq!(
+        found,
+        [
+            vec![format!("{migration}:1:22")],
+            vec![format!("{migration}:2:24")],
+            vec!["src/ab_test/reset.rs:2:5".into(), "src/db.rs:3:5".into()],
+        ]
+    );
+}
+
+#[test]
+fn sql_rules_report_a_rust_module_named_like_a_test_file() {
+    // Cargo builds `src/speed_test.rs` as a module.
+    // It is no test target.
+    let files = [(
+        "src/speed_test.rs",
+        "pub const RESET: &str = \"TRUNCATE TABLE samples;\";\n\
+         pub const UP: &str = \"ALTER TABLE samples DROP COLUMN legacy;\";\n\
+         pub const IDX: &str = \"CREATE INDEX idx_samples_at ON samples(at);\";\n",
+    )];
+    let found = SQL_RUST_RULES.map(|rule| located(&files, rule));
+    assert_eq!(
+        found,
+        [
+            ["src/speed_test.rs:2:22"],
+            ["src/speed_test.rs:3:24"],
+            ["src/speed_test.rs:1:25"],
+        ]
+    );
+}
+
+/// The `sql-no-truncate-in-app` findings with `gate` on the item.
+/// Then with `gate` on the `mod` declaration of its file.
+fn truncate_findings_under(gate: &str) -> [Vec<String>; 2] {
+    let body = "pub fn reset() -> &'static str {\n    \"TRUNCATE TABLE sessions;\"\n}\n";
+    let gated_item = format!("{gate}\n{body}");
+    let gated_module = format!("{gate}\nmod db;\n");
+    [
+        located(&[("src/db.rs", &gated_item)], "sql-no-truncate-in-app"),
+        located(
+            &[("src/lib.rs", &gated_module), ("src/db.rs", body)],
+            "sql-no-truncate-in-app",
+        ),
+    ]
+}
+
+#[test]
+fn sql_rules_exempt_rust_code_under_cfg_test() {
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        truncate_findings_under("#[cfg(test)]"),
+        [none.clone(), none]
+    );
+}
+
+#[test]
+fn sql_rules_exempt_rust_code_under_cfg_all_test() {
+    // `all` needs each option, so `test` too.
+    let none: Vec<String> = Vec::new();
+    assert_eq!(
+        truncate_findings_under("#[cfg(all(test, unix))]"),
+        [none.clone(), none]
+    );
+}
+
+#[test]
+fn sql_rules_report_rust_code_under_cfg_any_test() {
+    // `any` builds the item with the feature alone, outside tests.
+    assert_eq!(
+        truncate_findings_under("#[cfg(any(test, feature = \"seed\"))]"),
+        [["src/db.rs:3:5"], ["src/db.rs:2:5"]]
+    );
+}
+
+#[test]
+fn sql_rules_report_rust_code_under_cfg_not_test() {
+    assert_eq!(
+        truncate_findings_under("#[cfg(not(test))]"),
+        [["src/db.rs:3:5"], ["src/db.rs:2:5"]]
+    );
+}
+
+/// The sorted files with a `rule` finding among `files`.
+fn files_reported(files: &[(&str, &str)], rule: &str) -> Vec<String> {
+    let mut found: Vec<String> = located(files, rule)
+        .iter()
+        .filter_map(|place| place.split(':').next())
+        .map(str::to_owned)
+        .collect();
+    found.dedup();
+    found
+}
+
+const CONCAT_SQL: &str = "pub fn load(id: u64) -> String {\n    format!(\"SELECT name FROM users WHERE id = {}\", id)\n}\n";
+const PLAIN_COMPARE: &str =
+    "pub fn check(password: &str, input: &str) -> bool {\n    password == input\n}\n";
+
+#[test]
+fn rust_security_rules_report_shipped_code_named_after_tests() {
+    // A module named after tests or docs ships.
+    // `cfg_attr(test, …)` applies an attribute: the item ships too.
+    // Only the `#[cfg(test)] mod speed_test;` gate keeps code out.
+    let under_cfg_attr = |body: &str| format!("#[cfg_attr(test, allow(dead_code))]\n{body}");
+    let db = under_cfg_attr(CONCAT_SQL);
+    let auth = under_cfg_attr(PLAIN_COMPARE);
+    let witness = format!("{CONCAT_SQL}{PLAIN_COMPARE}");
+    let files = [
+        (
+            "src/lib.rs",
+            "pub mod ab_test;\npub mod auth;\npub mod db;\npub mod docs;\n#[cfg(test)]\nmod speed_test;\n",
+        ),
+        ("src/ab_test/mod.rs", "pub mod query;\n"),
+        ("src/ab_test/query.rs", CONCAT_SQL),
+        ("src/db.rs", db.as_str()),
+        ("src/auth.rs", auth.as_str()),
+        ("src/docs/mod.rs", PLAIN_COMPARE),
+        ("src/speed_test.rs", witness.as_str()),
+    ];
+    assert_eq!(
+        files_reported(&files, "db-no-string-concat-sql"),
+        ["src/ab_test/query.rs", "src/db.rs"]
+    );
+    assert_eq!(
+        files_reported(&files, "no-timing-attack"),
+        ["src/auth.rs", "src/docs/mod.rs"]
+    );
+}
+
+#[test]
+fn security_and_data_rules_judge_rust_and_sql_names_by_the_build() {
+    // The other security rules skipped these paths by name alone.
+    // The `#[cfg(test)] mod fixtures;` gate still keeps its module out.
+    let weak_hash = "pub fn digest(data: &[u8]) -> [u8; 16] {\n    md5::compute(data).0\n}\n";
+    let logging = "pub fn login(password: &str) {\n    log::info!(\"login {}\", password);\n}\n";
+    let debug_secret = "#[derive(Debug)]\npub struct ApiKey {\n    pub value: String,\n}\n";
+    let shipped = format!("{weak_hash}{logging}{debug_secret}");
+    let secret = "pub const API_KEY: &str = \"abcd1234567890abcdef\";\n";
+    let varchar = "CREATE TABLE speed_samples (name VARCHAR(20));\n";
+    let fixtures = format!("{shipped}{secret}");
+    let files = [
+        (
+            "src/lib.rs",
+            "pub mod ab_test;\npub mod docs;\npub mod keys;\n#[cfg(test)]\nmod fixtures;\n",
+        ),
+        ("src/ab_test/mod.rs", "pub mod hash_test;\n"),
+        ("src/ab_test/hash_test.rs", shipped.as_str()),
+        ("src/docs/mod.rs", shipped.as_str()),
+        ("src/keys/mod.rs", "pub mod demo;\n"),
+        ("src/keys/demo/mod.rs", secret),
+        ("src/fixtures/mod.rs", fixtures.as_str()),
+        ("migrations/V7__speed_test.sql", varchar),
+        ("db/tests/seed.sql", varchar),
+    ];
+    for rule in [
+        "no-weak-hashing",
+        "no-confidential-logging",
+        "rust-secret-type-derives-debug",
+    ] {
+        assert_eq!(
+            files_reported(&files, rule),
+            ["src/ab_test/hash_test.rs", "src/docs/mod.rs"],
+            "{rule}"
+        );
+    }
+    assert_eq!(
+        files_reported(&files, "no-hardcoded-secret"),
+        ["src/keys/demo/mod.rs"]
+    );
+    assert_eq!(
+        files_reported(&files, "sql-no-varchar"),
+        ["migrations/V7__speed_test.sql"]
+    );
+}
+
+#[test]
+fn rust_runtime_rules_report_shipped_modules_named_after_tests_or_docs() {
+    // These rules also skipped Rust paths by name alone.
+    // The `#[cfg(test)] mod fixtures;` gate still keeps its module out.
+    let body = "pub fn matcher(pattern: &str) { let _r = Regex::new(pattern); }\n\
+                pub fn read(p: *const u8) -> u8 { unsafe { *p } }\n\
+                pub fn url() -> String { std::env::var(\"URL\").unwrap() }\n\
+                pub async fn fetch(url: &str) { let _r = reqwest::get(url).await; }\n\
+                pub fn git() { std::process::Command::new(\"git\").output().ok(); }\n\
+                pub fn queue() { let _q = tokio::sync::mpsc::unbounded_channel::<u8>(); }\n";
+    let files = [
+        (
+            "src/lib.rs",
+            "pub mod api_test;\npub mod docs;\npub mod examples;\n#[cfg(test)]\nmod fixtures;\n",
+        ),
+        ("src/api_test.rs", body),
+        ("src/docs/mod.rs", body),
+        ("src/examples/mod.rs", body),
+        ("src/fixtures/mod.rs", body),
+    ];
+    let shipped = ["src/api_test.rs", "src/docs/mod.rs", "src/examples/mod.rs"];
+    for rule in [
+        "no-new-regex-with-variable",
+        "rust-undocumented-unsafe",
+        "rust-env-var-unwrap-at-runtime",
+        "timeout-on-io",
+        "timeout-on-external-command",
+        "rust-unbounded-channel",
+    ] {
+        assert_eq!(files_reported(&files, rule), shipped, "{rule}");
+    }
+}
+
+const APP_MANIFEST: &str =
+    "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n";
+const UNSAFE_READ: &str = "pub fn first(v: &[u8]) -> u8 {\n    unsafe { *v.get_unchecked(0) }\n}\n";
+
+#[test]
+fn a_fuzz_engine_the_release_build_leaves_out_keeps_the_crate_judged() {
+    // A fuzz harness has `cargo-fuzz = true` or a required engine.
+    // A dev or optional engine leaves `src/` shipping.
+    let engine_manifest = "[package]\nname = \"libfuzzer-sys\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lib]\npath = \"lib.rs\"\n";
+    let command = "pub fn list() -> std::io::Result<std::process::Output> {\n    \
+                   std::process::Command::new(\"ls\").output()\n}\n";
+    let reported = |deps: &str, rule: &str| {
+        let manifest = format!("{APP_MANIFEST}\n{deps}");
+        files_reported(
+            &[
+                ("Cargo.toml", manifest.as_str()),
+                ("vendor/libfuzzer-sys/Cargo.toml", engine_manifest),
+                ("vendor/libfuzzer-sys/lib.rs", ""),
+                ("src/lib.rs", "pub mod auth;\npub mod cmd;\npub mod raw;\n"),
+                ("src/auth.rs", PLAIN_COMPARE),
+                ("src/cmd.rs", command),
+                ("src/raw.rs", UNSAFE_READ),
+            ],
+            rule,
+        )
+    };
+    let dev = "[dev-dependencies]\nlibfuzzer-sys = { path = \"vendor/libfuzzer-sys\" }\n";
+    let optional =
+        "[dependencies]\nlibfuzzer-sys = { path = \"vendor/libfuzzer-sys\", optional = true }\n";
+    for deps in [dev, optional] {
+        assert_eq!(
+            reported(deps, "no-timing-attack"),
+            ["src/auth.rs"],
+            "{deps}"
+        );
+        assert_eq!(
+            reported(deps, "rust-undocumented-unsafe"),
+            ["src/raw.rs"],
+            "{deps}"
+        );
+        assert_eq!(
+            reported(deps, "timeout-on-external-command"),
+            ["src/cmd.rs"],
+            "{deps}"
+        );
+    }
+    let required = "[dependencies]\nlibfuzzer-sys = { path = \"vendor/libfuzzer-sys\" }\n";
+    assert!(reported(required, "no-timing-attack").is_empty());
+}
+
+#[test]
+fn a_binary_declared_under_examples_ships_with_its_modules() {
+    // `[[bin]] path =` builds a release target in any directory.
+    // `examples/demo.rs` stays an example, out of release.
+    let manifest =
+        format!("{APP_MANIFEST}\n[[bin]]\nname = \"server\"\npath = \"examples/server.rs\"\n");
+    let defects = format!("{PLAIN_COMPARE}{UNSAFE_READ}pub static mut COUNTER: u32 = 0;\n");
+    let server = format!("mod auth;\n{defects}fn main() {{}}\n");
+    let demo = format!("{defects}fn main() {{}}\n");
+    let files = [
+        ("Cargo.toml", manifest.as_str()),
+        ("src/lib.rs", ""),
+        ("examples/server.rs", server.as_str()),
+        ("examples/auth/mod.rs", defects.as_str()),
+        ("examples/demo.rs", demo.as_str()),
+    ];
+    for rule in [
+        "no-timing-attack",
+        "rust-undocumented-unsafe",
+        "rust-no-static-mut",
+    ] {
+        assert_eq!(
+            files_reported(&files, rule),
+            ["examples/auth/mod.rs", "examples/server.rs"],
+            "{rule}"
+        );
+    }
+}
+
+#[test]
+fn rust_rules_judge_a_docs_module_the_library_ships() {
+    // A `src/` module named `docs` ships with the library.
+    // Cargo builds `examples/` and `benches/` out of release.
+    // A top `docs/` file belongs to no target.
+    let unsafe_code = "pub struct Handle(pub *mut u8);\nunsafe impl Send for Handle {}\n\
+                       pub static mut COUNTER: u32 = 0;\n";
+    let target = format!("{unsafe_code}fn main() {{}}\n");
+    let files = [
+        ("Cargo.toml", APP_MANIFEST),
+        ("src/lib.rs", "pub mod docs;\npub mod sync;\n"),
+        ("src/docs/mod.rs", unsafe_code),
+        ("src/sync.rs", unsafe_code),
+        ("examples/demo.rs", target.as_str()),
+        ("benches/load.rs", target.as_str()),
+        ("docs/snippet.rs", unsafe_code),
+    ];
+    for rule in ["rust-unsafe-impl-without-comment", "rust-no-static-mut"] {
+        assert_eq!(
+            files_reported(&files, rule),
+            ["src/docs/mod.rs", "src/sync.rs"],
+            "{rule}"
+        );
+    }
 }
 
 /// What comply reports for `rule` in a project of `files`.

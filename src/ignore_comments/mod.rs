@@ -1,7 +1,8 @@
 //! Suppression parser — scans source for suppression comments + filters diagnostics.
 //!
 //! comply's own format is `// comply-ignore: <rule-id> — <justification>`
-//! (em-dash or ` -- `):
+//! (em-dash or ` -- `), or the same marker in a comment of a language without
+//! `//` comments (`-- comply-ignore:` in SQL, see `line`):
 //! - **Above-line:** marker is the only thing on the line → suppresses next line.
 //! - **Trailing:** marker comes after code on the same line → suppresses current line.
 //! - **String literals:** markers inside `"..."`, `'...'`, or `` `...` `` are ignored.
@@ -64,14 +65,34 @@ fn scan_directives(path: &Path, source: &str) -> ScannedDirectives {
     let mut parses = Vec::new();
     let mut marker_lines = FxHashSet::default();
     let mut last_line = 0;
+    let comments = line::marker_comments(path);
+    // In SQL, every reading must see the directive's comment.
+    // A string can span lines.
+    // A `$$` string may be no function body.
+    let sql_comments =
+        (crate::files::language_of(path) == Some(crate::files::Language::Sql)).then(|| {
+            use crate::rules::sql_helpers::{DollarBody, sql_comment_bytes};
+            sql_comment_bytes(source, DollarBody::Text)
+        });
+    let mut line_start = 0usize;
     for (idx, raw_line) in source.lines().enumerate() {
         last_line = idx + 1;
-        if let Some(parsed) = line::parse(path, raw_line, last_line) {
+        let in_comment = |at: usize| {
+            sql_comments
+                .as_ref()
+                .is_none_or(|comment| comment.get(line_start.saturating_add(at)) == Some(&true))
+        };
+        if let Some(parsed) = line::parse(path, comments, raw_line, last_line, &in_comment) {
             if parsed.is_comment_only_line {
                 marker_lines.insert(last_line);
             }
             parses.push((last_line, parsed));
         }
+        line_start = source[line_start..]
+            .find('\n')
+            .map_or(source.len(), |newline| {
+                line_start.saturating_add(newline).saturating_add(1)
+            });
     }
     ScannedDirectives {
         parses,

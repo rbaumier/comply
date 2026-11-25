@@ -447,6 +447,17 @@ fn dispatch_with_lang(
         file: &file_ctx,
         lang: file.language,
     };
+    let sql_code = (file.language == Language::Sql)
+        .then(|| crate::rules::sql_helpers::mask_sql_comments(source));
+    let sql_code_ctx = sql_code.as_deref().map(|code| CheckCtx {
+        path,
+        path_arc: Arc::clone(&ctx.path_arc),
+        source: code,
+        config,
+        project,
+        file: &file_ctx,
+        lang: file.language,
+    });
     let mut diagnostics = Vec::new();
 
     for (&(meta, ref backend), pf) in ld.applicable.iter().zip(&ld.applicable_prefilters) {
@@ -455,12 +466,26 @@ fn dispatch_with_lang(
         }
         let produced = match backend {
             Backend::Text(check) => {
+                let masked = sql_code_ctx
+                    .as_ref()
+                    .filter(|_| !check.reads_sql_comments());
+                let ctx = masked.unwrap_or(&ctx);
                 if let Some(f) = pf
-                    && !source_matches_prefilter(source, f)
+                    && !source_matches_prefilter(ctx.source, f)
                 {
                     continue;
                 }
-                check.check(&ctx)
+                let found = check.check(ctx);
+                match masked {
+                    Some(code) => found
+                        .into_iter()
+                        .map(|d| Diagnostic {
+                            column: source_column(code.source, source, d.line, d.column),
+                            ..d
+                        })
+                        .collect(),
+                    None => found,
+                }
             }
             Backend::Oxlint { .. }
             | Backend::Clippy { .. }
@@ -511,6 +536,26 @@ fn dispatch_with_lang(
     }
 
     diagnostics
+}
+
+/// Where a masked finding sits in `source`, counted in characters.
+/// The mask blanks each byte of a comment.
+/// A multibyte character there spans several masked columns.
+fn source_column(masked: &str, source: &str, line: usize, column: usize) -> usize {
+    let start: usize = masked
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum();
+    let text = masked.get(start..).unwrap_or_default();
+    let text = text.split('\n').next().unwrap_or_default();
+    // As `byte_offset_to_line_col` counts, a `\r` takes no column.
+    let byte = text
+        .char_indices()
+        .filter(|&(_, c)| c != '\r')
+        .nth(column.saturating_sub(1))
+        .map_or(text.len(), |(at, _)| at);
+    crate::oxc_helpers::byte_offset_to_line_col(source, start.saturating_add(byte)).1
 }
 
 fn should_skip_framework_scoped_rule(meta: &RuleMeta, project: &ProjectCtx) -> bool {

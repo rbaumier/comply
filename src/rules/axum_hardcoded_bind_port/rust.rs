@@ -36,8 +36,10 @@
 //!
 //! ## Where the rule stays silent
 //!
-//! Test code (`#[cfg(test)]`, `#[test]`, a `tests/` directory) and relaxed
-//! directories (`examples/`, `benches/`, …) bind fixed ports on purpose.
+//! Code outside the release binds fixed ports on purpose.
+//! Per `is_outside_release`, that is test-only code.
+//! It is also the package's `tests/`, `examples/` and `benches/`.
+//! A `src/` module of that name ships.
 //!
 //! A literal reached only through a branch that an environment read selects is
 //! already configurable, so a bind inside such a branch is silent. The read has
@@ -59,7 +61,7 @@ crate::ast_check! { on ["call_expression"] prefilter = ["TcpListener::bind"] => 
     let Some(argument) = sole_argument(node) else { return };
     let Some(address) = socket_address(argument, source) else { return };
     if !is_fixed_port_on_every_interface(address) { return; }
-    if rust_helpers::is_test_code(node, source, ctx) { return; }
+    if rust_helpers::is_outside_release(node, ctx) { return; }
     if binds_the_environment_fallback(node, source) { return; }
     if !is_axum_crate(ctx) { return; }
 
@@ -379,10 +381,7 @@ impl crate::rules::test_helpers::RunRule for Check {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::files::Language;
-    use crate::rules::file_ctx::FileCtx;
     use crate::rules::test_helpers::run_rule_with_cargo;
-    use std::path::Path;
 
     const AXUM_CARGO_TOML: &str = r#"
 [package]
@@ -405,13 +404,22 @@ tokio = { version = "1", features = ["full"] }
         run_with_cargo(AXUM_CARGO_TOML, source)
     }
 
-    /// Whether the engine offers a file at `relative_path` to this rule, i.e.
-    /// what the `RuleMeta` directory skips decide.
-    fn applies_to(relative_path: &str) -> bool {
-        let path = Path::new("/crate").join(relative_path);
+    /// The findings for a fixed-port bind at `relative_path`.
+    /// The crate depends on axum.
+    /// The engine's name gate runs first, as in production.
+    fn bind_at(relative_path: &str) -> usize {
         let project = crate::project::default_static_project_ctx();
-        let file = FileCtx::build(&path, "", Language::Rust, project);
-        super::super::META.applies_to_file(&file)
+        let file = crate::rules::file_ctx::FileCtx::build(
+            std::path::Path::new(relative_path),
+            "",
+            crate::files::Language::Rust,
+            project,
+        );
+        if !super::super::META.applies_to_file(&file) {
+            return 0;
+        }
+        let src = r#"async fn serve() { TcpListener::bind("0.0.0.0:3000").await.unwrap(); }"#;
+        run_rule_with_cargo(&Check, AXUM_CARGO_TOML, src, relative_path).len()
     }
 
     // ── Positive: an address the call spells out on every interface ────────
@@ -870,19 +878,24 @@ async fn serves() { TcpListener::bind("0.0.0.0:3000").await.unwrap(); }
 
     #[test]
     fn skips_the_tests_directory() {
-        assert!(!applies_to("tests/api.rs"));
+        assert_eq!(bind_at("tests/api.rs"), 0);
+        // A `src/` module named after tests ships.
+        assert_eq!(bind_at("src/api_test.rs"), 1);
     }
 
     #[test]
     fn skips_relaxed_directories() {
-        assert!(!applies_to("examples/hello/main.rs"));
-        assert!(!applies_to("benches/serve.rs"));
+        assert_eq!(bind_at("examples/hello/main.rs"), 0);
+        assert_eq!(bind_at("benches/serve.rs"), 0);
+        // A `src/` module named after examples or docs ships.
+        assert_eq!(bind_at("src/examples/hello.rs"), 1);
+        assert_eq!(bind_at("src/docs/serve.rs"), 1);
     }
 
     #[test]
     fn applies_to_crate_sources() {
         // Negative space for the two skips above: they must not swallow the
         // crate's own sources, which is where the rule earns its findings.
-        assert!(applies_to("src/main.rs"));
+        assert_eq!(bind_at("src/main.rs"), 1);
     }
 }

@@ -4,12 +4,14 @@
 //! "are we inside an async function" check (`thread-sleep-in-async`,
 //! `block-on-in-async`, `sync-io-in-async`). Rule of three: extract.
 
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use tree_sitter::Node;
 
 use crate::project::{
-    ProjectCtx, RUST_MODULE_CHAIN_MAX_DEPTH, parse_rust_source, rust_module_parent_candidates,
+    CargoManifest, ProjectCtx, RUST_MODULE_CHAIN_MAX_DEPTH, parse_rust_source,
+    rust_module_parent_candidates,
 };
 
 /// True if `node` is inside an `async fn`. Walks up parents looking
@@ -515,21 +517,6 @@ pub fn is_in_test_context(node: Node, source: &[u8]) -> bool {
         || enclosing_item_has_attribute(node, source, attr_marks_test)
 }
 
-/// True when the whole Rust file at `path` is test code, whatever its own AST
-/// says. Two shapes qualify:
-///
-/// - a Cargo integration-test target — anything under a package's `tests/`
-///   directory, where a `#[cfg(test)]` attribute is neither needed nor possible
-/// - a module whose `mod` chain from the crate root crosses a `#[cfg(test)]`
-///   gate, e.g. `#[cfg(test)] mod tests;` in `lib.rs` gating `src/tests/util.rs`
-///
-/// Complements [`is_in_test_context`], which reads only the gates written in the
-/// file itself: neither shape above marks the test code's own ancestors. Rules
-/// whose subject is the code that ships in the release binary pair the two.
-pub fn is_test_only_rust_file(path: &Path, project: &ProjectCtx) -> bool {
-    is_cargo_test_target(path, project) || project.rust_file_is_cfg_test_gated(path)
-}
-
 /// True when `path` sits under the `tests/` directory of the Cargo package that
 /// owns it. The package root anchors the match, so a workspace member's
 /// `crates/foo/tests/io.rs` qualifies while a package that merely lives under a
@@ -556,17 +543,33 @@ pub fn is_cargo_bench_target(path: &Path, project: &ProjectCtx) -> bool {
 /// True when the top directory of `path` in its Cargo package passes `target_dir`.
 /// Cargo finds `tests/`, `benches/` and `examples/` targets there only.
 /// So `tools/benches/load.rs` is no target.
+/// A `[lib]` or `[[bin]]` declared by `path =` ships its files there.
 /// A file with no `Cargo.toml` ancestor answers false.
 fn in_cargo_package(path: &Path, project: &ProjectCtx, target_dir: fn(&Path) -> bool) -> bool {
     let Some(manifest) = project.nearest_cargo_manifest(path) else {
         return false;
     };
-    let top_dir = path
-        .strip_prefix(manifest.manifest_dir())
-        .ok()
-        .and_then(Path::parent)
-        .and_then(|dir| dir.components().next());
-    top_dir.is_some_and(|dir| target_dir(Path::new(dir.as_os_str())))
+    top_dir_in_package(path, &manifest).is_some_and(|dir| target_dir(Path::new(dir)))
+        && !manifest.release_target_links(path)
+}
+
+/// The first directory of `path` under the directory of `manifest`.
+fn top_dir_in_package<'p>(path: &'p Path, manifest: &CargoManifest) -> Option<&'p OsStr> {
+    let dir = path.strip_prefix(manifest.manifest_dir()).ok()?.parent()?;
+    dir.components().next().map(|top| top.as_os_str())
+}
+
+/// True when a release target of the package compiles from `path`'s tree.
+/// - the package's `src/`, where Cargo finds its default targets;
+/// - a `[lib]` or `[[bin]]` declared by `path =`, with its modules.
+///
+/// Test-only code still counts: see [`is_outside_release_file`].
+pub fn in_release_target_tree(path: &Path, project: &ProjectCtx) -> bool {
+    let Some(manifest) = project.nearest_cargo_manifest(path) else {
+        return false;
+    };
+    top_dir_in_package(path, &manifest).is_some_and(|dir| dir == "src")
+        || manifest.release_target_links(path)
 }
 
 /// True if the author gated `node`'s compilation on the configuration option
@@ -3674,11 +3677,12 @@ pub fn crate_has_external_consumers(project: &ProjectCtx, path: &Path) -> bool {
 /// rules relaxing their discipline for test code call this, not a hand-written
 /// combination.
 ///
-/// Both halves are node- and path-local on purpose: this runs on every node a
-/// rule visits, so it must not reach for [`is_test_only_rust_file`], whose
-/// manifest and module-graph lookups take a process-wide lock. A rule that
-/// needs the `#[cfg(test)] mod …;` chain pairs the two behind its own cheap
-/// filter, as `no-timing-attack` does.
+/// Both halves read only the node and its path.
+/// Each visit can afford them.
+///
+/// Reserved to style rules.
+/// A name or `cfg_attr(test, …)` does not gate a build.
+/// Security and production-data rules read [`is_test_only`].
 pub fn is_test_code(node: Node, source: &[u8], ctx: &crate::rules::backend::CheckCtx) -> bool {
     is_under_tests_dir(ctx.path) || is_in_test_context(node, source)
 }
@@ -3694,12 +3698,49 @@ pub fn is_test_code(node: Node, source: &[u8], ctx: &crate::rules::backend::Chec
 /// A file or module named after tests still ships, and so does code under
 /// `#[cfg_attr(test, …)]` or `#[cfg(any(test, feature = "x"))]`.
 /// Rules that protect production data use this, not [`is_test_code`].
+///
+/// The file lookups read manifests and modules under a lock.
+/// Call it once a node is a finding.
 pub fn is_test_only(node: Node, ctx: &crate::rules::backend::CheckCtx) -> bool {
-    let source = ctx.source.as_bytes();
-    cfg_requires(node, source, "test")
-        || is_in_test_macro_fn(node, source)
-        || is_cargo_test_target(ctx.path, ctx.project)
-        || ctx.project.rust_file_requires_cfg_test(ctx.path)
+    is_test_only_node(node, ctx.source.as_bytes()) || is_test_only_file(ctx.path, ctx.project)
+}
+
+/// True when a `cfg` gate requiring `test` covers `node`.
+/// An enclosing `#[test]` function counts too.
+fn is_test_only_node(node: Node, source: &[u8]) -> bool {
+    cfg_requires(node, source, "test") || is_in_test_macro_fn(node, source)
+}
+
+/// True when only test builds compile the file at `path`.
+/// Such is a Cargo `tests/` target.
+/// Such is a module gated on `test` by its `mod` chain.
+pub fn is_test_only_file(path: &Path, project: &ProjectCtx) -> bool {
+    is_cargo_test_target(path, project) || project.rust_file_requires_cfg_test(path)
+}
+
+/// True when the package's library and binaries never link `node`.
+///
+/// - test-only code, per [`is_test_only`];
+/// - a Cargo `examples/` or `benches/` target of the package;
+/// - a fuzz harness, by its manifest.
+///
+/// A `src/` module named `docs`, `demo` or `benches` ships.
+/// Security rules that spare demos and benchmarks use this.
+pub fn is_outside_release(node: Node, ctx: &crate::rules::backend::CheckCtx) -> bool {
+    is_test_only_node(node, ctx.source.as_bytes()) || is_outside_release_file(ctx.path, ctx.project)
+}
+
+/// True when no release build links the file at `path`.
+/// See [`is_outside_release`].
+pub fn is_outside_release_file(path: &Path, project: &ProjectCtx) -> bool {
+    in_cargo_package(
+        path,
+        project,
+        crate::rules::path_utils::is_cargo_non_library_target_dir_path,
+    ) || project
+        .nearest_cargo_manifest(path)
+        .is_some_and(|manifest| manifest.is_fuzz_crate())
+        || is_test_only_file(path, project)
 }
 
 /// True when `node` sits in code compiled into a Rust library target that some

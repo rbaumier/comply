@@ -248,6 +248,10 @@ throw err;
 
 Suppress a rule for an entire file with `// comply-ignore-file: <rule-id> — <reason>`.
 
+In a language without `//` comments, write the marker in the language's own comment: `-- comply-ignore:` in SQL, `# comply-ignore:` in YAML, TOML, Dockerfiles and nginx configs, `/* comply-ignore: … */` in CSS, `<!-- comply-ignore: … -->` in a Vue template. `//` is read everywhere.
+
+The SQL rules read the statements of a `.sql` file, never its comments: a statement commented out is not reported, and a word in a comment does not change the statement next to it. A rule that asks for a comment (a rationale, a deprecation note) still finds it there.
+
 comply also honors the inline ESLint directives your project already wrote, for the comply rule that re-implements the named ESLint rule: `// eslint-disable-line <rule>` and `// eslint-disable-next-line <rule>`, in either comment syntax. The plugin prefix does not matter — `@typescript-eslint/no-explicit-any`, `typescript/no-explicit-any` and `no-explicit-any` all reach `ts-no-explicit-any`. A directive naming no rule suppresses nothing, and the file-scope `eslint-disable` / `eslint-enable` range form is not honored — comply tracks no enable/disable range.
 
 ## Editor integration

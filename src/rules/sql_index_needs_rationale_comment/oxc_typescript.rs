@@ -75,6 +75,7 @@ impl OxcCheck for Check {
         // expects a 0-based row index (it adds +1 internally).
         diagnostics.extend(check_string_content(
             content,
+            content,
             line.saturating_sub(1),
             col,
             ctx.path,

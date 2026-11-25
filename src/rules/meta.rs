@@ -65,16 +65,31 @@ impl RuleMeta {
     ///
     /// Use this only when `is_rule_enabled` has already been checked (e.g. the
     /// oxc fast path that pre-computes config-enabled flags once per run).
+    ///
+    /// Security and data rules read the build scope instead.
+    /// A Rust or SQL file named after tests may ship.
+    /// Inside release targets, every rule asks the build about demos.
     pub fn applies_to_file(&self, file_ctx: &FileCtx) -> bool {
-        (!self.skip_in_test_dir || !file_ctx.path_segments.in_test_dir)
-            && (!self.skip_in_relaxed_dir || !file_ctx.path_segments.is_relaxed_dir)
+        let segments = &file_ctx.path_segments;
+        let (in_test_dir, is_relaxed_dir) = match file_ctx.build_scope {
+            Some(scope) if self.guards_shipped_code() => (scope.in_test_dir, scope.is_relaxed_dir),
+            Some(scope) if scope.in_release_target => (segments.in_test_dir, scope.is_relaxed_dir),
+            _ => (segments.in_test_dir, segments.is_relaxed_dir),
+        };
+        (!self.skip_in_test_dir || !in_test_dir) && (!self.skip_in_relaxed_dir || !is_relaxed_dir)
+    }
+
+    fn guards_shipped_code(&self) -> bool {
+        self.categories
+            .iter()
+            .any(|category| matches!(*category, "security" | "database"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::file_ctx::{FileCtx, PathSegments};
+    use crate::rules::file_ctx::{BuildScope, FileCtx, PathSegments};
 
     fn make_meta(skip_in_test_dir: bool, skip_in_relaxed_dir: bool) -> RuleMeta {
         RuleMeta {
@@ -83,7 +98,7 @@ mod tests {
             remediation: "",
             severity: crate::diagnostic::Severity::Error,
             doc_url: None,
-            categories: &[],
+            categories: &["style"],
             skip_in_test_dir,
             skip_in_relaxed_dir,
         }
@@ -119,5 +134,70 @@ mod tests {
                 "skip_test={skip_test} in_test={in_test} skip_relaxed={skip_relaxed} in_relaxed={in_relaxed}"
             );
         }
+    }
+
+    // A Rust or SQL path names tests or demos.
+    // Its build scope says whether the claim holds.
+    #[test]
+    fn security_and_data_rules_read_the_build_scope() {
+        let claimed = |scope: BuildScope| FileCtx {
+            build_scope: Some(scope),
+            ..make_file_ctx(true, true)
+        };
+        let ships = claimed(BuildScope::default());
+        let test_only = claimed(BuildScope {
+            in_test_dir: true,
+            ..BuildScope::default()
+        });
+        let example = claimed(BuildScope {
+            is_relaxed_dir: true,
+            ..BuildScope::default()
+        });
+        for categories in [&["security"][..], &["rust", "database"]] {
+            let meta = RuleMeta {
+                categories,
+                ..make_meta(true, true)
+            };
+            assert!(meta.applies_to_file(&ships), "{categories:?}");
+            assert!(!meta.applies_to_file(&test_only), "{categories:?}");
+            assert!(!meta.applies_to_file(&example), "{categories:?}");
+            assert!(
+                !meta.applies_to_file(&make_file_ctx(true, false)),
+                "{categories:?}"
+            );
+        }
+        assert!(!make_meta(true, true).applies_to_file(&ships));
+    }
+
+    // A `docs` module of a release target ships.
+    // A real demo target stays relaxed.
+    #[test]
+    fn every_rule_reads_the_build_in_a_release_target() {
+        let relaxed = |scope: BuildScope| FileCtx {
+            build_scope: Some(scope),
+            ..make_file_ctx(false, true)
+        };
+        let shipped_docs = relaxed(BuildScope {
+            in_release_target: true,
+            ..BuildScope::default()
+        });
+        let test_only_docs = relaxed(BuildScope {
+            is_relaxed_dir: true,
+            in_release_target: true,
+            ..BuildScope::default()
+        });
+        let demo = relaxed(BuildScope::default());
+        let style = make_meta(false, true);
+        assert!(style.applies_to_file(&shipped_docs));
+        assert!(!style.applies_to_file(&test_only_docs));
+        assert!(!style.applies_to_file(&demo));
+        let tests_named = FileCtx {
+            build_scope: Some(BuildScope {
+                in_release_target: true,
+                ..BuildScope::default()
+            }),
+            ..make_file_ctx(true, true)
+        };
+        assert!(!make_meta(true, true).applies_to_file(&tests_named));
     }
 }

@@ -23,7 +23,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_outside_release;
 
 const KINDS: &[&str] = &["call_expression"];
 
@@ -43,9 +43,15 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        let Some(function) = node.child_by_field_name("function") else {
+        let Some(mut function) = node.child_by_field_name("function") else {
             return;
         };
+        // A turbofish wraps the path: `unbounded_channel::<u8>()`.
+        if function.kind() == "generic_function"
+            && let Some(path) = function.child_by_field_name("function")
+        {
+            function = path;
+        }
         let Ok(text) = function.utf8_text(source_bytes) else {
             return;
         };
@@ -57,9 +63,6 @@ impl AstCheck for Check {
             || last_segment == "unbounded" && is_channel_unbounded_path(text)
             || last_segment == "channel" && channel_is_std_mpsc(text, source_bytes);
         if !is_unbounded {
-            return;
-        }
-        if is_test_code(node, source_bytes, ctx) {
             return;
         }
         // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
@@ -83,6 +86,10 @@ impl AstCheck for Check {
             return;
         }
         if is_channel_provider_constructor(node, source_bytes) {
+            return;
+        }
+        // Tests and examples run no production load.
+        if is_outside_release(node, ctx) {
             return;
         }
         let pos = node.start_position();
@@ -506,6 +513,12 @@ mod tests {
     }
 
     #[test]
+    fn flags_unbounded_channel_called_with_a_turbofish() {
+        let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
+        assert_eq!(run_on(source).len(), 1);
+    }
+
+    #[test]
     fn flags_tokio_unbounded_channel() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel(); }";
         assert_eq!(run_on(source).len(), 1);
@@ -600,7 +613,19 @@ mod tests {
     #[test]
     fn allows_unbounded_channel_in_tests_dir() {
         let source = "fn f() { let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u8>(); }";
-        assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/my_test.rs").is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                source,
+                path,
+            )
+        };
+        assert!(run("tests/my_test.rs").is_empty());
+        assert!(run("benches/load.rs").is_empty());
+        // A `src/` module named after tests or demos ships.
+        assert_eq!(run("src/my_test.rs").len(), 1);
+        assert_eq!(run("src/demo/load.rs").len(), 1);
     }
 
     #[test]

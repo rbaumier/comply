@@ -2,11 +2,14 @@
 //!
 //! ReDoS is exploitable only when a running service feeds attacker-controlled
 //! input to the regex (a crafted pattern freezes the event loop via exponential
-//! backtracking). Test files (`skip_in_test_dir`) have no such attack surface:
-//! a dynamic regex there matches a fixture-derived error message and never
-//! ships, so the harm is production-only — mirroring the Rust backend, which
-//! already exempts `tests/` and `#[test]` code. Production `new RegExp(variable)`
-//! in its own (non-test) file is still flagged.
+//! backtracking).
+//! Test files have no such attack surface.
+//! A dynamic regex there matches a fixture-derived error message.
+//! It never ships, so the harm is production-only.
+//! The TypeScript backend skips test files by name.
+//! The Rust backend exempts test-only code, as Cargo builds it.
+//! A Rust file named after tests ships.
+//! Production `new RegExp(variable)` is still flagged.
 
 mod oxc_typescript;
 mod rust;
@@ -27,7 +30,9 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["code-quality"],
 
-    skip_in_test_dir: true,
+    // A Rust file named after tests still ships.
+    // The other backends skip `in_test_dir` themselves.
+    skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
 };
 

@@ -44,7 +44,7 @@ fn lint_block(block: &ScriptBlock<'_>, ctx: &CheckCtx, diagnostics: &mut Vec<Dia
             continue;
         }
         let node_row = node.start_position().row;
-        for line_offset in super::nullable_lines_without_comment(text) {
+        for line_offset in super::nullable_lines_without_comment(text, text) {
             let file_row = node_row + line_offset + block.start_row;
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),

@@ -7,8 +7,8 @@
 //!
 //! The XXE risk lives in an *application* that hands untrusted XML to a parser
 //! as a production sink. Two exemptions:
-//! - test and cargo-fuzz files (any crate): a parser fed XML in a `#[test]` or a
-//!   fuzz target is exercising the parser on fixtures, not a production sink;
+//! - code outside the release, per `is_outside_release`: test-only code, the
+//!   package's `tests/`, `benches/` and `examples/`, and a fuzz crate;
 //! - the source of a known XML-parsing crate (`quick-xml`, `xml-rs`,
 //!   `roxmltree`, …): the library implementing XML parsing is never the
 //!   downstream consumer mis-using it — see
@@ -48,19 +48,6 @@ const XML_PARSER_PATTERNS: &[&str] = &[
 crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
     let Some(callee) = node.child_by_field_name("function") else { return };
 
-    // Test code and cargo-fuzz targets (any crate) feed XML to a parser to
-    // exercise it on fixtures, not as a production sink — XXE in a fixture is
-    // not a runtime vulnerability.
-    // Dual-read: the unit-test harness injects an empty default FileCtx, so the
-    // `path_segments` flags are false in tests — fall back to the pure path
-    // predicates, which read `ctx.path` directly.
-    if crate::rules::rust_helpers::is_test_code(node, source, ctx)
-        || ctx.file.path_segments.in_test_dir
-        || ctx.file.path_segments.in_fuzz_targets
-        || crate::rules::path_utils::is_fuzz_targets_path(ctx.path)
-    {
-        return;
-    }
     // The crate under analysis IS an XML-parsing library: its source implements
     // `from_str`/`*Reader::new` rather than consuming them, so it is never the
     // downstream application that could mis-use a parser.
@@ -104,6 +91,11 @@ crate::ast_check! { on ["call_expression"] => |node, source, ctx, diagnostics|
 
     for &pattern in XML_PARSER_PATTERNS {
         if callee_text.contains(pattern) {
+            // Tests, examples and fuzz targets feed fixtures.
+            // None of them is a production sink.
+            if crate::rules::rust_helpers::is_outside_release(node, ctx) {
+                return;
+            }
             let pos = node.start_position();
             diagnostics.push(Diagnostic {
                 path: std::sync::Arc::clone(&ctx.path_arc),
@@ -143,10 +135,6 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
-    }
-
-    fn run_on_path(source: &str, path: &str) -> Vec<Diagnostic> {
-        crate::rules::test_helpers::run_rule(&Check, source, path)
     }
 
     /// Run on `rel_path` inside a temp crate with the given `Cargo.toml`, so the
@@ -255,25 +243,24 @@ path = "src/lib.rs"
     fn allows_xml_library_tests_issue4928() {
         // Issue #4928: quick-xml's own namespace test exercises `NsReader::from_str`
         // on a fixture by design. A `tests/` integration file is test code.
-        assert!(
-            run_on_path(
-                "fn namespace() { let mut r = NsReader::from_str(\"<a xmlns:myns='www1'></a>\"); }",
-                "tests/reader-namespaces.rs",
-            )
-            .is_empty()
-        );
+        let source =
+            "fn namespace() { let mut r = NsReader::from_str(\"<a xmlns:myns='www1'></a>\"); }";
+        let run = |path| run_in_crate(crate::rules::test_helpers::LIB_CARGO_TOML, path, source);
+        assert!(run("tests/reader-namespaces.rs").is_empty());
+        assert_eq!(run("src/reader_test.rs").len(), 1);
+        assert_eq!(run("src/docs/reader.rs").len(), 1);
     }
 
     #[test]
     fn allows_xml_library_fuzz_target_issue4928() {
         // Issue #4928: a cargo-fuzz target feeds the parser fuzzed XML by design.
-        assert!(
-            run_on_path(
-                "fn fuzz(data: &[u8]) { let _ = Reader::from_str(s); }",
-                "fuzz/fuzz_targets/structured_roundtrip.rs",
-            )
-            .is_empty()
-        );
+        // Its manifest names the fuzz crate, not the directory name.
+        let fuzz_manifest = "[package]\nname = \"x-fuzz\"\nversion = \"0.0.0\"\n\n[package.metadata]\ncargo-fuzz = true\n";
+        let source = "fn fuzz(data: &[u8]) { let _ = xml::EventReader::new(data); }";
+        let fuzz_target = "fuzz_targets/structured_roundtrip.rs";
+        assert!(run_in_crate(fuzz_manifest, fuzz_target, source).is_empty());
+        let lib = crate::rules::test_helpers::LIB_CARGO_TOML;
+        assert_eq!(run_in_crate(lib, &format!("src/{fuzz_target}"), source).len(), 1);
     }
 
     #[test]

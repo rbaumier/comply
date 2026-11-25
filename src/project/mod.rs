@@ -2478,6 +2478,8 @@ pub struct CargoManifest {
     explicit_target_paths: Vec<PathBuf>,
     /// `[lib] path`, relative to `manifest_dir`.
     lib_path: Option<PathBuf>,
+    /// `[[bin]] path` fields, relative to `manifest_dir`.
+    bin_paths: Vec<PathBuf>,
     /// An async runtime (`tokio`, `async-std`, `futures`) is declared in any
     /// dependency section.
     async_runtime: bool,
@@ -2489,9 +2491,8 @@ pub struct CargoManifest {
     /// A derive-based error-handling library (`thiserror`, `snafu`, `miette`,
     /// `derive_more`, `error-stack`) is declared in any dependency section.
     error_derive_crate: bool,
-    /// `[package.metadata] cargo-fuzz = true`, or a fuzzing-runtime dependency
-    /// (`libfuzzer-sys`, `afl`, `honggfuzz`) is declared in any dependency
-    /// section — the crate is a fuzz harness.
+    /// The crate is a fuzz harness.
+    /// See [`CargoManifest::is_fuzz_crate`].
     fuzz_crate: bool,
     /// `[package].links` is set — the crate declares it links a native library.
     /// Cargo allows exactly one crate per native library to set this key, so its
@@ -2524,8 +2525,7 @@ impl CargoManifest {
     /// as async.
     const ASYNC_RUNTIMES: &'static [&'static str] = &["tokio", "async-std", "async_std", "futures"];
 
-    /// Fuzzing runtimes whose presence in any dependency section marks the crate
-    /// as a fuzz harness (cargo-fuzz `libfuzzer-sys`, AFL `afl`, honggfuzz).
+    /// Fuzzing engines: cargo-fuzz `libfuzzer-sys`, AFL `afl`, honggfuzz.
     const FUZZ_RUNTIMES: &'static [&'static str] = &["libfuzzer-sys", "afl", "honggfuzz"];
 
     /// Parse a `Cargo.toml`'s raw text. `manifest_dir` is the directory holding
@@ -2583,6 +2583,15 @@ impl CargoManifest {
             .and_then(toml::Value::as_str)
             .map(PathBuf::from);
 
+        let bin_paths = value
+            .get("bin")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|target| target.get("path").and_then(toml::Value::as_str))
+            .map(PathBuf::from)
+            .collect();
+
         let async_runtime = ["dependencies", "dev-dependencies", "build-dependencies"]
             .iter()
             .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
@@ -2603,11 +2612,17 @@ impl CargoManifest {
             .and_then(|metadata| metadata.get("cargo-fuzz"))
             .and_then(toml::Value::as_bool)
             .unwrap_or(false);
-        let fuzz_runtime_dep = ["dependencies", "dev-dependencies", "build-dependencies"]
-            .iter()
-            .filter_map(|section| value.get(section).and_then(toml::Value::as_table))
-            .any(|table| Self::FUZZ_RUNTIMES.iter().any(|rt| table.contains_key(*rt)));
-        let fuzz_crate = fuzz_metadata || fuzz_runtime_dep;
+        // A dev, build or optional engine stays out of the release build.
+        let fuzz_engine_required = value
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|deps| {
+                Self::FUZZ_RUNTIMES
+                    .iter()
+                    .filter_map(|engine| deps.get(*engine))
+                    .any(|spec| spec.get("optional").and_then(toml::Value::as_bool) != Some(true))
+            });
+        let fuzz_crate = fuzz_metadata || fuzz_engine_required;
 
         let no_std_category = value
             .get("package")
@@ -2649,6 +2664,7 @@ impl CargoManifest {
             has_bin_table,
             explicit_target_paths,
             lib_path,
+            bin_paths,
             async_runtime,
             no_std_category,
             testing_crate,
@@ -2734,6 +2750,21 @@ impl CargoManifest {
             || self.declares_executable_at(file_path)
     }
 
+    /// True when a `[lib]` or `[[bin]]` declared by `path =` links `file_path`.
+    /// Its root links the modules it declares, down the tree.
+    /// A declaration gated on `test` links nothing.
+    #[must_use]
+    pub fn release_target_links(&self, file_path: &Path) -> bool {
+        let relative = file_path
+            .strip_prefix(&self.manifest_dir)
+            .unwrap_or(file_path);
+        let file = path_segments(relative);
+        self.lib_path
+            .iter()
+            .chain(&self.bin_paths)
+            .any(|root| root_links_module(&self.manifest_dir, &path_segments(root), &file))
+    }
+
     /// True when the crate builds a library target: a `[lib]` table is declared,
     /// or `src/lib.rs` exists next to the manifest. The inverse of
     /// [`is_binary_only`] — a crate is a library when it exposes a `[lib]`
@@ -2786,14 +2817,11 @@ impl CargoManifest {
         self.testing_crate
     }
 
-    /// True when the crate is a fuzz harness, identified by
-    /// `[package.metadata] cargo-fuzz = true` or a dependency on a fuzzing
-    /// runtime (`libfuzzer-sys`, `afl`, `honggfuzz`). A fuzz harness feeds
-    /// arbitrary bytes to a call and deliberately discards the `Result` — only
-    /// a panic/crash matters — so `let _ = f(input)` and `panic!` are the
-    /// idiomatic crash-signaling mechanisms, regardless of the harness's
-    /// directory layout (cargo-fuzz `fuzz/fuzzers/`, AFL
-    /// `fuzz-afl/{fuzzers,reproducers}/`, or the classic `fuzz_targets/`).
+    /// True when the crate is a fuzz harness, whatever its layout.
+    /// It sets `[package.metadata] cargo-fuzz = true`.
+    /// Or `[dependencies]` requires a fuzzing engine.
+    /// A dev, build or optional engine leaves a crate shipping.
+    /// In a harness, `let _ = f(input)` and `panic!` signal crashes.
     pub fn is_fuzz_crate(&self) -> bool {
         self.fuzz_crate
     }
@@ -7423,6 +7451,53 @@ fn source_gates_module_on_cfg_test(
     Some(gate(decl, bytes, "test"))
 }
 
+/// True when the crate root `root` reaches `file` by ungated `mod` items.
+/// Both are path segments under `manifest_dir`.
+fn root_links_module(manifest_dir: &Path, root: &[&str], file: &[&str]) -> bool {
+    if root == file {
+        return true;
+    }
+    let Some((_, root_dir)) = root.split_last() else {
+        return false;
+    };
+    let Some(names) = module_names(root_dir, file) else {
+        return false;
+    };
+    if names.len() > RUST_MODULE_CHAIN_MAX_DEPTH {
+        return false;
+    }
+    let mut module_dir: PathBuf = root_dir.iter().collect();
+    let mut parent: PathBuf = root.iter().collect();
+    for name in names {
+        let Ok(src) = std::fs::read_to_string(manifest_dir.join(&parent)) else {
+            return false;
+        };
+        let gate = crate::rules::rust_helpers::cfg_requires;
+        if source_gates_module_on_cfg_test(&src, name, gate) != Some(false) {
+            return false;
+        }
+        module_dir.push(name);
+        let flat = module_dir.with_extension("rs");
+        parent = if manifest_dir.join(&flat).is_file() {
+            flat
+        } else {
+            module_dir.join("mod.rs")
+        };
+    }
+    true
+}
+
+/// The module names from a crate root in `root_dir` down to `file`.
+/// `None` when `file` is no `.rs` file under `root_dir`.
+fn module_names<'a>(root_dir: &[&'a str], file: &[&'a str]) -> Option<Vec<&'a str>> {
+    let (last, dirs) = file.strip_prefix(root_dir)?.split_last()?;
+    let mut names = dirs.to_vec();
+    if *last != "mod.rs" {
+        names.push(last.strip_suffix(".rs")?);
+    }
+    (!names.is_empty()).then_some(names)
+}
+
 /// Parse `src` with the Rust grammar, or `None` when the grammar cannot be
 /// loaded or the parse is aborted.
 pub(crate) fn parse_rust_source(src: &str) -> Option<tree_sitter::Tree> {
@@ -10313,6 +10388,96 @@ tokio = "1"
             !parse("[package]\nname = \"lib\"\n[dependencies]\nserde = \"1\"\n")
                 .uses_error_derive_crate(),
             "serde alone is not an error-derive crate"
+        );
+    }
+
+    // A fuzz harness requires its engine to build.
+    // A dev, build or optional engine leaves the crate shipping.
+    #[test]
+    fn cargo_manifest_is_a_fuzz_crate_only_when_its_build_needs_the_engine() {
+        let dir = PathBuf::from("/crate");
+        let fuzz = |sections: &str| {
+            let toml = format!("[package]\nname = \"app\"\n{sections}");
+            CargoManifest::parse(&toml, dir.clone())
+                .unwrap()
+                .is_fuzz_crate()
+        };
+        for engine in ["libfuzzer-sys", "afl", "honggfuzz"] {
+            assert!(
+                fuzz(&format!("[dependencies]\n{engine} = \"0.4\"\n")),
+                "{engine}"
+            );
+            assert!(
+                !fuzz(&format!("[dev-dependencies]\n{engine} = \"0.4\"\n")),
+                "{engine}"
+            );
+            assert!(
+                !fuzz(&format!("[build-dependencies]\n{engine} = \"0.4\"\n")),
+                "{engine}"
+            );
+        }
+        assert!(!fuzz(
+            "[dependencies]\nafl = { version = \"0.15\", optional = true }\n"
+        ));
+        assert!(fuzz(
+            "[dependencies]\nafl = { version = \"0.15\", optional = false }\n"
+        ));
+        assert!(fuzz("[dependencies]\nafl = { version = \"0.15\" }\n"));
+        assert!(fuzz("[package.metadata]\ncargo-fuzz = true\n"));
+        assert!(!fuzz("[dependencies]\nserde = \"1\"\n"));
+    }
+
+    // `path =` places a shipped root anywhere.
+    // Its ungated `mod` items ship with it.
+    #[test]
+    fn cargo_manifest_release_target_links_the_modules_of_a_declared_root() {
+        use std::fs;
+        let dir = tempfile::TempDir::new().unwrap();
+        let files = [
+            (
+                "examples/server.rs",
+                "mod auth;\n#[cfg(test)]\nmod fake;\nfn main() {}\n",
+            ),
+            ("examples/auth/mod.rs", "mod jwt;\n"),
+            ("examples/auth/jwt.rs", ""),
+            ("examples/fake.rs", ""),
+            ("examples/demo.rs", "fn main() {}\n"),
+            ("core/entry.rs", "mod store;\n"),
+            ("core/store.rs", "mod disk;\n"),
+            ("core/store/disk.rs", ""),
+        ];
+        for (rel, src) in files {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, src).unwrap();
+        }
+        let toml = "[package]\nname = \"app\"\n[lib]\npath = \"core/entry.rs\"\n\
+                    [[bin]]\nname = \"server\"\npath = \"examples/server.rs\"\n\
+                    [[example]]\nname = \"demo\"\npath = \"examples/demo.rs\"\n";
+        let manifest = CargoManifest::parse(toml, dir.path().to_path_buf()).unwrap();
+        let links = |rel: &str| manifest.release_target_links(&dir.path().join(rel));
+        for shipped in [
+            "examples/server.rs",
+            "examples/auth/mod.rs",
+            "examples/auth/jwt.rs",
+            "core/entry.rs",
+            "core/store.rs",
+            "core/store/disk.rs",
+        ] {
+            assert!(links(shipped), "{shipped}");
+        }
+        for left_out in [
+            "examples/fake.rs",
+            "examples/demo.rs",
+            "examples/auth/mod.txt",
+        ] {
+            assert!(!links(left_out), "{left_out}");
+        }
+        let unlisted = CargoManifest::parse("[package]\nname = \"app\"\n", dir.path().into());
+        assert!(
+            !unlisted
+                .unwrap()
+                .release_target_links(&dir.path().join("examples/server.rs"))
         );
     }
 

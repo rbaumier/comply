@@ -24,6 +24,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
+        if ctx.file.path_segments.in_test_dir {
+            return;
+        }
         let AstKind::NewExpression(new_expr) = node.kind() else { return };
 
         let Expression::Identifier(ctor) = &new_expr.callee else { return };
