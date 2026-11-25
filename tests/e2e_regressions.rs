@@ -336,6 +336,12 @@ fn a_comply_ignore_marker_counts_only_in_a_comment_of_its_language() {
             "FROM alpine:3.20\nCOPY <<EOF /etc/motd\n# @\nEOF\nRUN apk add curl\n".to_owned(),
         ),
         (
+            "Dockerfile",
+            "dockerfile-apk-no-cache",
+            "FROM alpine:3.20\n# @\nRUN apk add curl\n".to_owned(),
+            "FROM alpine:3.20\nRUN <<EOF\n# @\ntrue\nEOF\nRUN apk add curl\n".to_owned(),
+        ),
+        (
             "nginx/site.conf",
             "nginx-add-header-always",
             "server {\n  # @\n  add_header X-Frame-Options DENY;\n}\n".to_owned(),
