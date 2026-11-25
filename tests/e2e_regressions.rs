@@ -1167,6 +1167,60 @@ fn rust_unbounded_channel_reports_each_unbounded_constructor_and_no_bounded_one(
     assert_eq!((missed, flagged), (vec![], vec![]));
 }
 
+// A rename binds its own scope only.
+#[test]
+fn rust_unbounded_channel_follows_no_rename_of_another_scope() {
+    const IMPORT: &str = "use std::sync::mpsc;\n";
+    const CALL: &str = "pub fn run() {\n    let (tx, rx) = mpsc::channel();\n    \
+        for i in 0..3 {\n        let _ = tx.send(i);\n    }\n    drop(rx);\n}\n";
+    let call_of = |name: &str| CALL.replace("mpsc::channel", name);
+    let unbounded = [
+        // Another module, a child module, then another function.
+        format!("mod a {{\n    use crate::fake as mpsc;\n}}\n{IMPORT}{CALL}"),
+        format!("{IMPORT}{CALL}mod a {{\n    use crate::fake as mpsc;\n}}\n"),
+        format!("use crate::fake as mpsc;\nmod a {{\n{IMPORT}{CALL}}}\n"),
+        format!("{IMPORT}fn other() {{\n    use crate::fake as mpsc;\n}}\n{CALL}"),
+        // The nearer import wins.
+        format!(
+            "use crate::fake as mpsc;\n{}",
+            CALL.replace("let (tx", "use std::sync::mpsc;\n    let (tx")
+        ),
+        // One build sees the rename, the other does not.
+        format!("#[cfg(test)]\nuse crate::fake as mpsc;\n#[cfg(not(test))]\n{IMPORT}{CALL}"),
+        format!(
+            "#[cfg(test)]\nuse crate::fake as q;\n#[cfg(not(test))]\n\
+             use std::sync::mpsc as q;\n{}",
+            call_of("q::channel")
+        ),
+        format!(
+            "mod a {{\n    use crate::fake as unbounded;\n}}\n\
+             use flume::unbounded;\n{}",
+            call_of("unbounded")
+        ),
+        // A rename seen from a block and a nested function.
+        format!("use std::sync::mpsc as q;\n{}", call_of("q::channel")),
+        CALL.replace(
+            "let (tx, rx) = mpsc::channel();",
+            "use std::sync::mpsc as q;\n    fn make() -> u8 {\n        \
+             let (tx, rx) = q::channel();\n        for i in 0..3 {\n            \
+             let _ = tx.send(i);\n        }\n        drop(rx);\n        0\n    }\n    \
+             let (tx, rx) = (make(), 0);",
+        ),
+    ];
+    let bounded = [
+        format!("use crate::fake as mpsc;\n{CALL}"),
+        format!(
+            "{IMPORT}{}",
+            CALL.replace("let (tx", "use crate::fake as mpsc;\n    let (tx")
+        ),
+    ];
+    let reported =
+        |source: &&String| !positions("rust-unbounded-channel", "src/queue.rs", source).is_empty();
+    let missed: Vec<_> = unbounded.iter().filter(|s| !reported(s)).collect();
+    let flagged: Vec<_> = bounded.iter().filter(|s| reported(s)).collect();
+    assert_eq!((missed, flagged), (vec![], vec![]));
+}
+
 /// What comply reports for `rule` in a project of `files`.
 /// Each line leaves out the project root.
 fn findings(files: &[(&str, &str)], rule: &str) -> Vec<String> {

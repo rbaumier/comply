@@ -24,19 +24,20 @@
 //! An `as` rename stands for the path it renames.
 //! `use tokio::sync::mpsc::unbounded_channel as uc;` makes `uc()` that call.
 //! A glob or another module's rename is not followed.
+//! Neither is one of another block.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_outside_release;
-use rustc_hash::FxHashMap;
+use crate::rules::rust_helpers::{UseScopes, is_outside_release, root_node};
 
 const KINDS: &[&str] = &["call_expression"];
 
 #[derive(Debug)]
 pub struct Check;
 
-/// The path behind each `as` rename of a file.
-type Renames = FxHashMap<String, Vec<String>>;
+/// The imports of a file, read on the first call.
+/// The inner `None` stands for a file without renames.
+type Imports = Option<Option<UseScopes>>;
 
 impl AstCheck for Check {
     fn interested_kinds(&self) -> Option<&'static [&'static str]> {
@@ -44,8 +45,7 @@ impl AstCheck for Check {
     }
 
     fn create_state(&self) -> Option<Box<dyn std::any::Any>> {
-        // Read on the first call.
-        Some(Box::new(None::<Renames>))
+        Some(Box::new(Imports::None))
     }
 
     fn visit_node(
@@ -69,35 +69,18 @@ impl AstCheck for Check {
             return;
         };
         let renamed = state
-            .and_then(|state| state.downcast_mut::<Option<Renames>>())
-            .and_then(|renames| through_rename(text, node, ctx, renames));
-        let path = renamed.as_deref().unwrap_or(text);
-        // Match on the last `::`-separated path segment so a bare predicate
-        // method like `range.is_unbounded()` (a `field_expression` whose text
-        // happens to end in `unbounded`) is not mistaken for a constructor.
-        let last_segment = path.rsplit("::").next().unwrap_or(path);
-        let is_unbounded = last_segment == "unbounded_channel"
-            || last_segment == "unbounded" && is_channel_unbounded_path(path)
-            || last_segment == "channel" && channel_is_std_mpsc(path, source_bytes);
+            .and_then(|state| state.downcast_mut::<Imports>())
+            .map(|imports| through_renames(text, node, ctx, imports))
+            .unwrap_or_default();
+        let is_unbounded = if renamed.is_empty() {
+            builds_unbounded_channel(text, node, source_bytes)
+        } else {
+            renamed
+                .iter()
+                .any(|path| builds_unbounded_channel(path, node, source_bytes))
+        };
         if !is_unbounded {
             return;
-        }
-        // mpsc::channel — only flag if it's `std::sync::mpsc` (which is
-        // always unbounded). Tokio's `mpsc::channel(N)` takes a capacity
-        // and is the right call. We distinguish by argument count:
-        // unbounded variants take zero args, tokio's bounded variant
-        // takes one.
-        if last_segment == "channel" {
-            let arg_count = node
-                .child_by_field_name("arguments")
-                .map(|args| {
-                    let mut cur = args.walk();
-                    args.named_children(&mut cur).count()
-                })
-                .unwrap_or(0);
-            if arg_count > 0 {
-                return;
-            }
         }
         if is_one_shot_rendezvous(node, source_bytes) {
             return;
@@ -126,31 +109,48 @@ impl AstCheck for Check {
     }
 }
 
-/// `text` once an `as` rename resolves its first segment.
-/// `None` when no rename of the file binds that segment.
-fn through_rename(
+/// What `text` names, through the imports around `node`.
+/// Empty when none of them binds its first segment.
+fn through_renames(
     text: &str,
     node: tree_sitter::Node,
     ctx: &CheckCtx,
-    renames: &mut Option<Renames>,
-) -> Option<String> {
-    let renames = renames.get_or_insert_with(|| {
+    imports: &mut Imports,
+) -> Vec<String> {
+    let imports = imports.get_or_insert_with(|| {
         // A file without ` as ` renames nothing: skip the walk.
-        if ctx.source.contains(" as ") {
-            crate::rules::rust_helpers::use_renames(node, ctx.source.as_bytes())
-        } else {
-            FxHashMap::default()
-        }
+        let has_rename = ctx.source.contains(" as ");
+        has_rename.then(|| UseScopes::read(root_node(node), ctx.source.as_bytes()))
     });
-    let (head, tail) = text
-        .split_once("::")
-        .map_or((text, None), |(head, tail)| (head, Some(tail)));
-    let mut path = renames.get(head)?.join("::");
-    if let Some(tail) = tail {
-        path.push_str("::");
-        path.push_str(tail);
+    let Some(scopes) = imports else {
+        return Vec::new();
+    };
+    let head = text.split("::").next().unwrap_or(text);
+    let tail = &text[head.len()..];
+    scopes
+        .paths_of(head, node)
+        .into_iter()
+        .map(|path| format!("{}{tail}", path.join("::")))
+        .collect()
+}
+
+/// Whether a call of `path` builds an unbounded channel.
+fn builds_unbounded_channel(path: &str, call: tree_sitter::Node, source: &[u8]) -> bool {
+    // The last `::` segment names the constructor.
+    // `range.is_unbounded()` has none, so it is not one.
+    match path.rsplit("::").next().unwrap_or(path) {
+        "unbounded_channel" => true,
+        "unbounded" => is_channel_unbounded_path(path),
+        // Tokio's bounded `mpsc::channel(N)` takes a capacity.
+        // `std::sync::mpsc::channel()` takes none.
+        "channel" => channel_is_std_mpsc(path, source) && !takes_arguments(call),
+        _ => false,
     }
-    Some(path)
+}
+
+fn takes_arguments(call: tree_sitter::Node) -> bool {
+    call.child_by_field_name("arguments")
+        .is_some_and(|arguments| arguments.named_child_count() > 0)
 }
 
 /// True when a bare `unbounded()` constructor call belongs to a recognized

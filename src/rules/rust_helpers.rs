@@ -1743,28 +1743,66 @@ fn resolve_path_through_use(path: Node, segments: &[String], source: &[u8]) -> V
     let Some(leaf) = leaves.iter().find(|leaf| &leaf.local == head) else {
         return segments.to_vec();
     };
-    let upstream = leaf.source_name.as_ref().unwrap_or(&leaf.local);
-    let mut resolved = leaf.module.clone();
-    resolved.push(upstream.clone());
+    let mut resolved = upstream_path(leaf);
     resolved.extend_from_slice(tail);
     resolved
 }
 
-/// The path each `as` rename of the file stands for.
-/// `use a::b as c;` maps `c` to `a::b`.
-/// A plain import or a glob renames nothing.
-pub fn use_renames(node: Node, source: &[u8]) -> FxHashMap<String, Vec<String>> {
-    let mut leaves = Vec::new();
-    collect_use_leaves(root_node(node), source, &mut leaves);
-    let mut renames = FxHashMap::default();
-    for leaf in leaves {
-        if let Some(upstream) = leaf.source_name {
-            let mut path = leaf.module;
-            path.push(upstream);
-            renames.entry(leaf.local).or_insert(path);
+/// What the `use` declarations of a file bind, scope by scope.
+/// A scope is the file, a module body or a block.
+pub struct UseScopes(FxHashMap<usize, Vec<UsePathLeaf>>);
+
+impl UseScopes {
+    /// Read every `use` declaration under `root`.
+    pub fn read(root: Node, source: &[u8]) -> Self {
+        let mut scopes: FxHashMap<usize, Vec<UsePathLeaf>> = FxHashMap::default();
+        let mut pending = vec![root];
+        while let Some(scope) = pending.pop() {
+            let mut cursor = scope.walk();
+            for child in scope.named_children(&mut cursor) {
+                if child.kind() == "use_declaration" {
+                    let leaves = use_declaration_leaves(child, source);
+                    scopes.entry(scope.id()).or_default().extend(leaves);
+                } else {
+                    pending.push(child);
+                }
+            }
         }
+        Self(scopes)
     }
-    renames
+
+    /// The paths `name` may stand for at `node`.
+    /// The nearest scope that binds it decides, up to its module.
+    /// A plain import leaves `name` as written.
+    /// A glob binds no name.
+    pub fn paths_of(&self, name: &str, node: Node) -> Vec<Vec<String>> {
+        let mut current = node.parent();
+        while let Some(scope) = current {
+            let paths: Vec<Vec<String>> = self
+                .0
+                .get(&scope.id())
+                .into_iter()
+                .flatten()
+                .filter(|leaf| leaf.local == name)
+                .map(|leaf| match leaf.source_name {
+                    Some(_) => upstream_path(leaf),
+                    None => vec![leaf.local.clone()],
+                })
+                .collect();
+            if !paths.is_empty() || scope.kind() == "mod_item" {
+                return paths;
+            }
+            current = scope.parent();
+        }
+        Vec::new()
+    }
+}
+
+/// The path a `use` leaf names, whatever it binds it to.
+fn upstream_path(leaf: &UsePathLeaf) -> Vec<String> {
+    let mut path = leaf.module.clone();
+    path.push(leaf.source_name.as_ref().unwrap_or(&leaf.local).clone());
+    path
 }
 
 /// The leaves one `use_declaration` binds. The declaration's own
