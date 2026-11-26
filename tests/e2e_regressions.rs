@@ -3849,6 +3849,7 @@ fn two_package_repo(root: &std::path::Path) {
         fs::write(dir.join("tsconfig.json"), tsconfig).unwrap();
     }
     fs::write(root.join("pkg-a/a.ts"), "export const A = 1;\n").unwrap();
+    fs::write(root.join("pkg-b/base.ts"), "export const B = 1;\n").unwrap();
     common::without_type_aware_rules(root);
     git(root, &["init", "-q"]);
     git(root, &["config", "user.email", "test@example.com"]);
@@ -3882,6 +3883,41 @@ fn a_staged_scan_keeps_the_type_aware_findings() {
     assert_eq!(code, Some(1), "{stdout}{stderr}");
     let finding = "pkg-b/b.ts:6:7: error [no-misused-promises]";
     assert!(stdout.contains(finding), "{stdout}{stderr}");
+}
+
+// `pkg-a` sorts first; `pkg-b` still gets its own program.
+#[test]
+fn a_staged_scan_type_checks_every_changed_package() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    two_package_repo(root);
+    fs::write(root.join("pkg-a/a.ts"), "export const A = 2;\n").unwrap();
+    fs::write(root.join("pkg-b/b.ts"), MISUSED_PROMISE).unwrap();
+    git(root, &["add", "-A"]);
+    let (code, stdout, stderr) = staged_scan(root);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    let finding = "pkg-b/b.ts:6:7: error [no-misused-promises]";
+    assert!(stdout.contains(finding), "{stdout}{stderr}");
+}
+
+// The walk prunes these directories.
+// A git scope still lists the file.
+// Its package's program takes it in for tsgolint.
+#[test]
+fn a_staged_file_the_walk_prunes_is_type_checked() {
+    for pruned in ["vendor", "build", ".cache"] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        two_package_repo(root);
+        let file = format!("pkg-b/{pruned}/v.ts");
+        fs::create_dir_all(root.join("pkg-b").join(pruned)).unwrap();
+        fs::write(root.join(&file), MISUSED_PROMISE).unwrap();
+        git(root, &["add", "-f", &file]);
+        let (code, stdout, stderr) = staged_scan(root);
+        assert_eq!(code, Some(1), "{pruned}: {stdout}{stderr}");
+        let finding = format!("{file}:6:7: error [no-misused-promises]");
+        assert!(stdout.contains(&finding), "{pruned}: {stdout}{stderr}");
+    }
 }
 
 // oxlint 1.90.0 names plugins `typescript(…)`, `import(…)`, `jest(…)`.

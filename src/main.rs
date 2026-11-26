@@ -119,6 +119,64 @@ mod tests {
         }
     }
 
+    /// `count` packages in `dir`, each with one changed TypeScript file.
+    fn changed_packages(dir: &tempfile::TempDir, count: usize) -> Vec<SourceFile> {
+        (0..count)
+            .map(|index| {
+                let package = dir.path().join(format!("pkg-{index}"));
+                std::fs::create_dir_all(&package).unwrap();
+                std::fs::write(package.join("package.json"), "{}\n").unwrap();
+                let path = package.join("a.ts");
+                std::fs::write(&path, "export const A = 1;\n").unwrap();
+                SourceFile {
+                    path,
+                    language: Language::TypeScript,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn type_programs_cover_every_root_up_to_the_bound() {
+        for count in [TYPE_PROGRAM_ROOTS.saturating_sub(1), TYPE_PROGRAM_ROOTS] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let files = changed_packages(&dir, count);
+            let changed: Vec<&SourceFile> = files.iter().collect();
+            let programs = type_programs(&changed, dir.path()).unwrap();
+            assert_eq!(programs.len(), count);
+        }
+    }
+
+    #[test]
+    fn type_programs_past_the_bound_name_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let over = TYPE_PROGRAM_ROOTS.saturating_add(1);
+        let files = changed_packages(&dir, over);
+        let changed: Vec<&SourceFile> = files.iter().collect();
+        let Err(error) = type_programs(&changed, dir.path()) else {
+            panic!("{over} package roots were accepted");
+        };
+        let bound = format!("at most {TYPE_PROGRAM_ROOTS}");
+        assert!(error.to_string().contains(&bound), "{error}");
+    }
+
+    #[test]
+    fn a_type_program_keeps_a_changed_file_the_walk_prunes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor")).unwrap();
+        let pruned = write_ts(&dir, "vendor/v.ts", "export const V = 1;\n");
+        write_ts(&dir, "b.ts", "export const B = 1;\n");
+        let programs = type_programs(&[&pruned], dir.path()).unwrap();
+        assert_eq!(programs.len(), 1);
+        let paths: Vec<&std::path::Path> =
+            programs[0].files.iter().map(|f| f.path.as_path()).collect();
+        // The changed file leads, under its discovered path.
+        assert_eq!(paths.len(), 2, "{paths:?}");
+        assert_eq!(paths[0], pruned.path.as_path());
+        assert!(paths[1].ends_with("b.ts"), "{paths:?}");
+    }
+
     #[test]
     fn rules_subcommand_recognizes_all_rule_families() {
         // A real engine rule — whichever the registry lists first.
@@ -811,6 +869,81 @@ fn is_exempt_barrel_entry_point(
         || project.is_declared_entry_barrel(diagnostic.path.as_ref())
 }
 
+/// The directory a walk up from `file` starts in.
+fn walk_start<'a>(file: &'a std::path::Path, cwd: &'a std::path::Path) -> &'a std::path::Path {
+    let parent = file.parent().unwrap_or(std::path::Path::new("."));
+    if parent.as_os_str().is_empty() {
+        cwd
+    } else {
+        parent
+    }
+}
+
+/// The package above `start`: its nearest `package.json`, else `.git`.
+fn package_root(start: &std::path::Path) -> std::path::PathBuf {
+    let root = crate::project::walk_up_finding(start, "package.json")
+        .or_else(|| crate::project::walk_up_finding(start, ".git"))
+        .unwrap_or_else(|| start.to_path_buf());
+    if root.as_os_str().is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        root
+    }
+}
+
+/// The most package roots one partial scan type-checks.
+/// Each costs a tsgolint run over its whole package.
+const TYPE_PROGRAM_ROOTS: usize = 16;
+
+/// One type program per package root of the `changed` files.
+/// Each holds its changed files first, then its root's files.
+/// A changed file the walk prunes still joins.
+fn type_programs(
+    changed: &[&SourceFile],
+    cwd: &std::path::Path,
+) -> Result<Vec<oxlint::TypeProgram>> {
+    let canonical =
+        |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut by_root: std::collections::BTreeMap<std::path::PathBuf, Vec<&SourceFile>> =
+        std::collections::BTreeMap::new();
+    for file in changed {
+        let root = canonical(&package_root(walk_start(&file.path, cwd)));
+        by_root.entry(root).or_default().push(file);
+    }
+    if by_root.len() > TYPE_PROGRAM_ROOTS {
+        let what = format!(
+            "this change spans {} package roots with TypeScript files, and a partial scan \
+             type-checks at most {TYPE_PROGRAM_ROOTS}. Commit the packages in smaller sets, \
+             or scan the tree with `comply .`",
+            by_root.len()
+        );
+        return Err(crate::toolchain::ToolchainError::Unusable { what }.into());
+    }
+    by_root
+        .into_iter()
+        .map(|(root, owned)| {
+            let held: FxHashSet<std::path::PathBuf> =
+                owned.iter().map(|file| canonical(&file.path)).collect();
+            let others = files::discover(&cli::ScanMode::All(root))?
+                .into_iter()
+                .filter(|file| file.language.is_typescript_family())
+                .filter(|file| !held.contains(&canonical(&file.path)));
+            let files = owned
+                .iter()
+                .map(|file| SourceFile {
+                    path: file.path.clone(),
+                    language: file.language,
+                })
+                .chain(others)
+                .collect();
+            Ok(oxlint::TypeProgram {
+                files,
+                changed: held,
+            })
+        })
+        .collect()
+}
+
 /// Apply every linter (oxlint + custom rules) and collect diagnostics.
 fn collect_all_diagnostics(
     discovered: &[SourceFile],
@@ -827,34 +960,24 @@ fn collect_all_diagnostics(
     // a complete import index, so walk the full project tree for the
     // ProjectCtx when running a partial scan.
     let full_project_files: Vec<SourceFile>;
+    let cwd = std::env::current_dir().unwrap_or_default();
     let index_refs: Vec<&SourceFile> = if is_partial {
-        let cwd = std::env::current_dir().unwrap_or_default();
         let start = discovered
             .first()
-            .map(|f| {
-                let p = f.path.parent().unwrap_or(std::path::Path::new("."));
-                if p.as_os_str().is_empty() { &cwd } else { p }
-            })
-            .unwrap_or(&cwd);
-        let root = crate::project::walk_up_finding(start, "package.json")
-            .or_else(|| crate::project::walk_up_finding(start, ".git"))
-            .unwrap_or_else(|| start.to_path_buf());
-        let root = if root.as_os_str().is_empty() {
-            std::path::PathBuf::from(".")
-        } else {
-            root
-        };
+            .map_or(cwd.as_path(), |f| walk_start(&f.path, &cwd));
+        let root = package_root(start);
         full_project_files = files::discover(&cli::ScanMode::All(root))?;
         full_project_files.iter().collect()
     } else {
         full_project_files = Vec::new();
         discovered.iter().collect()
     };
-    let type_program_ts: Vec<&SourceFile> = if is_partial && type_aware {
-        full_project_files
+    let type_programs: Vec<oxlint::TypeProgram> = if is_partial && type_aware {
+        let changed: Vec<&SourceFile> = discovered
             .iter()
             .filter(|f| f.language.is_typescript_family())
-            .collect()
+            .collect();
+        type_programs(&changed, &cwd)?
     } else {
         Vec::new()
     };
@@ -907,7 +1030,7 @@ fn collect_all_diagnostics(
                     &project,
                     timings,
                     type_aware,
-                    &type_program_ts,
+                    &type_programs,
                     is_partial,
                 )?);
             }
@@ -1162,7 +1285,7 @@ fn lint_typescript(
     project: &std::sync::Arc<crate::project::ProjectCtx>,
     timings: &mut Timings,
     type_aware: bool,
-    type_program_ts: &[&SourceFile],
+    type_programs: &[oxlint::TypeProgram],
     is_partial: bool,
 ) -> Result<Vec<Diagnostic>> {
     // oxlint is not optional: it backs comply's TS/JS lints, so a missing
@@ -1176,11 +1299,7 @@ fn lint_typescript(
 
     type PhaseOut = (Result<Vec<Diagnostic>>, Duration);
 
-    let type_program_opt: Option<&[&SourceFile]> = if type_program_ts.is_empty() {
-        None
-    } else {
-        Some(type_program_ts)
-    };
+    let type_programs_opt = is_partial.then_some(type_programs);
 
     let unanalyzed = if is_partial {
         crate::toolchain::Unanalyzed::Refuse
@@ -1196,7 +1315,7 @@ fn lint_typescript(
                 config,
                 project,
                 type_aware,
-                type_program_opt,
+                type_programs_opt,
                 unanalyzed,
             ),
             t.elapsed(),

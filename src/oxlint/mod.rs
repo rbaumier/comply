@@ -71,7 +71,7 @@ pub fn lint_files(
     config: &crate::config::Config,
     project: &ProjectCtx,
     type_aware: bool,
-    type_program_files: Option<&[&SourceFile]>,
+    type_programs: Option<&[TypeProgram]>,
     unanalyzed: Unanalyzed,
 ) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
@@ -106,33 +106,18 @@ pub fn lint_files(
 
     let type_aware_ts = type_aware_files(files);
     if !type_aware_ts.is_empty() && !standard_tsgolint.is_empty() {
-        if let Some(program) = type_program_files {
+        if let Some(programs) = type_programs {
             // Partial-scan: pass all project TS files so tsgolint builds a
             // complete type program (prevents no-unsafe-* FPs on imports from
             // unchanged files), then filter results back to the changed files.
-            let program_ts = type_aware_files(program);
-            if !program_ts.is_empty() {
-                let rule_entries: Vec<crate::oxlint_config::RuleEntry<'_>> = standard_tsgolint
-                    .iter()
-                    .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
-                    .collect();
-                let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
-                let remap = remap::build_table(&standard_tsgolint);
-                let all_diags = lint_batch(
-                    &program_ts,
-                    &type_aware_ts,
-                    oxlint_config.path(),
-                    true,
-                    &remap,
-                    unanalyzed,
-                )?;
-                let changed = changed_path_set(&type_aware_ts);
-                all.extend(
-                    all_diags
-                        .into_iter()
-                        .filter(|d| is_changed(&changed, d.path.as_ref())),
-                );
-            }
+            all.extend(lint_programs(
+                programs,
+                &type_aware_ts,
+                type_aware_files,
+                &standard_tsgolint,
+                config,
+                unanalyzed,
+            )?);
         } else {
             all.extend(lint_files_with_bindings(
                 &type_aware_ts,
@@ -157,30 +142,15 @@ pub fn lint_files(
 
     let type_aware_esm = type_aware_files(&esm);
     if !type_aware_esm.is_empty() && !module_aware_tsgolint.is_empty() {
-        if let Some(program) = type_program_files {
-            let program_esm = type_aware_files(&es_module_files(program, project));
-            if !program_esm.is_empty() {
-                let rule_entries: Vec<crate::oxlint_config::RuleEntry<'_>> = module_aware_tsgolint
-                    .iter()
-                    .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
-                    .collect();
-                let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
-                let remap = remap::build_table(&module_aware_tsgolint);
-                let all_diags = lint_batch(
-                    &program_esm,
-                    &type_aware_esm,
-                    oxlint_config.path(),
-                    true,
-                    &remap,
-                    unanalyzed,
-                )?;
-                let changed = changed_path_set(&type_aware_esm);
-                all.extend(
-                    all_diags
-                        .into_iter()
-                        .filter(|d| is_changed(&changed, d.path.as_ref())),
-                );
-            }
+        if let Some(programs) = type_programs {
+            all.extend(lint_programs(
+                programs,
+                &type_aware_esm,
+                |program| type_aware_files(&es_module_files(program, project)),
+                &module_aware_tsgolint,
+                config,
+                unanalyzed,
+            )?);
         } else {
             all.extend(lint_files_with_bindings(
                 &type_aware_esm,
@@ -277,6 +247,72 @@ fn keep_jest_no_export(diag: &Diagnostic, project: &ProjectCtx) -> bool {
             .any(|usage| usage.importer != canon && is_jest_test_file(&usage.importer))
     });
     !imported_by_another_test_file
+}
+
+/// A tsgolint program, and the changed files it owns.
+pub struct TypeProgram {
+    /// One package root's changed files, then its other files.
+    pub files: Vec<SourceFile>,
+    /// The canonical paths of the changed files this program owns.
+    pub changed: FxHashSet<PathBuf>,
+}
+
+/// Run tsgolint `bindings` on each program's `select`ed files.
+/// Each keeps the findings of the `changed` files it owns.
+/// A changed file no program owns is not analyzed.
+fn lint_programs(
+    programs: &[TypeProgram],
+    changed: &[&SourceFile],
+    select: impl for<'f> Fn(&[&'f SourceFile]) -> Vec<&'f SourceFile>,
+    bindings: &[(&'static str, &'static RuleMeta, Severity)],
+    config: &crate::config::Config,
+    unanalyzed: Unanalyzed,
+) -> Result<Vec<Diagnostic>> {
+    let outside: Vec<&SourceFile> = changed
+        .iter()
+        .copied()
+        .filter(|file| {
+            let is_held = |program: &TypeProgram| is_changed(&program.changed, &file.path);
+            !programs.iter().any(is_held)
+        })
+        .collect();
+    if !outside.is_empty() {
+        let why = "no type program holds these changed file(s)";
+        report_unanalyzed(why, &outside, unanalyzed)?;
+    }
+    let rule_entries: Vec<crate::oxlint_config::RuleEntry<'_>> = bindings
+        .iter()
+        .map(|(key, _, sev)| (*key, *sev, options::for_rule(key, config)))
+        .collect();
+    let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
+    let remap = remap::build_table(bindings);
+    let mut all = Vec::new();
+    for program in programs {
+        let owned: Vec<&SourceFile> = changed
+            .iter()
+            .copied()
+            .filter(|file| is_changed(&program.changed, &file.path))
+            .collect();
+        if owned.is_empty() {
+            continue;
+        }
+        let files: Vec<&SourceFile> = program.files.iter().collect();
+        let diagnostics = lint_batch(
+            &select(&files),
+            &owned,
+            oxlint_config.path(),
+            true,
+            &remap,
+            unanalyzed,
+        )?;
+        let kept = changed_path_set(&owned);
+        all.extend(
+            diagnostics
+                .into_iter()
+                .filter(|d| is_changed(&kept, d.path.as_ref())),
+        );
+    }
+    Ok(all)
 }
 
 fn changed_path_set(files: &[&SourceFile]) -> FxHashSet<PathBuf> {
@@ -802,6 +838,28 @@ mod tests {
             .collect();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].path.as_ref(), changed_path.as_path());
+    }
+
+    #[test]
+    fn a_changed_file_no_program_owns_is_refused() {
+        let file = SourceFile {
+            path: "pkg-b/b.ts".into(),
+            language: crate::files::Language::TypeScript,
+        };
+        let config = crate::config::Config::default();
+        let Err(error) = lint_programs(
+            &[],
+            &[&file],
+            type_aware_files,
+            &[],
+            &config,
+            Unanalyzed::Refuse,
+        ) else {
+            panic!("an unowned changed file passed");
+        };
+        let message = error.to_string();
+        assert!(message.contains("no type program"), "{message}");
+        assert!(message.contains("pkg-b/b.ts"), "{message}");
     }
 
     #[test]
