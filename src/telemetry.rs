@@ -4,8 +4,8 @@
 //! Telemetry is best-effort and never fails a lint.
 
 use std::fmt::Write as _;
-use std::fs::OpenOptions;
-use std::io::Write as _;
+use std::fs::{File, OpenOptions};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -28,6 +28,10 @@ const MAX_RECORDED_DIAGNOSTICS: usize = 500;
 /// A snippet exists to recognize the flagged construct.
 /// A minified line would drown the record.
 const SNIPPET_MAX_CHARS: usize = 160;
+
+/// A telemetry file past this size keeps its recent half.
+/// `comply stats` reads a whole file into memory.
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// How many rules and files `comply stats` prints as text.
 /// JSON mode emits the full ranking instead.
@@ -196,6 +200,7 @@ fn current_repo_name() -> String {
 fn append_record<T: Serialize>(dir: &Path, file_name: &str, record: &T) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let path = dir.join(file_name);
+    keep_recent_half(&path)?;
     let mut line = serde_json::to_string(record).context("failed to serialize telemetry record")?;
     line.push('\n');
     let mut file = OpenOptions::new()
@@ -205,6 +210,36 @@ fn append_record<T: Serialize>(dir: &Path, file_name: &str, record: &T) -> Resul
         .with_context(|| format!("failed to open {}", path.display()))?;
     file.write_all(line.as_bytes())
         .with_context(|| format!("failed to append to {}", path.display()))
+}
+
+/// Cut `path` to its recent half once past the cap.
+/// The cut lands mid-line: that partial line goes too.
+fn keep_recent_half(path: &Path) -> Result<()> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.len() <= MAX_FILE_BYTES {
+        return Ok(());
+    }
+    let keep = MAX_FILE_BYTES / 2;
+    let unreadable = || format!("failed to read {}", path.display());
+    let mut file = File::open(path).with_context(unreadable)?;
+    file.seek(SeekFrom::Start(metadata.len().saturating_sub(keep)))
+        .with_context(unreadable)?;
+    let mut tail = Vec::new();
+    file.take(keep)
+        .read_to_end(&mut tail)
+        .with_context(unreadable)?;
+    let start = tail
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map_or(tail.len(), |at| at.saturating_add(1));
+    let recent = tail.get(start..).unwrap_or_default();
+    // A per-process name keeps two rotations apart.
+    let staged = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&staged, recent)
+        .with_context(|| format!("failed to write {}", staged.display()))?;
+    std::fs::rename(&staged, path).with_context(|| format!("failed to replace {}", path.display()))
 }
 
 /// Read every parsable record.
@@ -504,6 +539,41 @@ mod tests {
         assert_eq!(runs[0].diagnostics_total, 0);
         assert_eq!(runs[1].diagnostics[0].rule_id, "no-throw");
         assert_eq!(runs[1].args, vec!["--working-tree".to_string()]);
+    }
+
+    /// Fill `path` with `len` bytes of numbered 16-byte lines.
+    fn fill(path: &Path, len: u64) {
+        let lines = usize::try_from(len / 16).unwrap().saturating_add(1);
+        let mut content: String = (0..lines).map(|n| format!("{n:015}\n")).collect();
+        content.truncate(usize::try_from(len).unwrap());
+        std::fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn a_telemetry_file_keeps_its_recent_half_past_its_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(RUNS_FILE_NAME);
+        for len in [MAX_FILE_BYTES.saturating_sub(1), MAX_FILE_BYTES] {
+            fill(&path, len);
+            append_record(dir.path(), RUNS_FILE_NAME, &run_record(vec![])).unwrap();
+            assert!(std::fs::metadata(&path).unwrap().len() > len);
+        }
+        let over = MAX_FILE_BYTES.saturating_add(16);
+        fill(&path, over);
+        append_record(dir.path(), RUNS_FILE_NAME, &run_record(vec![])).unwrap();
+        let kept = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = kept.lines().collect();
+        let (record, numbers) = lines.split_last().unwrap();
+        assert!(
+            serde_json::from_str::<RunRecord>(record).is_ok(),
+            "{record}"
+        );
+        // Whole lines only, up to the most recent one.
+        assert!(numbers.iter().all(|line| line.len() == 15));
+        let newest = (over / 16).saturating_sub(1);
+        assert_eq!(numbers.last().unwrap(), &format!("{newest:015}"));
+        let kept_bytes = u64::try_from(numbers.len()).unwrap().saturating_mul(16);
+        assert!(kept_bytes <= MAX_FILE_BYTES / 2, "{kept_bytes}");
     }
 
     #[test]
