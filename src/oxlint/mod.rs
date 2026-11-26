@@ -425,7 +425,9 @@ fn lint_batch(
     let Some(output) = invoke_oxlint(batch, Some(config_path), is_type_aware)? else {
         let limit = OXLINT_BATCH_TIMEOUT.as_secs();
         let why = format!(
-            "oxlint ran past {limit}s on a batch of {} file(s)",
+            "oxlint ran past {limit}s on a batch of {} file(s). \
+             A loaded machine or a huge generated file is the usual cause: \
+             rerun once the load drops, or list that file in .complyignore",
             batch.len()
         );
         report_unanalyzed(&why, named, unanalyzed)?;
@@ -443,16 +445,33 @@ fn lint_batch(
             Ok(Vec::new())
         }
         Parsed::Linted(diagnostics, Some(linted)) if linted < batch.len() => {
+            let cwd = std::env::current_dir().unwrap_or_default();
             let why = format!(
-                "oxlint linted only {linted} of the {} file(s) of a batch, without naming them; \
-                 an ignore file it reads is the usual cause",
-                batch.len()
+                "oxlint linted only {linted} of the {} file(s) of a batch, without naming them. {}",
+                batch.len(),
+                ignore_remedy(&cwd)
             );
             report_unanalyzed(&why, named, unanalyzed)?;
             Ok(diagnostics)
         }
         Parsed::Linted(diagnostics, _) => Ok(diagnostics),
     }
+}
+
+/// The ignore file oxlint reads from `cwd`, and its remedy.
+/// oxlint runs in comply's directory, and reads only that file.
+fn ignore_remedy(cwd: &Path) -> String {
+    let ignore = cwd.join(".eslintignore");
+    if ignore.is_file() {
+        return format!(
+            "It reads {}: drop the pattern that matches them, or list them in .complyignore",
+            ignore.display()
+        );
+    }
+    format!(
+        "It found no {}, the one ignore file it reads. List them in .complyignore",
+        ignore.display()
+    )
 }
 
 /// The version of the tsgolint oxlint runs, from its `package.json`.
@@ -954,6 +973,41 @@ mod tests {
             panic,
             "panic: Unhandled case in Node.MemberList: KindModuleDeclaration [recovered, repanicked]"
         );
+    }
+
+    #[test]
+    fn a_panic_quote_keeps_at_most_its_bound_of_chars() {
+        let stack = "goroutine 1 [running]:\ntsgolint/internal/rules\n";
+        let bounds = [
+            PANIC_CHARS.saturating_sub(1),
+            PANIC_CHARS,
+            PANIC_CHARS.saturating_add(1),
+        ];
+        for len in bounds {
+            let line = format!("panic: {}", "é".repeat(len.saturating_sub("panic: ".len())));
+            let stderr = format!("{line}\n{stack}");
+            let quoted = tsgolint_panic_summary(b"", stderr.as_bytes()).expect("a panic");
+            assert_eq!(quoted.chars().count(), len.min(PANIC_CHARS));
+            assert!(line.starts_with(&quoted));
+        }
+    }
+
+    #[test]
+    fn the_left_out_remedy_names_the_ignore_file_oxlint_reads() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ignore = dir.path().join(".eslintignore");
+        let absent = ignore_remedy(dir.path());
+        assert!(
+            absent.contains(&format!("no {}", ignore.display())),
+            "{absent}"
+        );
+        std::fs::write(&ignore, "gen.ts\n").unwrap();
+        let present = ignore_remedy(dir.path());
+        assert!(
+            present.contains(&format!("reads {}", ignore.display())),
+            "{present}"
+        );
+        assert!(present.contains(".complyignore"), "{present}");
     }
 
     #[test]

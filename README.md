@@ -178,7 +178,9 @@ comply            # lint the current directory
 comply ./src      # lint a specific path
 ```
 
-comply exits `0` when clean, `1` when it finds violations, and `2` if it crashes.
+comply exits `0` when clean and `1` when it finds violations.
+`2` means it could not judge: a required tool is missing or unusable, a git scope left a file unanalyzed, or comply crashed.
+The message names the cause and its remedy.
 
 ## Usage
 

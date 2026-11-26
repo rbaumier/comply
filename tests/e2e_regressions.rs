@@ -3779,7 +3779,11 @@ fn assert_unanalyzed_batch(lint: &str, envs: &[(&str, &std::path::Path)], why: &
 fn a_batch_oxlint_ran_past_its_budget_on_is_unanalyzed() {
     let hang = "case \"$*\" in\n*--type-aware*) echo '{\"diagnostics\": []}';;\n\
                 *) exec sleep 120;;\nesac";
-    assert_unanalyzed_batch(hang, &[], &["oxlint ran past 45s"]);
+    assert_unanalyzed_batch(
+        hang,
+        &[],
+        &["oxlint ran past 45s", "rerun", ".complyignore"],
+    );
 }
 
 // tsgolint panics on the batch; no diagnostic comes back.
@@ -3815,7 +3819,12 @@ fn a_batch_tsgolint_panicked_on_is_unanalyzed() {
 #[test]
 fn a_batch_oxlint_left_out_is_unanalyzed() {
     let none = "echo '{\"diagnostics\": [], \"number_of_files\": 0}'";
-    assert_unanalyzed_batch(none, &[], &["oxlint linted only 0 of the 1 file(s)"]);
+    let why = [
+        "oxlint linted only 0 of the 1 file(s)",
+        "/.eslintignore",
+        ".complyignore",
+    ];
+    assert_unanalyzed_batch(none, &[], &why);
 }
 
 // `.eslintignore` drops `gen.ts` and `out/` from a full scan.

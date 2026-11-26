@@ -125,7 +125,7 @@ pub fn lint_files(
             if is_partial {
                 return Err(crate::toolchain::ToolchainError::Unusable { what }.into());
             }
-            eprintln!("comply: {what}");
+            eprintln!("comply: {what}.");
         }
         let packages = if is_partial {
             crate::runner_helpers::cargo_package_args(&root, &files_in_ws)
@@ -602,7 +602,7 @@ fn outside_message(workspace: &Path, outside: &BTreeMap<String, Vec<String>>) ->
         .collect();
     format!(
         "cargo clippy and cargo-shear did not analyze {} crate(s) outside the cargo \
-         workspace {}. Make them members, or give them a [workspace] table.\n{}",
+         workspace {}:\n{}\nMake them members, or give them a [workspace] table",
         outside.len(),
         workspace.display(),
         crates.join("\n")
@@ -675,7 +675,7 @@ fn compiled_sources(
     members: &FxHashSet<PathBuf>,
     stdout: &[u8],
 ) -> Result<FxHashSet<PathBuf>> {
-    let dep_info: BTreeSet<PathBuf> = envelopes(stdout)
+    let units = envelopes(stdout)
         .filter(|envelope| envelope.reason == "compiler-artifact")
         .filter(|envelope| {
             envelope.manifest_path.as_ref().is_some_and(|manifest| {
@@ -683,18 +683,22 @@ fn compiled_sources(
             })
         })
         .flat_map(|envelope| envelope.filenames)
-        .flat_map(|artifact| dep_info_files(Path::new(&artifact)))
-        .take(DEP_INFO_FILES + 1)
-        .collect();
-    if dep_info.len() > DEP_INFO_FILES {
-        return Err(crate::toolchain::ToolchainError::Unusable {
-            what: format!(
-                "cargo clippy wrote more than {DEP_INFO_FILES} dep-info files in {}; \
-                 comply could not tell which Rust files it compiled",
-                workspace.display()
-            ),
+        .flat_map(|artifact| dep_info_files(Path::new(&artifact)));
+    // Distinct files count: a unit's artifacts share one.
+    let mut dep_info = BTreeSet::new();
+    for file in units {
+        dep_info.insert(file);
+        if dep_info.len() > DEP_INFO_FILES {
+            return Err(crate::toolchain::ToolchainError::Unusable {
+                what: format!(
+                    "the clippy pass in {} names more than {DEP_INFO_FILES} dep-info files, \
+                     so comply could not tell which Rust files it compiled. \
+                     Commit the packages in smaller sets, or exclude some from the cargo workspace",
+                    workspace.display()
+                ),
+            }
+            .into());
         }
-        .into());
     }
     let mut sources = FxHashSet::default();
     for file in dep_info {
@@ -731,8 +735,11 @@ fn dep_info_sources(workspace: &Path, file: &Path) -> Result<Vec<PathBuf>> {
     if size > DEP_INFO_BYTES {
         return Err(crate::toolchain::ToolchainError::Unusable {
             what: format!(
-                "the dep-info file {} holds {size} bytes, past the {DEP_INFO_BYTES} comply reads",
-                file.display()
+                "the dep-info file {} holds {size} bytes, past the {} MiB comply reads. \
+                 If it is stale, run `cargo clean -p` on its package; \
+                 a crate that embeds a whole tree can leave the cargo workspace",
+                file.display(),
+                DEP_INFO_BYTES / (1024 * 1024)
             ),
         }
         .into());
@@ -969,6 +976,97 @@ mod tests {
         }
     }
 
+    /// One `compiler-artifact` line per artifact, from `manifest`.
+    fn artifact_lines(manifest: &Path, artifacts: &[PathBuf]) -> Vec<u8> {
+        artifacts
+            .iter()
+            .map(|artifact| {
+                let line = serde_json::json!({
+                    "reason": "compiler-artifact",
+                    "manifest_path": manifest,
+                    "filenames": [artifact],
+                });
+                format!("{line}\n")
+            })
+            .collect::<String>()
+            .into_bytes()
+    }
+
+    #[test]
+    fn compiled_sources_reads_only_the_own_dep_info_of_member_units() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ws = canonicalize_or_self(dir.path());
+        let manifest = ws.join("Cargo.toml");
+        let examples = ws.join("target/debug/examples");
+        std::fs::create_dir_all(&examples).unwrap();
+        // Flat layout: a stale example's dep-info shares the directory.
+        std::fs::write(examples.join("ex-1.d"), "examples/ex/main.rs:\n").unwrap();
+        std::fs::write(examples.join("gone-9.d"), "examples/gone/helper.rs:\n").unwrap();
+        let mut stdout = artifact_lines(&manifest, &[examples.join("ex-1")]);
+        let other = ws.join("vendor/Cargo.toml");
+        stdout.extend(artifact_lines(&other, &[examples.join("gone-9")]));
+        let members = FxHashSet::from_iter([manifest]);
+        let sources = compiled_sources(&ws, &members, &stdout).unwrap();
+        let main = ws.join("examples/ex/main.rs");
+        assert_eq!(sources, FxHashSet::from_iter([main]));
+    }
+
+    #[test]
+    fn compiled_sources_counts_distinct_dep_info_files_up_to_its_bound() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ws = canonicalize_or_self(dir.path());
+        let manifest = ws.join("Cargo.toml");
+        std::fs::create_dir_all(ws.join("deps")).unwrap();
+        let over = DEP_INFO_FILES.saturating_add(1);
+        let units: Vec<PathBuf> = (0..over).map(|n| ws.join(format!("deps/u-{n}"))).collect();
+        for unit in &units {
+            std::fs::write(unit.with_extension("d"), "").unwrap();
+        }
+        let members = FxHashSet::from_iter([manifest.clone()]);
+        let run =
+            |units: &[PathBuf]| compiled_sources(&ws, &members, &artifact_lines(&manifest, units));
+        assert!(run(&units[..DEP_INFO_FILES.saturating_sub(1)]).is_ok());
+        assert!(run(&units[..DEP_INFO_FILES]).is_ok());
+        let error = run(&units).expect_err("one dep-info file past the bound");
+        assert!(error.to_string().contains("smaller sets"), "{error}");
+        // A unit named twice counts once, before the bound applies.
+        let first = &units[..1];
+        let twice: Vec<PathBuf> = first
+            .iter()
+            .chain(&units[..DEP_INFO_FILES])
+            .cloned()
+            .collect();
+        assert!(run(&twice).is_ok());
+        let twice_over: Vec<PathBuf> = first.iter().chain(&units).cloned().collect();
+        assert!(run(&twice_over).is_err());
+    }
+
+    #[test]
+    fn dep_info_sources_lists_the_path_lines_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ws = canonicalize_or_self(dir.path());
+        let file = ws.join("ex-1.d");
+        let dep_info = "/t/ex-1: src/main.rs src/a\\ b.rs\n\nsrc/main.rs:\nsrc/a\\ b.rs:\n\n\
+                        # env-dep:X=1\n";
+        std::fs::write(&file, dep_info).unwrap();
+        let sources = dep_info_sources(&ws, &file).unwrap();
+        assert_eq!(sources, [ws.join("src/main.rs"), ws.join("src/a b.rs")]);
+    }
+
+    #[test]
+    fn dep_info_sources_reads_files_up_to_its_bound() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("big.d");
+        let sized = |len: u64| {
+            std::fs::File::create(&file).unwrap().set_len(len).unwrap();
+            dep_info_sources(dir.path(), &file)
+        };
+        assert!(sized(DEP_INFO_BYTES.saturating_sub(1)).is_ok());
+        assert!(sized(DEP_INFO_BYTES).is_ok());
+        let error = sized(DEP_INFO_BYTES.saturating_add(1)).expect_err("one byte past it");
+        assert!(error.to_string().contains("16 MiB"), "{error}");
+    }
+
     #[test]
     fn only_a_denied_unused_dependency_explains_a_cargo_failure() {
         let lint = "error: unused dependency `idle`\n  --> Cargo.toml:9:1\n   |\n   \
@@ -1114,6 +1212,7 @@ mod tests {
         assert_eq!(outside, BTreeMap::from([("x".to_owned(), x.to_vec())]));
         let message = outside_message(&root, &outside);
         assert!(message.contains("1 crate(s) outside"), "{message}");
+        assert!(message.ends_with("[workspace] table"), "{message}");
         assert!(
             message.contains(&format!("x: {}, {}", x[0], x[1])),
             "{message}"

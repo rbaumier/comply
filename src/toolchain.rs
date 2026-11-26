@@ -39,25 +39,23 @@ pub fn report_unanalyzed(
     files: &[&crate::files::SourceFile],
     unanalyzed: Unanalyzed,
 ) -> anyhow::Result<()> {
-    let names: Vec<String> = files
+    let names: String = files
         .iter()
         .take(NAMED_FILES)
-        .map(|file| file.path.display().to_string())
+        .map(|file| format!("\n  {}", file.path.display()))
         .collect();
     let more = files.len().saturating_sub(NAMED_FILES);
     let rest = if more == 0 {
         String::new()
     } else {
-        format!(" and {more} more")
+        format!("\n  and {more} more")
     };
-    let what = format!(
-        "{why}. These file(s) were not analyzed: {}{rest}",
-        names.join(", ")
-    );
+    // Paths first, one per line; the reason takes the dot.
+    let what = format!("these file(s) were not analyzed:{names}{rest}\n{why}");
     match unanalyzed {
         Unanalyzed::Refuse => Err(ToolchainError::Unusable { what }.into()),
         Unanalyzed::Note => {
-            eprintln!("comply: {what}");
+            eprintln!("comply: {what}.");
             Ok(())
         }
     }
@@ -85,5 +83,52 @@ mod tests {
             what: "`node` was not found".to_owned(),
         };
         assert_eq!(err.to_string(), "`node` was not found.");
+    }
+
+    /// The message `report_unanalyzed` refuses `count` files with.
+    fn refusal(count: usize) -> String {
+        let files: Vec<crate::files::SourceFile> = (1..=count)
+            .map(|n| crate::files::SourceFile {
+                path: format!("src/f{n}.rs").into(),
+                language: crate::files::Language::Rust,
+            })
+            .collect();
+        let refs: Vec<&crate::files::SourceFile> = files.iter().collect();
+        let Err(error) = report_unanalyzed("a pass failed", &refs, Unanalyzed::Refuse) else {
+            panic!("{count} file(s) passed");
+        };
+        error.to_string()
+    }
+
+    #[test]
+    fn a_refusal_names_up_to_twenty_files() {
+        let bounds = [
+            NAMED_FILES.saturating_sub(1),
+            NAMED_FILES,
+            NAMED_FILES.saturating_add(1),
+        ];
+        for count in bounds {
+            let message = refusal(count);
+            let named = message
+                .lines()
+                .filter(|line| line.starts_with("  src/"))
+                .count();
+            assert_eq!(named, count.min(NAMED_FILES), "{message}");
+            assert_eq!(
+                message.contains("and 1 more"),
+                count > NAMED_FILES,
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_ends_on_its_reason_not_on_a_path() {
+        let message = refusal(2);
+        assert!(message.ends_with("\na pass failed."), "{message}");
+        assert!(
+            message.lines().any(|line| line == "  src/f2.rs"),
+            "{message}"
+        );
     }
 }
