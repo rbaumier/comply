@@ -2179,15 +2179,18 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
     // Whether `node` itself or the package is what's absent decides which
     // sentence comply prints; both are toolchain gaps and both must exit 2
     // through the actionable path.
-    // NODE_PATH could resolve typescript-go: keep the gap genuine.
+    // NODE_PATH or a machine-wide install could answer the lookup.
+    // Both are cleared: the gap stays genuine.
     common::comply()
         .env_remove("NODE_PATH")
+        .env("COMPLY_TYPESCRIPT_GO_ROOTS", "")
         .arg(dir.path())
         .assert()
         .code(2)
         .stderr(predicate::str::contains(
             "comply: type-aware analysis needs",
         ))
+        .stderr(predicate::str::contains("no global node_modules was found"))
         .stderr(predicate::str::contains("crashed unexpectedly").not())
         .stderr(predicate::str::contains("github.com/rbaumier/comply/issues").not());
 }
@@ -2210,10 +2213,17 @@ fn typeof_findings(tree: &[(&str, &str)]) -> (Option<i32>, String, String) {
         .args(["rules", "ts-no-typeof-operator", "."])
         .output()
         .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    // A missing checker fails the test, never skips it.
+    assert!(
+        !stderr.contains("needs the typescript-go API"),
+        "this test needs typescript-go: install @typescript/native-preview globally, \
+         or name its node_modules in COMPLY_TYPESCRIPT_GO_ROOTS.\n{stderr}"
+    );
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
+        stderr,
     )
 }
 
@@ -2309,6 +2319,70 @@ fn type_aware_refuses_a_file_no_program_holds() {
     assert_eq!(code, Some(2), "{out}{err}");
     assert!(err.contains("y.ts"), "{err}");
     assert!(!err.contains("x.ts"), "{err}");
+}
+
+/// Write a typescript-go stand-in under `node_modules`.
+/// It resolves as `<pkg>/unstable/sync` and `<pkg>/unstable/ast`.
+/// Its API refuses to start, on purpose.
+/// So a run that reaches it ends on `api-init-failed`.
+fn write_typescript_go_stub(node_modules: &std::path::Path, pkg: &str) {
+    let dir = node_modules.join(pkg);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("package.json"),
+        format!(
+            "{{\"name\":\"{pkg}\",\"version\":\"7.0.0\",\"exports\":{{\
+             \"./unstable/sync\":\"./sync.mjs\",\"./unstable/ast\":\"./ast.mjs\"}}}}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("sync.mjs"),
+        "export const TypeFlags = {};\n\
+         export class API {\n\
+         constructor() { throw new Error(\"stub typescript-go\"); }\n\
+         }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("ast.mjs"),
+        "export const SyntaxKind = {};\n\
+         export const computeLineStarts = () => [0];\n\
+         export const getTokenPosOfNode = () => 0;\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn type_aware_falls_back_to_a_machine_wide_typescript_go() {
+    // A repo on TypeScript 5 carries no typescript-go.
+    // A per-repo install is not the only kind.
+    // Refusing such repos earned each a symlink.
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
+    fs::write(
+        dir.path().join("tsconfig.json"),
+        "{\"compilerOptions\":{\"strict\":true},\"include\":[\"src\"]}\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/index.ts"), "export const one = 1;\n").unwrap();
+
+    // Node resolves from a `node_modules` directory.
+    // That is what every route yields.
+    let global = TempDir::new().unwrap();
+    let node_modules = global.path().join("node_modules");
+    write_typescript_go_stub(&node_modules, "@typescript/native-preview");
+
+    common::comply()
+        .env("COMPLY_TYPESCRIPT_GO_ROOTS", &node_modules)
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        // Reached from outside the project.
+        // No longer refused for being absent there.
+        .stderr(predicate::str::contains("api-init-failed"))
+        .stderr(predicate::str::contains("could not be resolved").not());
 }
 
 /// Enables the two opt-in French copy rules.
@@ -3735,6 +3809,7 @@ fn assert_unanalyzed_batch(lint: &str, envs: &[(&str, &std::path::Path)], why: &
     .unwrap();
     fs::write(root.join("src/a.ts"), "export const A = 1;\n").unwrap();
     fs::write(root.join("tsconfig.json"), "{}\n").unwrap();
+    common::without_type_aware_rules(root);
     git(root, &["init", "-q"]);
     git(root, &["add", "-A"]);
     let bin = stub_oxlint(lint);
@@ -3844,6 +3919,7 @@ fn a_git_scope_drops_the_files_eslintignore_drops() {
     fs::write(root.join(".eslintignore"), "gen.ts\nout/\n").unwrap();
     fs::write(root.join("tsconfig.json"), "{}\n").unwrap();
     fs::write(root.join("gen.ts"), flawed).unwrap();
+    common::without_type_aware_rules(root);
     git(root, &["init", "-q"]);
     git(root, &["add", "-A"]);
     let scan = |args: &[&str]| {

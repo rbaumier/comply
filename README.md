@@ -139,7 +139,7 @@ Run `comply explain <rule-id>` for the full rationale behind any of these, or br
 - **Interactive TUI** — browse and triage diagnostics in your terminal.
 - **Editor integration** — built-in Language Server (LSP) for inline diagnostics as you type.
 - **Inline suppressions with mandatory justification** — `// comply-ignore:` requires a reason, so silenced rules stay accountable. Your project's own `eslint-disable-line` directives are honored too.
-- **Type-aware analysis** — rules that query a real TypeScript checker for deeper correctness checks; always on and requires a TypeScript toolchain (Node + `typescript` >= 7, `@typescript/native` or `@typescript/native-preview`).
+- **Type-aware analysis** — rules that query a real TypeScript checker for deeper correctness checks; always on and requires a TypeScript toolchain (Node + `typescript` >= 7, `@typescript/native` or `@typescript/native-preview`). The checker is taken from the project, or failing that from a machine-wide install (`npm root -g`, a volta image, the tree a `tsgo` on your `PATH` lives in); set `COMPLY_TYPESCRIPT_GO_ROOTS` to the `node_modules` directories to use instead, or to an empty value to keep resolution strictly project-local.
 
 ## Getting started
 

@@ -7,7 +7,8 @@
 // rules against it, and writes a single JSON response on stdout.
 //
 // Request:  { "tsconfig": string, "files": string[], "rules": string[],
-//             "config"?: { [ruleId: string]: { [key: string]: number } } }
+//             "config"?: { [ruleId: string]: { [key: string]: number } },
+//             "globalRoots"?: string[] }
 // Response: { "diagnostics": Diag[], "error"?: string, "files"?: string[] }
 //   Diag:   { "file": string, "line": number, "column": number,
 //             "rule": string, "message": string }
@@ -17,10 +18,14 @@
 // first, which only typescript >= 7 exports, then `@typescript/native/unstable/*`
 // (the alias Microsoft documents for running TypeScript 7 beside
 // `typescript` 6), then the frozen `@typescript/native-preview/unstable/*`.
-// When none resolves, the sidecar
-// yields { error: "package-not-found" }, which comply reports as a
-// toolchain gap — it names the install command and aborts the run rather than
-// under-report the type-aware rules.
+// `globalRoots` hold a machine-wide install, if comply found one.
+// They are tried after the project, never before it.
+// So the project always decides its own TypeScript.
+// When nothing resolves anywhere, the sidecar yields
+// { error: "package-not-found" }.
+// comply reports that as a toolchain gap.
+// It names the install command and aborts the run.
+// Under-reporting the type-aware rules is not an option.
 
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -45,27 +50,32 @@ async function readStdin() {
 }
 
 const req = JSON.parse(await readStdin());
-const { tsconfig, files = [], rules = [], config = {} } = req;
+const { tsconfig, files = [], rules = [], config = {}, globalRoots = [] } = req;
 const enabled = new Set(rules);
 
 // Resolve the typescript-go API from the project's node_modules.
-const require = createRequire(path.join(process.cwd(), "comply-typeaware-resolver.js"));
+// Then from each root of a machine-wide install.
 let apiMod, ast, TypeFlags;
-for (const pkg of [
-  "typescript",
-  "@typescript/native",
-  "@typescript/native-preview",
-]) {
-  try {
-    const apiPath = require.resolve(`${pkg}/unstable/sync`);
-    const astPath = require.resolve(`${pkg}/unstable/ast`);
-    apiMod = await import(pathToFileURL(apiPath).href);
-    ast = await import(pathToFileURL(astPath).href);
-    TypeFlags = apiMod.TypeFlags;
-    break;
-  } catch {
-    apiMod = undefined; // typescript 5 or 6 has no such subpath: try the next one.
+for (const dir of [process.cwd(), ...globalRoots]) {
+  const require = createRequire(path.join(dir, "comply-typeaware-resolver.js"));
+  for (const pkg of [
+    "typescript",
+    "@typescript/native",
+    "@typescript/native-preview",
+  ]) {
+    // comply-ignore: no-try-statements — require.resolve reports absence by throwing.
+    try {
+      const apiPath = require.resolve(`${pkg}/unstable/sync`);
+      const astPath = require.resolve(`${pkg}/unstable/ast`);
+      apiMod = await import(pathToFileURL(apiPath).href);
+      ast = await import(pathToFileURL(astPath).href);
+      TypeFlags = apiMod.TypeFlags;
+      break;
+    } catch {
+      apiMod = undefined; // typescript 5 or 6 has no such subpath: try the next one.
+    }
   }
+  if (apiMod) break;
 }
 if (!apiMod) fail("package-not-found");
 

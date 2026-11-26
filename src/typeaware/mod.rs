@@ -8,6 +8,13 @@
 //! the tsconfig + file list + enabled rule ids, the sidecar builds the program once and
 //! returns the violations as JSON.
 //!
+//! The checker is resolved from the project first.
+//! A machine-wide install answers next, in three layouts.
+//! npm's global root, then volta's images, then `tsgo`'s own tree.
+//! `$COMPLY_TYPESCRIPT_GO_ROOTS` names those directories instead.
+//! A repo on TypeScript 5 is not a missing toolchain.
+//! Refusing it earns each repo a symlink.
+//!
 //! Invoked when at least one rule needing that program is still enabled for
 //! the project (`main::type_aware_rules_active`). Building the program
 //! dominates the run, so a project that disables them all skips the phase
@@ -16,7 +23,7 @@
 //! Failure handling splits by cause, because silently skipping the phase makes
 //! a clean exit indistinguishable from "the toolchain wasn't there". A
 //! *toolchain* failure — `node` absent, none of `typescript` >= 7,
-//! `@typescript/native` or `@typescript/native-preview` resolvable, the checker API failing to
+//! `@typescript/native` or `@typescript/native-preview` resolvable anywhere, the checker API failing to
 //! initialize, or the program snapshot failing — is a hard `ToolchainError`:
 //! non-zero exit, and the remedy comply knows. A missing tsconfig (nothing to type-check) and a sidecar timeout (a
 //! hang, not a toolchain gap) stay graceful: a one-line stderr notice and no
@@ -25,6 +32,7 @@
 //! A file no TypeScript program holds is refused.
 //! Skipping it would pass code nothing type-checked.
 
+use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -47,6 +55,35 @@ const SIDECAR_SRC: &str = include_str!("sidecar.mjs");
 /// Generous ceiling — type-aware analysis builds the full TS program, which is
 /// the expensive part. Anything past this is treated as a hang, not a result.
 const SIDECAR_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The one sidecar `error` comply can still act on.
+/// Nothing it was asked to resolve was there.
+const PACKAGE_NOT_FOUND: &str = "package-not-found";
+
+/// The packages that ship the typescript-go API.
+/// Ordered as the sidecar prefers them.
+/// Mirrored here: volta keys one image per package name.
+const TYPESCRIPT_GO_PACKAGES: [&str; 3] = [
+    "typescript",
+    "@typescript/native",
+    "@typescript/native-preview",
+];
+
+/// How long `npm root -g` gets to answer.
+/// npm's startup dominates, and a loaded machine is slow.
+/// A package manager that hangs must not hold the run.
+const NPM_ROOT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cap on what `npm root -g` may say.
+/// The answer is one path on one line.
+/// A chattier npm is read up to here, no further.
+const NPM_ROOT_OUTPUT_CAP: u64 = 4096;
+
+/// Names the `node_modules` directories to search, OS path separator.
+/// It replaces the discovered ones.
+/// An unknown layout is then one variable away.
+/// An empty value keeps resolution project-local.
+const TYPESCRIPT_GO_ROOTS_ENV: &str = "COMPLY_TYPESCRIPT_GO_ROOTS";
 
 #[derive(Deserialize)]
 struct SidecarResponse {
@@ -131,18 +168,40 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         "min_properties",
         crate::files::Language::TypeScript,
     );
-    let request = serde_json::json!({
-        "tsconfig": tsconfig.to_string_lossy(),
-        "files": abs_files,
-        "rules": rule_ids,
-        "config": { "no-duplicate-type-definition": { "min_properties": min_dup_properties } },
-    })
-    .to_string();
-
-    let response = match run_sidecar(&project_dir, &request)? {
-        Some(r) => r,
-        None => return Ok(vec![]),
+    let build_request = |global_roots: &[PathBuf]| {
+        let roots: Vec<String> = global_roots
+            .iter()
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect();
+        serde_json::json!({
+            "tsconfig": tsconfig.to_string_lossy(),
+            "files": abs_files,
+            "rules": rule_ids,
+            "config": { "no-duplicate-type-definition": { "min_properties": min_dup_properties } },
+            "globalRoots": roots,
+        })
+        .to_string()
     };
+
+    let Some(mut response) = run_sidecar(&project_dir, &build_request(&[]))? else {
+        return Ok(vec![]);
+    };
+
+    // The project is asked alone first.
+    // Resolution fails before any program is built.
+    // So the fallback only costs a second sidecar start.
+    if response.error.as_deref() == Some(PACKAGE_NOT_FOUND) {
+        let global_roots = global_module_roots();
+        if !global_roots.is_empty() {
+            let Some(retried) = run_sidecar(&project_dir, &build_request(&global_roots))? else {
+                return Ok(vec![]);
+            };
+            response = retried;
+        }
+        if response.error.as_deref() == Some(PACKAGE_NOT_FOUND) {
+            return Err(package_not_found(&global_roots).into());
+        }
+    }
 
     match response.error.as_deref() {
         Some(UNPLACED) => return Err(unplaced_error(&response.files, &canon_to_orig).into()),
@@ -166,6 +225,106 @@ fn node_available() -> bool {
             .output()
             .is_ok_and(|o| o.status.success())
     })
+}
+
+/// Where a machine-wide typescript-go can sit, in search order.
+/// Three layouts, because none of them sees the others.
+/// The refusal names the result of this search.
+fn global_module_roots() -> Vec<PathBuf> {
+    if let Some(declared) = std::env::var_os(TYPESCRIPT_GO_ROOTS_ENV) {
+        return existing_unique(std::env::split_paths(&declared));
+    }
+    // nvm, fnm and pnpm have no fixed path.
+    // Their `tsgo` tells.
+    let volta = volta_home().map_or_else(Vec::new, |home| volta_module_roots(&home));
+    let tsgo = std::env::var_os("PATH").and_then(|path| tsgo_module_root(&path));
+    existing_unique(npm_global_root().into_iter().chain(volta).chain(tsgo))
+}
+
+/// The candidates that exist, in order, each listed once.
+/// A global npm install can be found twice.
+/// An absent directory is dropped, never named.
+fn existing_unique(candidates: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for dir in candidates {
+        if dir.is_dir() && !roots.contains(&dir) {
+            roots.push(dir);
+        }
+    }
+    roots
+}
+
+/// npm's own global `node_modules`.
+/// `None` when npm is absent, fails, or is too slow.
+/// Only npm knows its prefix, so npm is asked.
+fn npm_global_root() -> Option<PathBuf> {
+    let mut child = Command::new("npm")
+        .args(["root", "-g"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let Ok(Some(status)) = child.wait_timeout(NPM_ROOT_TIMEOUT) else {
+        return give_up(child);
+    };
+    if !status.success() {
+        return give_up(child);
+    }
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()?
+        .take(NPM_ROOT_OUTPUT_CAP)
+        .read_to_string(&mut stdout)
+        .ok()?;
+    let root = stdout.lines().next()?.trim();
+    (!root.is_empty()).then(|| PathBuf::from(root))
+}
+
+/// Stop a child that outstayed its deadline.
+/// A failed kill or wait means the OS was first.
+/// That is the same outcome, so neither is recoverable.
+fn give_up(mut child: std::process::Child) -> Option<PathBuf> {
+    child.kill().ok();
+    child.wait().ok();
+    None
+}
+
+/// Volta's home: `$VOLTA_HOME`, else `~/.volta`.
+/// Read the way volta's own tools read it.
+fn volta_home() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+        return Some(PathBuf::from(home));
+    }
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(".volta"))
+}
+
+/// Volta's candidate roots under `volta_home`.
+/// It installs each global package in its own image.
+/// `npm root -g` never lists them.
+/// So each name is a candidate.
+fn volta_module_roots(volta_home: &Path) -> Vec<PathBuf> {
+    let packages = volta_home.join("tools").join("image").join("packages");
+    TYPESCRIPT_GO_PACKAGES
+        .iter()
+        .map(|pkg| packages.join(pkg).join("lib").join("node_modules"))
+        .collect()
+}
+
+/// The `node_modules` a `tsgo` in `path` was installed into.
+/// A global bin is a symlink into its own package.
+/// Volta's shim is not, so it yields `None`.
+fn tsgo_module_root(path: &OsStr) -> Option<PathBuf> {
+    let binary = std::env::split_paths(path)
+        .map(|dir| dir.join("tsgo"))
+        .find(|candidate| candidate.is_file())?;
+    binary
+        .canonicalize()
+        .ok()?
+        .ancestors()
+        .find(|dir| dir.file_name() == Some(OsStr::new("node_modules")))
+        .map(Path::to_path_buf)
 }
 
 /// The nearest `tsconfig.json` above the first file that has one.
@@ -247,27 +406,39 @@ fn run_sidecar(project_dir: &Path, request: &str) -> Result<Option<SidecarRespon
     Ok(Some(response))
 }
 
-/// Build the hard error for a sidecar-reported environment-config failure. The
-/// sidecar only reports `error` for `package-not-found`, `api-init-failed: …`,
-/// and `snapshot-failed: …` — all toolchain gaps that must fail loud so a clean
-/// exit is never confused with type-aware not having run. A missing package has
-/// one install command; an API that refuses to start does not.
+/// The hard error for a sidecar-reported toolchain failure.
+/// It covers `api-init-failed: …` and `snapshot-failed: …`.
+/// No install command fixes either, so none is named.
+/// `package-not-found` is answered by `package_not_found` instead.
 fn sidecar_error(err: &str) -> ToolchainError {
-    if err == "package-not-found" {
-        ToolchainError::Missing {
-            what: "type-aware analysis needs the typescript-go API, but \
-                   none of typescript >= 7, @typescript/native or \
-                   @typescript/native-preview could be resolved from the project"
-                .to_owned(),
-            install_cmd: "npm install --save-dev typescript@^7".to_owned(),
-        }
+    ToolchainError::Unusable {
+        what: format!(
+            "the type-aware sidecar failed to initialize the TypeScript program ({err}) — fix \
+             the TypeScript toolchain in this project"
+        ),
+    }
+}
+
+/// The refusal when no typescript-go was resolvable at all.
+/// `roots` are the global directories tried after the project.
+/// Naming them answers where comply looked.
+fn package_not_found(roots: &[PathBuf]) -> ToolchainError {
+    let searched = if roots.is_empty() {
+        ", and no global node_modules was found to fall back on".to_owned()
     } else {
-        ToolchainError::Unusable {
-            what: format!(
-                "the type-aware sidecar failed to initialize the TypeScript program ({err}) — fix \
-                 the TypeScript toolchain in this project"
-            ),
-        }
+        let named: Vec<String> = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect();
+        format!(", nor from any global install ({})", named.join(", "))
+    };
+    ToolchainError::Missing {
+        what: format!(
+            "type-aware analysis needs the typescript-go API, but none of typescript >= 7, \
+             @typescript/native or @typescript/native-preview could be resolved from the \
+             project{searched}"
+        ),
+        install_cmd: "npm install --save-dev typescript@^7".to_owned(),
     }
 }
 
@@ -446,11 +617,12 @@ mod tests {
 
     // ── fail-loud sidecar errors (#5941, #8109) ─────────────────────────────
 
-    // A `package-not-found` cause is a hard error carrying the exact install
-    // command, so `main` renders an instruction rather than a crash banner.
+    // Nothing resolvable anywhere is a hard error.
+    // It carries the install command, so `main` instructs.
+    // A crash banner would be the wrong answer.
     #[test]
-    fn sidecar_error_package_not_found_is_installable() {
-        let err = sidecar_error("package-not-found");
+    fn package_not_found_is_installable() {
+        let err = package_not_found(&[]);
         assert!(
             matches!(&err, ToolchainError::Missing { install_cmd, .. }
                 if install_cmd == "npm install --save-dev typescript@^7"),
@@ -462,6 +634,93 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().contains("@typescript/native or"), "{err}");
+    }
+
+    // Only the refusal can say where comply looked.
+    // An unseen install is a question about the search.
+    // A refusal that cannot answer it earns a symlink instead.
+    #[test]
+    fn package_not_found_names_the_global_roots_it_tried() {
+        let tried = [
+            PathBuf::from("/opt/npm/lib/node_modules"),
+            PathBuf::from("/home/u/.volta/tools/image/packages/typescript/lib/node_modules"),
+        ];
+        let named = package_not_found(&tried).to_string();
+        for root in &tried {
+            assert!(named.contains(&root.display().to_string()), "{named}");
+        }
+
+        let nothing = package_not_found(&[]).to_string();
+        assert!(
+            nothing.contains("no global node_modules was found"),
+            "{nothing}"
+        );
+    }
+
+    // Volta keys one image directory per package name.
+    // So one candidate per name, in the sidecar's order.
+    #[test]
+    fn volta_candidates_cover_every_typescript_go_package() {
+        let roots = volta_module_roots(Path::new("/home/u/.volta"));
+        assert_eq!(roots.len(), TYPESCRIPT_GO_PACKAGES.len());
+        for (root, pkg) in roots.iter().zip(TYPESCRIPT_GO_PACKAGES) {
+            assert_eq!(
+                root,
+                &PathBuf::from(format!(
+                    "/home/u/.volta/tools/image/packages/{pkg}/lib/node_modules"
+                )),
+            );
+        }
+    }
+
+    // A global bin is a symlink into its package.
+    // Node then resolves from the `node_modules` above it.
+    #[test]
+    fn tsgo_on_path_yields_the_node_modules_it_was_installed_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let installed = dir
+            .path()
+            .join("lib/node_modules/@typescript/native-preview/bin");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("tsgo"), "#!/bin/sh\n").unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(installed.join("tsgo"), bin.join("tsgo")).unwrap();
+
+        let found = tsgo_module_root(bin.as_os_str()).expect("tsgo on PATH must resolve");
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            dir.path().join("lib/node_modules").canonicalize().unwrap(),
+        );
+    }
+
+    // Volta's shim resolves to `volta-shim`, inside no package.
+    // No ancestor means no root, rather than a wrong guess.
+    #[test]
+    fn a_tsgo_outside_any_node_modules_yields_no_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tsgo"), "#!/bin/sh\n").unwrap();
+        assert!(tsgo_module_root(dir.path().as_os_str()).is_none());
+    }
+
+    // What the refusal names must be what was searched.
+    // An absent candidate is dropped.
+    // A directory two routes agree on is tried once.
+    #[test]
+    fn existing_unique_keeps_order_drops_the_absent_and_never_repeats() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+
+        let kept = existing_unique(vec![
+            first.clone(),
+            dir.path().join("absent"),
+            second.clone(),
+            first.clone(),
+        ]);
+        assert_eq!(kept, vec![first, second]);
     }
 
     // An api-init / snapshot cause is a hard error too, but no single command
