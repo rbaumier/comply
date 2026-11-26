@@ -14,7 +14,8 @@ pub const META: RuleMeta = RuleMeta {
                   secret, or api_key must not be literal strings — they leak into logs, \
                   forks and git history.",
     remediation: "Reference the value via `${{ secrets.<NAME> }}` from repository or \
-                  environment secrets.",
+                  environment secrets (GitHub), or move it to a masked CI/CD variable \
+                  (GitLab).",
     severity: Severity::Error,
     doc_url: None,
     categories: &["ci-cd"],
