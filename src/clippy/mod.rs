@@ -75,6 +75,7 @@ pub fn is_available() -> bool {
 /// `files`; a plain path scan lints the whole workspace.
 ///
 /// A crate outside the workspace members, or a loose file, is named.
+/// So is a file no compiled target reads.
 /// A git file scope refuses it; a path scan notes it.
 pub fn lint_files(
     files: &[&SourceFile],
@@ -136,12 +137,33 @@ pub fn lint_files(
         let mut output = run(Pass::Lint)?;
         ensure_config_accepted(&clippy_conf, &output.stdout)?;
         ensure_compiled(&root, &output)?;
+        let mut compiled = compiled_sources(&root, &members, &output.stdout)?;
         if denied_lints(&output.stdout).next().is_some() {
             ensure_compiled(&root, &run(Pass::Check)?)?;
             let capped = run(Pass::Capped)?;
             ensure_compiled(&root, &capped)?;
             ensure_packages_linted(&root, &files_in_ws, &output.stdout, &capped.stdout)?;
+            compiled.extend(compiled_sources(&root, &members, &capped.stdout)?);
             output = capped;
+        }
+        let uncompiled: Vec<&SourceFile> = files_in_ws
+            .iter()
+            .copied()
+            .filter(|file| !compiled.contains(&canonicalize_or_self(&file.path)))
+            .collect();
+        if !uncompiled.is_empty() {
+            let why = format!(
+                "no target cargo clippy compiled in {} reads {} Rust file(s); \
+                 a `mod` item brings a file into its crate",
+                root.display(),
+                uncompiled.len()
+            );
+            let unanalyzed = if is_partial {
+                crate::toolchain::Unanalyzed::Refuse
+            } else {
+                crate::toolchain::Unanalyzed::Note
+            };
+            crate::toolchain::report_unanalyzed(&why, &uncompiled, unanalyzed)?;
         }
         diagnostics.extend(parse_clippy_jsonl(
             &output.stdout,
@@ -560,6 +582,104 @@ fn linted_manifests(stdout: &[u8]) -> FxHashSet<PathBuf> {
         .filter_map(|envelope| envelope.manifest_path)
         .map(|manifest| canonicalize_or_self(Path::new(&manifest)))
         .collect()
+}
+
+/// How many dep-info files comply reads for one clippy pass.
+const DEP_INFO_FILES: usize = 10_000;
+/// The largest dep-info file comply reads.
+const DEP_INFO_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The sources rustc read for `members`, from the pass's dep-info.
+/// Only the units of this pass count, fresh ones included.
+fn compiled_sources(
+    workspace: &Path,
+    members: &FxHashSet<PathBuf>,
+    stdout: &[u8],
+) -> Result<FxHashSet<PathBuf>> {
+    let dep_info: BTreeSet<PathBuf> = envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-artifact")
+        .filter(|envelope| {
+            envelope.manifest_path.as_ref().is_some_and(|manifest| {
+                members.contains(&canonicalize_or_self(Path::new(manifest)))
+            })
+        })
+        .flat_map(|envelope| envelope.filenames)
+        .flat_map(|artifact| dep_info_files(Path::new(&artifact)))
+        .take(DEP_INFO_FILES + 1)
+        .collect();
+    if dep_info.len() > DEP_INFO_FILES {
+        return Err(crate::toolchain::ToolchainError::Unusable {
+            what: format!(
+                "cargo clippy wrote more than {DEP_INFO_FILES} dep-info files in {}; \
+                 comply could not tell which Rust files it compiled",
+                workspace.display()
+            ),
+        }
+        .into());
+    }
+    let mut sources = FxHashSet::default();
+    for file in dep_info {
+        sources.extend(dep_info_sources(workspace, &file)?);
+    }
+    Ok(sources)
+}
+
+/// The dep-info files of the unit that wrote `artifact`.
+/// The shared `deps` directory names each after its unit.
+/// Any other directory belongs to the unit alone.
+fn dep_info_files(artifact: &Path) -> Vec<PathBuf> {
+    let Some(dir) = artifact.parent() else {
+        return Vec::new();
+    };
+    if dir.file_name().is_some_and(|name| name == "deps") {
+        let stem = artifact
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return [Some(stem.as_str()), stem.strip_prefix("lib")]
+            .into_iter()
+            .flatten()
+            .map(|unit| dir.join(format!("{unit}.d")))
+            .filter(|file| file.is_file())
+            .collect();
+    }
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|file| file.extension().is_some_and(|ext| ext == "d"))
+        .take(DEP_INFO_FILES + 1)
+        .collect()
+}
+
+/// The sources one dep-info file lists, resolved against `workspace`.
+/// rustc writes each on a `path:` line of its own.
+fn dep_info_sources(workspace: &Path, file: &Path) -> Result<Vec<PathBuf>> {
+    let unreadable = || format!("failed to read the dep-info file {}", file.display());
+    let reader = std::fs::File::open(file).with_context(unreadable)?;
+    let size = reader.metadata().with_context(unreadable)?.len();
+    if size > DEP_INFO_BYTES {
+        return Err(crate::toolchain::ToolchainError::Unusable {
+            what: format!(
+                "the dep-info file {} holds {size} bytes, past the {DEP_INFO_BYTES} comply reads",
+                file.display()
+            ),
+        }
+        .into());
+    }
+    let mut sources = Vec::new();
+    for line in BufReader::new(reader).lines() {
+        let line = line.with_context(unreadable)?;
+        if line.starts_with('#') || line.contains(": ") {
+            continue;
+        }
+        if let Some(source) = line.strip_suffix(':') {
+            let source = workspace.join(source.replace("\\ ", " "));
+            sources.push(canonicalize_or_self(&source));
+        }
+    }
+    Ok(sources)
 }
 
 /// rustc errors that stopped the build, as rustc rendered them.

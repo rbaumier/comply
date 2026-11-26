@@ -3240,6 +3240,44 @@ fn a_loose_rust_file_is_refused_in_an_index_mode() {
     assert!(stderr.contains("1 loose file(s)"), "{stderr}");
 }
 
+// No `mod` item reads `src/orphan.rs`, so clippy never sees it.
+// An index mode refuses it; a full scan notes it.
+#[test]
+fn a_rust_file_no_target_compiles_is_unanalyzed() {
+    let dir = rust_crate(&[
+        (
+            "src/lib.rs",
+            "//! Fixture.\n#[path = \"extra/x.rs\"]\nmod x;\n/// Kept.\npub const KEEP: u8 = x::ONE;\n",
+        ),
+        ("src/extra/x.rs", "/// One.\npub const ONE: u8 = 1;\n"),
+        ("src/orphan.rs", "/// Two.\npub const TWO: u8 = 2;\n"),
+    ]);
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["add", "-A"]);
+    for (args, refused) in [(&["--staged"][..], true), (&["."][..], false)] {
+        let output = common::comply()
+            .current_dir(root)
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .args(args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code() == Some(2),
+            refused,
+            "{args:?}: {stderr}"
+        );
+        if refused {
+            assert!(!stdout.contains("all clear"), "{args:?}: {stdout}");
+        }
+        assert!(stderr.contains("src/orphan.rs"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("extra/x.rs"), "{args:?}: {stderr}");
+    }
+}
+
 // A fixtures crate nested in `a`, and excluded.
 // A full scan still lints `a`.
 #[test]
@@ -3574,6 +3612,160 @@ fn oxlint_190_run(args: &[&str], comply_toml: &str) -> String {
         .output()
         .unwrap();
     String::from_utf8(output.stdout).unwrap()
+}
+
+/// A directory whose `oxlint` reports version 1.90.0.
+/// Every other call runs the shell `lint`.
+#[cfg(unix)]
+fn stub_oxlint(lint: &str) -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = TempDir::new().unwrap();
+    let script = bin.path().join("oxlint");
+    let body = format!(
+        "#!/bin/sh\ncase \"$*\" in\n*--version*) echo 'Version: 1.90.0'; exit 0;;\nesac\n{lint}\n"
+    );
+    fs::write(&script, body).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// `comply --staged` refuses the batch; `comply .` notes it.
+/// The batch is `src/a.ts`, and oxlint runs the shell `lint`.
+/// Both stderr hold each of `why`.
+#[cfg(unix)]
+fn assert_unanalyzed_batch(lint: &str, envs: &[(&str, &std::path::Path)], why: &[&str]) {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("package.json"),
+        "{\"name\":\"fx\",\"private\":true}\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/a.ts"), "export const A = 1;\n").unwrap();
+    fs::write(root.join("tsconfig.json"), "{}\n").unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["add", "-A"]);
+    let bin = stub_oxlint(lint);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![bin.path().to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+    let path = std::env::join_paths(dirs).unwrap();
+    let run = |args: &[&str]| {
+        let mut comply = common::comply();
+        comply.current_dir(root).env("PATH", &path).args(args);
+        for (name, value) in envs {
+            comply.env(name, value);
+        }
+        comply.output().unwrap()
+    };
+    // oxlint may hang: both scans wait on it at once.
+    let (staged, full) = std::thread::scope(|scope| {
+        let staged = scope.spawn(|| run(&["--staged"]));
+        let full = scope.spawn(|| run(&["."]));
+        (staged.join().unwrap(), full.join().unwrap())
+    });
+    for (scan, output, refused) in [("--staged", staged, true), (".", full, false)] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code() == Some(2), refused, "{scan}: {stderr}");
+        if refused {
+            assert!(!stdout.contains("all clear"), "{scan}: {stdout}");
+        }
+        for needle in why.iter().chain(&["src/a.ts"]) {
+            assert!(
+                stderr.contains(needle),
+                "{scan}: {needle} missing:\n{stderr}"
+            );
+        }
+    }
+}
+
+// oxlint runs past its 45s budget on the plain batch.
+// An index mode refuses it; a full scan notes it.
+#[cfg(unix)]
+#[test]
+fn a_batch_oxlint_ran_past_its_budget_on_is_unanalyzed() {
+    let hang = "case \"$*\" in\n*--type-aware*) echo '{\"diagnostics\": []}';;\n\
+                *) exec sleep 120;;\nesac";
+    assert_unanalyzed_batch(hang, &[], &["oxlint ran past 45s"]);
+}
+
+// tsgolint panics on the batch; no diagnostic comes back.
+// The message quotes the panic and the tsgolint version.
+#[cfg(unix)]
+#[test]
+fn a_batch_tsgolint_panicked_on_is_unanalyzed() {
+    let package = TempDir::new().unwrap();
+    fs::create_dir_all(package.path().join("bin")).unwrap();
+    fs::write(
+        package.path().join("package.json"),
+        "{\"name\":\"oxlint-tsgolint\",\"version\":\"7.0.2005\"}\n",
+    )
+    .unwrap();
+    let tsgolint = package.path().join("bin/tsgolint");
+    fs::write(&tsgolint, "#!/bin/sh\n").unwrap();
+    let panic = "echo 'panic: Unhandled case in Node.MemberList: KindModuleDeclaration' >&2\n\
+                 echo 'goroutine 7 [running]:' >&2\n\
+                 echo 'github.com/typescript-eslint/tsgolint/internal/rules' >&2\nexit 1";
+    assert_unanalyzed_batch(
+        panic,
+        &[("OXLINT_TSGOLINT_PATH", &tsgolint)],
+        &[
+            "tsgolint 7.0.2005",
+            "panic: Unhandled case in Node.MemberList: KindModuleDeclaration",
+        ],
+    );
+}
+
+// oxlint says it linted none of the batch.
+// An ignore file it read left the file out.
+#[cfg(unix)]
+#[test]
+fn a_batch_oxlint_left_out_is_unanalyzed() {
+    let none = "echo '{\"diagnostics\": [], \"number_of_files\": 0}'";
+    assert_unanalyzed_batch(none, &[], &["oxlint linted only 0 of the 1 file(s)"]);
+}
+
+// `.eslintignore` drops `gen.ts` and `out/` from a full scan.
+// A git file scope drops them too, alone or not.
+#[test]
+fn a_git_scope_drops_the_files_eslintignore_drops() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    let flawed = "var x = 1;\ndebugger;\nexport { x };\n";
+    fs::create_dir_all(root.join("out")).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("package.json"),
+        "{\"name\":\"fx\",\"private\":true}\n",
+    )
+    .unwrap();
+    fs::write(root.join(".eslintignore"), "gen.ts\nout/\n").unwrap();
+    fs::write(root.join("tsconfig.json"), "{}\n").unwrap();
+    fs::write(root.join("gen.ts"), flawed).unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["add", "-A"]);
+    let scan = |args: &[&str]| {
+        let output = common::comply()
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (output.status.code(), stdout, stderr)
+    };
+    let (code, stdout, stderr) = scan(&["--staged"]);
+    assert_eq!(code, Some(0), "alone: {stdout}{stderr}");
+
+    fs::write(root.join("out/y.ts"), flawed).unwrap();
+    fs::write(root.join("src/a.ts"), "export const A = 1;\n").unwrap();
+    git(root, &["add", "-A"]);
+    for args in [&["--staged"][..], &["."][..]] {
+        let (code, stdout, stderr) = scan(args);
+        assert_eq!(code, Some(0), "{args:?}: {stdout}{stderr}");
+    }
 }
 
 // oxlint 1.90.0 names plugins `typescript(…)`, `import(…)`, `jest(…)`.

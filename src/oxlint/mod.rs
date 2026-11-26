@@ -33,11 +33,20 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
 use crate::project::ProjectCtx;
 use crate::rules::meta::RuleMeta;
+use crate::toolchain::{Unanalyzed, report_unanalyzed};
 use schema::{OxlintDiag, OxlintOutput};
 
 /// Max files per oxlint invocation. Conservative chunk size to avoid ARG_MAX.
 const FILES_PER_BATCH: usize = 500;
 const OXLINT_BATCH_TIMEOUT: Duration = Duration::from_secs(45);
+/// How many directories above tsgolint may hold its `package.json`.
+const PACKAGE_DEPTH: usize = 6;
+/// A `version` longer than this is no version.
+const VERSION_CHARS: usize = 64;
+/// A `package.json` read stops past this size.
+const PACKAGE_JSON_BYTES: u64 = 64 * 1024;
+/// How much of a tsgolint panic line a message quotes.
+const PANIC_CHARS: usize = 300;
 
 /// Check if oxlint binary is on PATH. Result is cached for the process lifetime.
 pub fn is_available() -> bool {
@@ -63,6 +72,7 @@ pub fn lint_files(
     project: &ProjectCtx,
     type_aware: bool,
     type_program_files: Option<&[&SourceFile]>,
+    unanalyzed: Unanalyzed,
 ) -> Result<Vec<Diagnostic>> {
     if files.is_empty() {
         return Ok(vec![]);
@@ -90,6 +100,7 @@ pub fn lint_files(
             config,
             &standard_oxlint,
             false,
+            unanalyzed,
         )?);
     }
 
@@ -107,8 +118,14 @@ pub fn lint_files(
                     .collect();
                 let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
                 let remap = remap::build_table(&standard_tsgolint);
-                let output = invoke_oxlint(&program_ts, Some(oxlint_config.path()), true)?;
-                let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
+                let all_diags = lint_batch(
+                    &program_ts,
+                    &type_aware_ts,
+                    oxlint_config.path(),
+                    true,
+                    &remap,
+                    unanalyzed,
+                )?;
                 let changed = changed_path_set(&type_aware_ts);
                 all.extend(
                     all_diags
@@ -122,6 +139,7 @@ pub fn lint_files(
                 config,
                 &standard_tsgolint,
                 true,
+                unanalyzed,
             )?);
         }
     }
@@ -133,6 +151,7 @@ pub fn lint_files(
             config,
             &module_aware_oxlint,
             false,
+            unanalyzed,
         )?);
     }
 
@@ -147,8 +166,14 @@ pub fn lint_files(
                     .collect();
                 let oxlint_config = crate::oxlint_config::generate(&rule_entries)?;
                 let remap = remap::build_table(&module_aware_tsgolint);
-                let output = invoke_oxlint(&program_esm, Some(oxlint_config.path()), true)?;
-                let all_diags = parse_json_bytes(&output.stdout, &output.stderr, &remap)?;
+                let all_diags = lint_batch(
+                    &program_esm,
+                    &type_aware_esm,
+                    oxlint_config.path(),
+                    true,
+                    &remap,
+                    unanalyzed,
+                )?;
                 let changed = changed_path_set(&type_aware_esm);
                 all.extend(
                     all_diags
@@ -162,6 +187,7 @@ pub fn lint_files(
                 config,
                 &module_aware_tsgolint,
                 true,
+                unanalyzed,
             )?);
         }
     }
@@ -320,6 +346,7 @@ fn lint_files_with_bindings(
     config: &crate::config::Config,
     bindings: &[(&'static str, &'static RuleMeta, Severity)],
     type_aware: bool,
+    unanalyzed: Unanalyzed,
 ) -> Result<Vec<Diagnostic>> {
     let rule_entries: Vec<crate::oxlint_config::RuleEntry> = bindings
         .iter()
@@ -330,10 +357,108 @@ fn lint_files_with_bindings(
 
     let mut all = Vec::with_capacity(files.len());
     for batch in files.chunks(FILES_PER_BATCH) {
-        let output = invoke_oxlint(batch, Some(oxlint_config.path()), type_aware)?;
-        all.extend(parse_json_bytes(&output.stdout, &output.stderr, &remap)?);
+        all.extend(lint_batch(
+            batch,
+            batch,
+            oxlint_config.path(),
+            type_aware,
+            &remap,
+            unanalyzed,
+        )?);
     }
     Ok(all)
+}
+
+/// Run oxlint over `batch` and return its diagnostics.
+/// A report on a missed batch names `named`.
+fn lint_batch(
+    batch: &[&SourceFile],
+    named: &[&SourceFile],
+    config_path: &Path,
+    is_type_aware: bool,
+    remap: &FxHashMap<String, &'static RuleMeta>,
+    unanalyzed: Unanalyzed,
+) -> Result<Vec<Diagnostic>> {
+    let Some(output) = invoke_oxlint(batch, Some(config_path), is_type_aware)? else {
+        let limit = OXLINT_BATCH_TIMEOUT.as_secs();
+        let why = format!(
+            "oxlint ran past {limit}s on a batch of {} file(s)",
+            batch.len()
+        );
+        report_unanalyzed(&why, named, unanalyzed)?;
+        return Ok(Vec::new());
+    };
+    match parse_oxlint_output(&output.stdout, &output.stderr, remap)? {
+        Parsed::Panicked(panic) => {
+            let why = format!(
+                "the type-aware checker (tsgolint {}) panicked on a batch of {} file(s): \
+                 {panic}. Pin another oxlint-tsgolint, or report the panic upstream",
+                tsgolint_version(),
+                batch.len()
+            );
+            report_unanalyzed(&why, named, unanalyzed)?;
+            Ok(Vec::new())
+        }
+        Parsed::Linted(diagnostics, Some(linted)) if linted < batch.len() => {
+            let why = format!(
+                "oxlint linted only {linted} of the {} file(s) of a batch, without naming them; \
+                 an ignore file it reads is the usual cause",
+                batch.len()
+            );
+            report_unanalyzed(&why, named, unanalyzed)?;
+            Ok(diagnostics)
+        }
+        Parsed::Linted(diagnostics, _) => Ok(diagnostics),
+    }
+}
+
+/// The version of the tsgolint oxlint runs, from its `package.json`.
+/// oxlint looks in `OXLINT_TSGOLINT_PATH`, then `node_modules/.bin`, then `PATH`.
+fn tsgolint_version() -> String {
+    let named = std::env::var_os("OXLINT_TSGOLINT_PATH").map(PathBuf::from);
+    let in_project: Vec<PathBuf> = std::env::current_dir()
+        .map(|cwd| {
+            cwd.ancestors()
+                .map(|dir| dir.join("node_modules/.bin/tsgolint"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let on_path: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("tsgolint"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let version = named
+        .into_iter()
+        .chain(in_project)
+        .chain(on_path)
+        .find(|candidate| candidate.is_file())
+        .and_then(|bin| bin.canonicalize().ok())
+        .and_then(|bin| {
+            bin.ancestors()
+                .skip(1)
+                .take(PACKAGE_DEPTH)
+                .find_map(tsgolint_package_version)
+        });
+    version.unwrap_or_else(|| "of unknown version".to_owned())
+}
+
+/// The `version` of `dir/package.json` when it is a tsgolint package.
+fn tsgolint_package_version(dir: &Path) -> Option<String> {
+    let mut text = String::new();
+    std::fs::File::open(dir.join("package.json"))
+        .ok()?
+        .take(PACKAGE_JSON_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    let package: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if !package.get("name")?.as_str()?.contains("tsgolint") {
+        return None;
+    }
+    let version = package.get("version")?.as_str()?;
+    Some(version.chars().take(VERSION_CHARS).collect())
 }
 
 /// Spawn oxlint as a subprocess and validate exit status.
@@ -341,11 +466,12 @@ fn lint_files_with_bindings(
 /// `--type-aware` is only passed for tsgolint batches: it forces oxlint to
 /// build the TypeScript program (slow), so the syntactic-rule batches run
 /// without it.
+/// `None` when oxlint ran past `OXLINT_BATCH_TIMEOUT`.
 fn invoke_oxlint(
     files: &[&SourceFile],
     config_path: Option<&Path>,
     type_aware: bool,
-) -> Result<std::process::Output> {
+) -> Result<Option<std::process::Output>> {
     let mut cmd = Command::new("oxlint");
     cmd.args(["--format", "json"]);
     if type_aware {
@@ -367,16 +493,7 @@ fn invoke_oxlint(
         .spawn()
         .context("failed to invoke oxlint — install it with: npm install -g oxlint")?;
     let Some(output) = drain_and_wait(child, OXLINT_BATCH_TIMEOUT, "oxlint")? else {
-        eprintln!(
-            "comply: oxlint timed out after {}s on {} file(s); continuing with partial results",
-            OXLINT_BATCH_TIMEOUT.as_secs(),
-            files.len()
-        );
-        return Ok(std::process::Output {
-            status: timeout_exit_status(),
-            stdout: b"{\"diagnostics\":[]}".to_vec(),
-            stderr: Vec::new(),
-        });
+        return Ok(None);
     };
 
     // oxlint exits 1 when violations are found — that is normal, not an error.
@@ -387,7 +504,7 @@ fn invoke_oxlint(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    Ok(output)
+    Ok(Some(output))
 }
 
 /// Wait for `child` up to `timeout`, draining its stdout/stderr on dedicated
@@ -435,18 +552,6 @@ pub(crate) fn drain_and_wait(
     }))
 }
 
-#[cfg(unix)]
-fn timeout_exit_status() -> std::process::ExitStatus {
-    use std::os::unix::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(0)
-}
-
-#[cfg(windows)]
-fn timeout_exit_status() -> std::process::ExitStatus {
-    use std::os::windows::process::ExitStatusExt;
-    std::process::ExitStatus::from_raw(0)
-}
-
 /// Parse oxlint JSON output bytes into unified Diagnostic structs.
 ///
 /// Two recoveries sit ahead of the error path, because one file oxlint chokes
@@ -461,26 +566,23 @@ fn timeout_exit_status() -> std::process::ExitStatus {
 /// 2. The type-aware backend (tsgolint, written in Go) can panic on a
 ///    TypeScript shape it does not handle — e.g. an ambient `module "x";`
 ///    declaration (`KindModuleDeclaration` in a `MemberList`). The panic
-///    crashes the oxlint subprocess, leaving non-JSON output; the batch's
-///    diagnostics are dropped with a warning.
+///    crashes the oxlint subprocess, leaving non-JSON output. The caller
+///    reports the batch as not analyzed.
 ///
 /// Anything else — truncated output, a changed envelope shape — still errors.
-fn parse_json_bytes(
+fn parse_oxlint_output(
     stdout: &[u8],
     stderr: &[u8],
     remap: &FxHashMap<String, &'static RuleMeta>,
-) -> Result<Vec<Diagnostic>> {
-    let envelope: OxlintOutput = match serde_json::from_slice(stdout) {
+) -> Result<Parsed> {
+    let json = envelope_start(stdout);
+    let envelope: OxlintOutput = match serde_json::from_slice(json) {
         Ok(envelope) => envelope,
-        Err(parse_err) => match serde_json::from_str(&escape_control_bytes(stdout)) {
+        Err(parse_err) => match serde_json::from_str(&escape_control_bytes(json)) {
             Ok(envelope) => envelope,
             Err(_) => {
                 if let Some(panic) = tsgolint_panic_summary(stdout, stderr) {
-                    eprintln!(
-                        "comply: the type-aware checker (tsgolint) crashed on a file in this \
-                         batch; skipping its type-aware diagnostics. tsgolint panic: {panic}"
-                    );
-                    return Ok(Vec::new());
+                    return Ok(Parsed::Panicked(panic));
                 }
                 // The first error is the one that describes the real output;
                 // the retry only ever fails for the same reason or worse.
@@ -493,11 +595,32 @@ fn parse_json_bytes(
             }
         },
     };
-    Ok(envelope
+    let diagnostics = envelope
         .diagnostics
         .into_iter()
         .filter_map(|d| into_diagnostic(d, remap))
-        .collect())
+        .collect();
+    Ok(Parsed::Linted(diagnostics, envelope.number_of_files))
+}
+
+/// What oxlint made of one batch.
+enum Parsed {
+    /// Its diagnostics, and how many files it says it linted.
+    Linted(Vec<Diagnostic>, Option<usize>),
+    /// tsgolint panicked: the first line of its panic.
+    Panicked(String),
+}
+
+/// `stdout` from its first line that opens the JSON envelope.
+/// oxlint 1.90 prints "No files found to lint" ahead of it.
+fn envelope_start(stdout: &[u8]) -> &[u8] {
+    if stdout.trim_ascii_start().starts_with(b"{") {
+        return stdout;
+    }
+    stdout
+        .windows(2)
+        .position(|pair| pair == b"\n{")
+        .map_or(stdout, |newline| &stdout[newline..])
 }
 
 /// Rewrite the `U+0000`–`U+001F` bytes that sit *inside* JSON strings so the
@@ -564,7 +687,7 @@ fn tsgolint_panic_summary(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     if !is_go_panic {
         return None;
     }
-    Some(panic_line.trim().to_string())
+    Some(panic_line.trim().chars().take(PANIC_CHARS).collect())
 }
 
 /// Convert one oxlint diagnostic into our unified format, remapping the
@@ -609,6 +732,19 @@ fn into_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The diagnostics of a batch oxlint linted.
+    /// A tsgolint panic is an error here.
+    fn parse_json_bytes(
+        stdout: &[u8],
+        stderr: &[u8],
+        remap: &FxHashMap<String, &'static RuleMeta>,
+    ) -> Result<Vec<Diagnostic>> {
+        match parse_oxlint_output(stdout, stderr, remap)? {
+            Parsed::Linted(diagnostics, _) => Ok(diagnostics),
+            Parsed::Panicked(panic) => bail!("tsgolint panicked: {panic}"),
+        }
+    }
 
     // Manual integration test for issue #755:
     // 1. Create project with A.ts (unchanged, exports typed hook) and B.tsx (changed, imports A)
@@ -740,10 +876,10 @@ mod tests {
     }
 
     #[test]
-    fn tsgolint_panic_degrades_gracefully_instead_of_crashing_issue_5458() {
+    fn a_tsgolint_panic_is_told_apart_from_corrupt_output_issue_5458() {
         // An ambient `module "abc";` declaration makes tsgolint's no-mixed-enums
         // rule panic on a KindModuleDeclaration in a MemberList, leaving non-JSON
-        // output. comply must skip the batch's type-aware diagnostics, not crash.
+        // output. The caller reports the batch as not analyzed.
         let remap = FxHashMap::default();
         let stderr = b"panic: Unhandled case in Node.MemberList: KindModuleDeclaration [recovered, repanicked]\n\
             \n\
@@ -751,9 +887,25 @@ mod tests {
             github.com/microsoft/typescript-go/internal/ast.(*Node).MemberList(...)\n\
             \ttypescript-go/internal/ast/ast.go:559\n\
             github.com/typescript-eslint/tsgolint/internal/rules/no_mixed_enums.init.func1.2(...)\n";
-        let result = parse_json_bytes(b"", stderr, &remap)
-            .expect("a tsgolint panic must degrade to empty, not error");
-        assert!(result.is_empty());
+        let parsed = parse_oxlint_output(b"", stderr, &remap).expect("a panic parses");
+        let Parsed::Panicked(panic) = parsed else {
+            panic!("a tsgolint panic must read as one");
+        };
+        assert_eq!(
+            panic,
+            "panic: Unhandled case in Node.MemberList: KindModuleDeclaration [recovered, repanicked]"
+        );
+    }
+
+    #[test]
+    fn the_envelope_after_a_no_files_notice_still_parses() {
+        let remap = FxHashMap::default();
+        let stdout = b"No files found to lint. Please check your paths and ignore patterns.\n\
+            {\"diagnostics\": [], \"number_of_files\": 0}";
+        let parsed = parse_oxlint_output(stdout, b"", &remap).expect("must parse");
+        assert!(
+            matches!(parsed, Parsed::Linted(ref diagnostics, Some(0)) if diagnostics.is_empty())
+        );
     }
 
     #[test]

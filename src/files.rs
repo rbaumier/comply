@@ -241,7 +241,29 @@ pub fn discover(mode: &ScanMode) -> Result<Vec<SourceFile>> {
     } else {
         working_directory()?
     };
-    Ok(drop_complyignored(files, &base, &top))
+    let files = drop_complyignored(files, &base, &top);
+    Ok(drop_eslint_ignored(files, &working_directory()?, &base))
+}
+
+/// Drop what ESLint ignores, as a walk of `scan_root` does.
+/// Its config ignores cover every language.
+/// Its ignore files cover the TypeScript family only.
+fn drop_eslint_ignored(files: Vec<SourceFile>, scan_root: &Path, base: &Path) -> Vec<SourceFile> {
+    let by_config = crate::project::eslint_ignore::load(scan_root);
+    let by_file = crate::project::eslint_ignore::load_ignore_files(scan_root);
+    let ignores = |matcher: &Option<Gitignore>, path: &Path| {
+        matcher.as_ref().is_some_and(|gi| {
+            path.starts_with(gi.path()) && gi.matched_path_or_any_parents(path, false).is_ignore()
+        })
+    };
+    files
+        .into_iter()
+        .filter(|file| {
+            let path = base.join(&file.path);
+            !ignores(&by_config, &path)
+                && !(file.language.is_typescript_family() && ignores(&by_file, &path))
+        })
+        .collect()
 }
 
 fn working_directory() -> Result<PathBuf> {

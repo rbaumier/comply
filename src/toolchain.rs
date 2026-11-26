@@ -21,6 +21,48 @@ pub enum ToolchainError {
     Unusable { what: String },
 }
 
+/// What becomes of files a pass could not analyze.
+#[derive(Debug, Clone, Copy)]
+pub enum Unanalyzed {
+    /// A git file scope refuses them, with exit code 2.
+    Refuse,
+    /// A full scan notes them on stderr.
+    Note,
+}
+
+/// How many unanalyzed files a message names.
+const NAMED_FILES: usize = 20;
+
+/// Names the `files` a pass did not analyze, and why.
+pub fn report_unanalyzed(
+    why: &str,
+    files: &[&crate::files::SourceFile],
+    unanalyzed: Unanalyzed,
+) -> anyhow::Result<()> {
+    let names: Vec<String> = files
+        .iter()
+        .take(NAMED_FILES)
+        .map(|file| file.path.display().to_string())
+        .collect();
+    let more = files.len().saturating_sub(NAMED_FILES);
+    let rest = if more == 0 {
+        String::new()
+    } else {
+        format!(" and {more} more")
+    };
+    let what = format!(
+        "{why}. These file(s) were not analyzed: {}{rest}",
+        names.join(", ")
+    );
+    match unanalyzed {
+        Unanalyzed::Refuse => Err(ToolchainError::Unusable { what }.into()),
+        Unanalyzed::Note => {
+            eprintln!("comply: {what}");
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -30,6 +30,9 @@ pub struct CargoMessage {
     /// The target that artifact or message belongs to.
     #[serde(default)]
     pub target: Option<CargoTarget>,
+    /// The files a `compiler-artifact` wrote, its dep-info beside them.
+    #[serde(default)]
+    pub filenames: Vec<String>,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }
