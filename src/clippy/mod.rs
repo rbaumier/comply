@@ -113,10 +113,11 @@ pub fn lint_files(
         ensure_config_accepted(&clippy_conf, &output.stdout)?;
         ensure_compiled(&root, &output)?;
         if denied_lints(&output.stdout).next().is_some() {
-            ensure_packages_linted(&root, &files_in_ws, &file_filter, &output.stdout)?;
             ensure_compiled(&root, &run(Pass::Check)?)?;
-            output = run(Pass::Capped)?;
-            ensure_compiled(&root, &output)?;
+            let capped = run(Pass::Capped)?;
+            ensure_compiled(&root, &capped)?;
+            ensure_packages_linted(&root, &files_in_ws, &output.stdout, &capped.stdout)?;
+            output = capped;
         }
         diagnostics.extend(parse_clippy_jsonl(
             &output.stdout,
@@ -407,27 +408,17 @@ fn is_unused_dependency_denied(code: Option<i32>, stderr: &[u8]) -> bool {
             .all(|line| line.starts_with(FINDING) || line.starts_with(TALLY))
 }
 
-/// Refuse a run whose denied lint hid a package of `files`.
-/// It passes when `files` hold such a lint.
-/// The report then names one.
+/// Refuse a package of `files` that no clippy pass linted.
+/// A denied lint stops the first pass.
+/// The capped pass lints past it.
 fn ensure_packages_linted(
     workspace: &Path,
     files: &[&SourceFile],
-    file_filter: &FxHashSet<PathBuf>,
-    stdout: &[u8],
+    first: &[u8],
+    capped: &[u8],
 ) -> Result<()> {
-    let denied: Vec<RustcDiagnostic> = denied_lints(stdout)
-        .filter_map(|envelope| envelope.message)
-        .collect();
-    let is_reported = denied.iter().any(|lint| {
-        lint.spans
-            .iter()
-            .any(|span| span.is_primary && file_filter.contains(&span_path(span, workspace)))
-    });
-    if is_reported {
-        return Ok(());
-    }
-    let linted = linted_manifests(stdout);
+    let mut linted = linted_manifests(first);
+    linted.extend(linted_manifests(capped));
     let hidden: BTreeSet<String> = files
         .iter()
         .filter_map(|file| crate::runner_helpers::owning_manifest(workspace, &file.path))
@@ -437,14 +428,14 @@ fn ensure_packages_linted(
     if hidden.is_empty() {
         return Ok(());
     }
-    let quoted: Vec<String> = denied
-        .into_iter()
+    let quoted: Vec<String> = denied_lints(first)
+        .filter_map(|envelope| envelope.message)
         .take(QUOTED_BUILD_ERRORS)
         .map(|lint| lint.rendered.unwrap_or(lint.message))
         .collect();
     Err(crate::toolchain::ToolchainError::Unusable {
         what: format!(
-            "cargo clippy did not lint {}: it stopped at a denied lint elsewhere in {}.\n{}",
+            "cargo clippy did not lint {} in {}, even with lints capped after this denied lint:\n{}",
             hidden.into_iter().collect::<Vec<_>>().join(", "),
             workspace.display(),
             quoted.join("\n")
@@ -697,6 +688,61 @@ mod tests {
                 "no errors encountered".to_owned()
             ]
         );
+    }
+
+    /// `ensure_packages_linted` over `files` of members `a` and `b`.
+    /// The first pass stops at a denied lint of `a`.
+    fn judge_packages(files: &[&str], capped: &[&str]) -> Result<()> {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = canonicalize_or_self(dir.path());
+        let manifest = |name: &str| root.join(name).join("Cargo.toml");
+        for name in ["a", "b"] {
+            std::fs::create_dir_all(root.join(name).join("src")).unwrap();
+            let package = format!("[package]\nname = \"{name}\"\n");
+            std::fs::write(manifest(name), package).unwrap();
+            std::fs::write(root.join(name).join("src/lib.rs"), "").unwrap();
+        }
+        let first = format!(
+            r#"{{"reason":"compiler-message","manifest_path":"{}","message":{{"message":"x","code":{{"code":"clippy::absurd_extreme_comparisons"}},"level":"error","rendered":"error: x < 0","spans":[]}}}}"#,
+            manifest("a").display()
+        );
+        let capped: Vec<String> = capped
+            .iter()
+            .map(|name| {
+                format!(
+                    r#"{{"reason":"compiler-artifact","manifest_path":"{}","target":{{"kind":["lib"]}}}}"#,
+                    manifest(name).display()
+                )
+            })
+            .collect();
+        let files: Vec<SourceFile> = files
+            .iter()
+            .map(|name| SourceFile {
+                path: root.join(name).join("src/lib.rs"),
+                language: crate::files::Language::Rust,
+            })
+            .collect();
+        let files: Vec<&SourceFile> = files.iter().collect();
+        ensure_packages_linted(
+            &root,
+            &files,
+            first.as_bytes(),
+            capped.join("\n").as_bytes(),
+        )
+    }
+
+    #[test]
+    fn a_package_the_capped_pass_lints_is_judged() {
+        assert!(judge_packages(&["b"], &["a", "b"]).is_ok());
+        // The denied lint proves `a` was linted.
+        assert!(judge_packages(&["a"], &[]).is_ok());
+    }
+
+    #[test]
+    fn a_package_no_pass_lints_is_refused() {
+        let refusal = judge_packages(&["a", "b"], &["a"]).unwrap_err().to_string();
+        assert!(refusal.contains("did not lint b in"), "{refusal}");
+        assert!(refusal.contains("x < 0"), "{refusal}");
     }
 
     #[test]

@@ -2940,19 +2940,96 @@ fn clippy_stopped_by_a_killed_build_script_is_an_error() {
         .stderr(predicate::str::contains("cargo clippy could not compile"));
 }
 
-// `a` is not staged. Its denied lint is no finding.
-// Cargo then builds no `b`.
-#[test]
-fn clippy_stopped_by_a_denied_lint_of_another_crate_is_an_error() {
-    let dir = dependent_crates(&[(
+/// `dependent_crates`, where `a` denies `clippy::len_zero` and breaks it.
+fn len_zero_denied_in_a() -> TempDir {
+    dependent_crates(&[(
         "a/src/lib.rs",
-        "pub const KEEP: u8 = 1;\npub fn is_low(x: u32) -> bool {\n    x < 0\n}\n",
-    )]);
+        "#![deny(clippy::len_zero)]\npub const KEEP: u8 = 1;\n\
+         pub fn is_old(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
+    )])
+}
+
+// `a` is not staged. Its denied lint stops `b`.
+// The capped pass lints `b` past it.
+#[test]
+fn clean_lines_past_a_denied_lint_of_another_crate_pass() {
+    let dir = len_zero_denied_in_a();
+    staged_run(dir.path(), "\n/// More.\npub const MORE: u8 = 2;\n")
+        .code(0)
+        .stderr(predicate::str::contains("did not lint").not());
+}
+
+#[test]
+fn findings_past_a_denied_lint_of_another_crate_are_reported() {
+    let dir = len_zero_denied_in_a();
     staged_run(dir.path(), NEW_LEN_ZERO)
+        .code(1)
+        .stdout(predicate::str::contains("b/src/lib.rs:8:5"))
+        .stdout(predicate::str::contains("clippy::len_zero"))
+        .stdout(predicate::str::contains("a/src/lib.rs").not());
+}
+
+// clippy denies `x < 0` by default.
+// In `a` or `b`, staged lines get one verdict.
+#[test]
+fn a_denied_lint_weighs_the_same_in_any_crate() {
+    let low = "pub fn is_low(x: u32) -> bool {\n    x < 0\n}\n";
+    for (path, source) in [
+        ("a/src/lib.rs", format!("pub const KEEP: u8 = 1;\n{low}")),
+        (
+            "b/src/lib.rs",
+            format!(
+                "pub fn is_none(v: &[u8]) -> bool {{\n    a::KEEP == 1 && v.len() == 0\n}}\n{low}"
+            ),
+        ),
+    ] {
+        let dir = dependent_crates(&[(path, source.as_str())]);
+        let output = staged_run(dir.path(), NEW_LEN_ZERO).get_output().clone();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let findings = stdout
+            .lines()
+            .filter(|line| line.contains("clippy::len_zero"))
+            .count();
+        assert_eq!(output.status.code(), Some(1), "{path}: {stderr}");
+        assert_eq!(findings, 1, "{path}: {stdout}");
+    }
+}
+
+// `x` is no workspace member: no pass lints it.
+// A denied lint of `a` must not pass it unlinted.
+#[test]
+fn a_crate_no_pass_lints_past_a_denied_lint_is_refused() {
+    let dir = rust_crate(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n",
+        ),
+        (
+            "a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        (
+            "a/src/lib.rs",
+            "#![deny(clippy::len_zero)]\npub fn is_old(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
+        ),
+        (
+            "tools/x/Cargo.toml",
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        (
+            "tools/x/src/lib.rs",
+            "pub fn is_loose(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
+        ),
+    ]);
+    common::comply()
+        .current_dir(dir.path())
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .arg(".")
+        .assert()
         .code(2)
         .stdout(predicate::str::contains("all clear").not())
-        .stderr(predicate::str::contains("did not lint b"))
-        .stderr(predicate::str::contains("absurd_extreme_comparisons"));
+        .stderr(predicate::str::contains("did not lint x"));
 }
 
 /// Comply over a crate holding `files`, with its clippy findings.
