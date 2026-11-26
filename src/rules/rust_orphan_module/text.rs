@@ -54,7 +54,7 @@ impl TextCheck for Check {
 }
 
 /// The directory the parent module of `path` resolves its `mod`s in.
-fn declaring_dir(path: &Path) -> &Path {
+pub(crate) fn declaring_dir(path: &Path) -> &Path {
     let dir = path.parent().unwrap_or(path);
     if path.file_name().is_some_and(|n| n == "mod.rs") {
         return dir.parent().unwrap_or(dir);
@@ -64,7 +64,7 @@ fn declaring_dir(path: &Path) -> &Path {
 
 /// The name a `mod` declaration would give the file: its stem, or its
 /// directory's name for a `mod.rs`.
-fn module_name(path: &Path) -> &str {
+pub(crate) fn module_name(path: &Path) -> &str {
     let named = if path.file_name().is_some_and(|n| n == "mod.rs") {
         path.parent().and_then(Path::file_name)
     } else {

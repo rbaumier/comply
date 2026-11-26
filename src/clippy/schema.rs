@@ -43,6 +43,9 @@ pub struct CargoTarget {
     /// `lib`, `bin`, `test`, `proc-macro`, `custom-build`…
     #[serde(default)]
     pub kind: Vec<String>,
+    /// The absolute root file rustc compiles the target from.
+    #[serde(default)]
+    pub src_path: Option<String>,
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }

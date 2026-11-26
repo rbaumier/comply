@@ -43,7 +43,7 @@ use std::sync::OnceLock;
 use crate::config::Config;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::files::SourceFile;
-use crate::project::import_index::ImportIndex;
+use crate::project::import_index::{ImportIndex, is_conventional_rust_crate_root};
 use crate::rules::meta::RuleMeta;
 use schema::{CargoMessage, RustcDiagnostic, RustcSpan};
 
@@ -111,6 +111,7 @@ pub fn lint_files(
 
     let mut diagnostics = Vec::new();
     let mut compiled = FxHashSet::default();
+    let mut roots = FxHashSet::default();
     let mut judged = loose;
     for (root, files_in_ws, clippy_conf) in runs {
         let file_filter: FxHashSet<PathBuf> = files_in_ws
@@ -136,12 +137,14 @@ pub fn lint_files(
         ensure_config_accepted(&clippy_conf, &output.stdout)?;
         ensure_compiled(&root, &output)?;
         compiled.extend(compiled_sources(&root, &members, &output.stdout)?);
+        roots.extend(target_roots(&output.stdout));
         if denied_lints(&output.stdout).next().is_some() {
             ensure_compiled(&root, &run(Pass::Check)?)?;
             let capped = run(Pass::Capped)?;
             ensure_compiled(&root, &capped)?;
             ensure_packages_linted(&root, &files_in_ws, &output.stdout, &capped.stdout)?;
             compiled.extend(compiled_sources(&root, &members, &capped.stdout)?);
+            roots.extend(target_roots(&capped.stdout));
             output = capped;
         }
         judged.extend(files_in_ws);
@@ -154,9 +157,17 @@ pub fn lint_files(
     }
 
     // Any pass's dep-info vouches for a file, even across workspaces.
+    // It also lists what `include_str!` reads: only a module counts.
+    let indexed_roots: Vec<&Path> = index
+        .indexed_paths()
+        .filter(|path| roots.contains(*path))
+        .collect();
     let uncompiled: Vec<&SourceFile> = judged
         .into_iter()
-        .filter(|file| !compiled.contains(&canonicalize_or_self(&file.path)))
+        .filter(|file| {
+            let path = canonicalize_or_self(&file.path);
+            !compiled.contains(&path) || !is_module(index, &path, &roots, &indexed_roots)
+        })
         .collect();
     if !uncompiled.is_empty() {
         let unanalyzed = if is_partial {
@@ -192,6 +203,45 @@ fn declaring_workspace(index: &ImportIndex, file: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The root file of each target a pass compiled.
+/// A fresh target counts too.
+fn target_roots(stdout: &[u8]) -> impl Iterator<Item = PathBuf> + '_ {
+    envelopes(stdout)
+        .filter(|envelope| envelope.reason == "compiler-artifact")
+        .filter_map(|envelope| envelope.target?.src_path)
+        .map(|root| canonicalize_or_self(Path::new(&root)))
+}
+
+/// True unless the index proves `path` is no module.
+/// Only an indexed root of its package rules it out.
+/// A file outside every package needs any indexed root.
+fn is_module(
+    index: &ImportIndex,
+    path: &Path,
+    roots: &FxHashSet<PathBuf>,
+    indexed_roots: &[&Path],
+) -> bool {
+    let is_root = roots.contains(path) || is_conventional_rust_crate_root(path);
+    if is_root || index.is_declared_rust_module(path) {
+        return true;
+    }
+    let package = path
+        .parent()
+        .and_then(|dir| crate::project::walk_up_finding(dir, "Cargo.toml"));
+    let indexes_its_root = indexed_roots.iter().any(|root| {
+        package
+            .as_ref()
+            .is_none_or(|package| root.starts_with(package))
+    });
+    if !indexes_its_root {
+        return true;
+    }
+    // A macro or an `include!` may declare it unseen.
+    let name = crate::rules::rust_orphan_module::module_name(path);
+    let dir = crate::rules::rust_orphan_module::declaring_dir(path);
+    index.has_unresolved_rust_mod(name) || index.has_opaque_rust_mods_in(dir)
+}
+
 /// Why clippy analyzed none of `count` Rust files, with the remedies.
 fn uncompiled_why(count: usize) -> String {
     let (host, other) = if cfg!(target_os = "macos") {
@@ -200,8 +250,9 @@ fn uncompiled_why(count: usize) -> String {
         (std::env::consts::OS, "macos")
     };
     format!(
-        "cargo clippy compiled no target that reads {count} Rust file(s). \
-         A file joins a crate only through a `mod` item. \
+        "cargo clippy compiled {count} Rust file(s) as no crate's module. \
+         A file joins a crate only through a `mod` item; \
+         `include_str!` reads it as text, not code. \
          A cfg off on this {host} host leaves it out, as \
          `#[cfg(target_os = \"{other}\")] pub mod {other};` does. \
          List a file no build of this host compiles in .complyignore"

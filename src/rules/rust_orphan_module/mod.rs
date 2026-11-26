@@ -5,6 +5,8 @@
 
 mod text;
 
+pub(crate) use text::{declaring_dir, module_name};
+
 use crate::diagnostic::Severity;
 use crate::files::Language;
 use crate::rules::RuleDef;

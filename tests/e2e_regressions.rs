@@ -3334,6 +3334,41 @@ fn a_rust_file_no_target_compiles_is_unanalyzed() {
     }
 }
 
+// `include_str!` lists a file in the dep-info as text, not code.
+#[test]
+fn a_rust_file_only_include_str_reads_is_unanalyzed() {
+    let read = "//! Reads.\n#[test]\nfn reads() {\n    \
+                assert!(!include_str!(\"fixtures/input.rs\").is_empty());\n}\n";
+    let dir = rust_crate(&[
+        ("src/lib.rs", "//! Fixture.\n"),
+        ("tests/read.rs", read),
+        (
+            "tests/fixtures/input.rs",
+            "/// One.\npub const ONE: u8 = 1;\n",
+        ),
+    ]);
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "test"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "base"]);
+    let input = "/// Two.\npub const ONE: u8 = 2;\n";
+    fs::write(root.join("tests/fixtures/input.rs"), input).unwrap();
+    git(root, &["add", "-A"]);
+    let output = common::comply()
+        .current_dir(root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .arg("--staged")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("tests/fixtures/input.rs"), "{stderr}");
+}
+
 // A fixtures crate nested in `a`, and excluded.
 // A full scan still lints `a`.
 #[test]
