@@ -1,8 +1,40 @@
 //! Shared helpers for E2E tests.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+
+/// A comply.toml that opts a fixture out of type-aware rules.
+/// Those rules need typescript-go, which a temp fixture lacks.
+const WITHOUT_TYPE_AWARE: &str = "\
+[rules.no-duplicate-type-definition]
+disabled = true
+
+[rules.no-redundant-nullish-coalescing-null]
+disabled = true
+
+[rules.ts-no-in-operator]
+disabled = true
+
+[rules.ts-no-typeof-operator]
+disabled = true
+";
+
+/// Opt the fixture in `dir` out of type-aware rules.
+pub fn without_type_aware_rules(dir: &Path) {
+    config_without_type_aware_rules(dir, "");
+}
+
+/// Write a comply.toml of `own_config` plus that same opt-out.
+/// A fixture with its own rules must keep the opt-out.
+/// Overwriting the file `without_type_aware_rules` wrote would drop it.
+pub fn config_without_type_aware_rules(dir: &Path, own_config: &str) {
+    fs::write(
+        dir.join("comply.toml"),
+        format!("{own_config}\n{WITHOUT_TYPE_AWARE}"),
+    )
+    .expect("failed to write comply.toml");
+}
 
 /// Write a TS file in a temp dir and return the dir + path.
 /// The TempDir must be held by the caller — its Drop deletes the directory.

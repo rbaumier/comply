@@ -3824,6 +3824,66 @@ fn a_git_scope_drops_the_files_eslintignore_drops() {
     }
 }
 
+/// A misused promise: tsgolint's `no-misused-promises` flags line 6.
+const MISUSED_PROMISE: &str = "export async function load(): Promise<number> {
+  return 2;
+}
+
+export function check(): boolean {
+  if (load()) {
+    return true;
+  }
+  return false;
+}
+";
+
+/// A repo of two TypeScript packages, `pkg-a` and `pkg-b`, committed.
+/// The sidecar rules are off; tsgolint still runs.
+fn two_package_repo(root: &std::path::Path) {
+    for package in ["pkg-a", "pkg-b"] {
+        let dir = root.join(package);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = format!("{{\"name\":\"{package}\",\"private\":true}}\n");
+        fs::write(dir.join("package.json"), manifest).unwrap();
+        let tsconfig = "{\"compilerOptions\":{\"strict\":true}}\n";
+        fs::write(dir.join("tsconfig.json"), tsconfig).unwrap();
+    }
+    fs::write(root.join("pkg-a/a.ts"), "export const A = 1;\n").unwrap();
+    common::without_type_aware_rules(root);
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "test"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "base"]);
+}
+
+/// The code, stdout and stderr of `comply --staged` in `root`.
+fn staged_scan(root: &std::path::Path) -> (Option<i32>, String, String) {
+    let output = common::comply()
+        .current_dir(root)
+        .arg("--staged")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    (output.status.code(), stdout, stderr)
+}
+
+// oxlint names each file as passed, relative to the scan.
+// A partial scan must still keep its type-aware findings.
+#[test]
+fn a_staged_scan_keeps_the_type_aware_findings() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    two_package_repo(root);
+    fs::write(root.join("pkg-b/b.ts"), MISUSED_PROMISE).unwrap();
+    git(root, &["add", "pkg-b/b.ts"]);
+    let (code, stdout, stderr) = staged_scan(root);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    let finding = "pkg-b/b.ts:6:7: error [no-misused-promises]";
+    assert!(stdout.contains(finding), "{stdout}{stderr}");
+}
+
 // oxlint 1.90.0 names plugins `typescript(…)`, `import(…)`, `jest(…)`.
 // Each finding still carries its comply rule id.
 #[cfg(unix)]

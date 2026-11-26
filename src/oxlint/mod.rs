@@ -130,7 +130,7 @@ pub fn lint_files(
                 all.extend(
                     all_diags
                         .into_iter()
-                        .filter(|d| changed.contains(d.path.as_ref())),
+                        .filter(|d| is_changed(&changed, d.path.as_ref())),
                 );
             }
         } else {
@@ -178,7 +178,7 @@ pub fn lint_files(
                 all.extend(
                     all_diags
                         .into_iter()
-                        .filter(|d| changed.contains(d.path.as_ref())),
+                        .filter(|d| is_changed(&changed, d.path.as_ref())),
                 );
             }
         } else {
@@ -284,6 +284,13 @@ fn changed_path_set(files: &[&SourceFile]) -> FxHashSet<PathBuf> {
         .iter()
         .map(|f| std::fs::canonicalize(&f.path).unwrap_or_else(|_| f.path.clone()))
         .collect()
+}
+
+/// True when a diagnostic names a changed file.
+/// oxlint echoes each path as passed, often relative.
+/// `changed` is canonical, so canonicalize the path too.
+fn is_changed(changed: &FxHashSet<PathBuf>, path: &Path) -> bool {
+    changed.contains(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 fn is_require_import_rule(key: &str) -> bool {
@@ -778,29 +785,23 @@ mod tests {
         );
 
         // Diagnostics from B.tsx survive; diagnostics from A.ts are dropped.
-        // oxlint canonicalizes paths, so diagnostics carry canonical paths.
-        let make_diag = |path: &std::path::Path| {
-            let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            crate::diagnostic::Diagnostic {
-                path: std::sync::Arc::from(canon.as_path()),
-                line: 1,
-                column: 1,
-                rule_id: std::borrow::Cow::Borrowed("no-unsafe-assignment"),
-                message: "unsafe".into(),
-                severity: crate::diagnostic::Severity::Error,
-                span: None,
-            }
+        // oxlint keeps each path as passed.
+        let make_diag = |path: &std::path::Path| crate::diagnostic::Diagnostic {
+            path: std::sync::Arc::from(path),
+            line: 1,
+            column: 1,
+            rule_id: std::borrow::Cow::Borrowed("no-unsafe-assignment"),
+            message: "unsafe".into(),
+            severity: crate::diagnostic::Severity::Error,
+            span: None,
         };
         let diags = vec![make_diag(&changed_path), make_diag(&unchanged_path)];
         let filtered: Vec<_> = diags
             .into_iter()
-            .filter(|d| set.contains(d.path.as_ref()))
+            .filter(|d| is_changed(&set, d.path.as_ref()))
             .collect();
         assert_eq!(filtered.len(), 1);
-        assert_eq!(
-            filtered[0].path.as_ref(),
-            std::fs::canonicalize(&changed_path).unwrap().as_path()
-        );
+        assert_eq!(filtered[0].path.as_ref(), changed_path.as_path());
     }
 
     #[test]
