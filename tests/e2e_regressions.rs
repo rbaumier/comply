@@ -2179,7 +2179,9 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
     // Whether `node` itself or the package is what's absent decides which
     // sentence comply prints; both are toolchain gaps and both must exit 2
     // through the actionable path.
+    // NODE_PATH could resolve typescript-go: keep the gap genuine.
     common::comply()
+        .env_remove("NODE_PATH")
         .arg(dir.path())
         .assert()
         .code(2)
@@ -2188,6 +2190,125 @@ fn missing_type_aware_toolchain_is_an_instruction_not_a_crash_issue_8109() {
         ))
         .stderr(predicate::str::contains("crashed unexpectedly").not())
         .stderr(predicate::str::contains("github.com/rbaumier/comply/issues").not());
+}
+
+/// A parameter typed `any`, sniffed by `typeof` at 2:10.
+const SNIFFS_ANY: &str = "export function size(value: any): number {\n  \
+    return typeof value === \"string\" ? value.length : 0;\n}\n";
+
+/// Run `ts-no-typeof-operator` over `tree`, written to a temp dir.
+/// It needs typescript-go, or comply refuses the run.
+fn typeof_findings(tree: &[(&str, &str)]) -> (Option<i32>, String, String) {
+    let dir = TempDir::new().unwrap();
+    for (rel, text) in tree {
+        let file = dir.path().join(rel);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    let out = common::comply()
+        .current_dir(dir.path())
+        .args(["rules", "ts-no-typeof-operator", "."])
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+// A file a `references` entry holds is checked there.
+// That project declares `BUILD`, so line 4 is typed.
+#[test]
+fn type_aware_checks_a_file_a_reference_holds() {
+    let config = format!("{SNIFFS_ANY}export const built = typeof BUILD === \"object\";\n");
+    let (code, out, err) = typeof_findings(&[
+        (
+            "tsconfig.json",
+            "{\"files\": [], \"references\": [{\"path\": \"./tsconfig.app.json\"}, \
+             {\"path\": \"./tsconfig.node.json\"}]}\n",
+        ),
+        (
+            "tsconfig.app.json",
+            "{\"compilerOptions\": {\"composite\": true, \"strict\": true}, \
+             \"include\": [\"src\"]}\n",
+        ),
+        (
+            "tsconfig.node.json",
+            "{\"compilerOptions\": {\"composite\": true, \"strict\": true}, \
+             \"include\": [\"vite.config.ts\", \"build.d.ts\"]}\n",
+        ),
+        ("build.d.ts", "declare const BUILD: { id: string };\n"),
+        ("src/main.ts", SNIFFS_ANY),
+        ("vite.config.ts", &config),
+    ]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    for kept in ["src/main.ts:2:10:", "vite.config.ts:2:10:"] {
+        assert!(out.contains(kept), "{kept} missing:\n{out}{err}");
+    }
+    assert!(!out.contains("vite.config.ts:4:"), "{out}");
+}
+
+// A file outside every `include` takes its nearest tsconfig's options.
+// Its `paths` alias then resolves, so line 5 is typed.
+#[test]
+fn type_aware_checks_a_file_outside_include_with_the_nearest_options() {
+    let tool = format!(
+        "{SNIFFS_ANY}import {{ helper }} from \"@lib/helper\";\n\
+         export const kind = typeof helper === \"function\";\n"
+    );
+    let (code, out, err) = typeof_findings(&[
+        (
+            "tsconfig.json",
+            "{\"compilerOptions\": {\"strict\": true, \"paths\": {\"@lib/*\": [\"./src/*\"]}}, \
+             \"include\": [\"src\"]}\n",
+        ),
+        (
+            "src/helper.ts",
+            "export function helper(): number {\n  return 1;\n}\n",
+        ),
+        ("scripts/tool.ts", &tool),
+    ]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert!(out.contains("scripts/tool.ts:2:10:"), "{out}{err}");
+    assert!(!out.contains("scripts/tool.ts:5:"), "{out}");
+}
+
+// JavaScript its tsconfig does not allow stays unchecked.
+// Its project would not compile it either.
+#[test]
+fn type_aware_leaves_out_javascript_its_tsconfig_does_not_allow() {
+    let (code, out, err) = typeof_findings(&[
+        (
+            "tsconfig.json",
+            "{\"compilerOptions\": {\"strict\": true}, \"include\": [\"src\"]}\n",
+        ),
+        ("src/a.ts", SNIFFS_ANY),
+        (
+            "scripts/tool.js",
+            "export const kind = typeof JSON.parse(\"1\") === \"string\";\n",
+        ),
+    ]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert!(out.contains("src/a.ts:2:10:"), "{out}{err}");
+    assert!(!out.contains("tool.js"), "{out}");
+}
+
+// A TypeScript file no program holds fails the run.
+// The refusal names it, and only it.
+#[test]
+fn type_aware_refuses_a_file_no_program_holds() {
+    let (code, out, err) = typeof_findings(&[
+        (
+            "a/tsconfig.json",
+            "{\"compilerOptions\": {\"strict\": true}}\n",
+        ),
+        ("a/x.ts", SNIFFS_ANY),
+        ("y.ts", SNIFFS_ANY),
+    ]);
+    assert_eq!(code, Some(2), "{out}{err}");
+    assert!(err.contains("y.ts"), "{err}");
+    assert!(!err.contains("x.ts"), "{err}");
 }
 
 /// Enables the two opt-in French copy rules.
