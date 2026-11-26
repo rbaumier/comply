@@ -9,9 +9,9 @@
 //!    runtime config, then invokes `oxlint --format json -c <config>` with
 //!    file paths terminated by `--` (so paths starting with `-` don't look
 //!    like flags).
-//! 3. Parses the JSON envelope from raw bytes and remaps each diagnostic's
-//!    rule-id + severity through the comply registry so users see
-//!    `[no-explicit-any]` instead of `typescript-eslint(no-explicit-any)`.
+//! 3. Parses the JSON envelope from raw bytes.
+//!    Each diagnostic's rule id and severity go through the registry.
+//!    Users see `[no-explicit-any]`, not `typescript(no-explicit-any)`.
 
 mod options;
 mod remap;
@@ -586,7 +586,10 @@ fn into_diagnostic(
         .map(|l| (l.span.line.max(1), l.span.column.max(1)))
         .unwrap_or((1, 1));
 
-    let (rule_id, severity) = match remap.get(&oxlint_code) {
+    let meta = remap
+        .get(remap::current_code(&oxlint_code).as_ref())
+        .copied();
+    let (rule_id, severity) = match meta {
         Some(meta) => (std::borrow::Cow::Borrowed(meta.id), meta.severity),
         None => (std::borrow::Cow::Owned(oxlint_code), Severity::Error),
     };
@@ -698,6 +701,33 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].rule_id.as_ref(), "eslint(no-debugger)");
         assert_eq!(result[0].line, 2);
+    }
+
+    #[test]
+    fn oxlint_190_and_159_codes_name_the_comply_rule() {
+        // oxlint 1.90 writes `typescript(…)`, oxlint 1.59 wrote `typescript-eslint(…)`.
+        let mut bindings = crate::rules::collect_oxlint_bindings();
+        bindings.extend(crate::rules::collect_tsgolint_bindings());
+        let remap = remap::build_table(&bindings);
+        for (code, id) in [
+            ("typescript(no-floating-promises)", "no-floating-promises"),
+            (
+                "typescript-eslint(no-floating-promises)",
+                "no-floating-promises",
+            ),
+            ("react-hooks(exhaustive-deps)", "react-exhaustive-deps"),
+            (
+                "eslint-plugin-react-hooks(exhaustive-deps)",
+                "react-exhaustive-deps",
+            ),
+            ("eslint(eqeqeq)", "eqeqeq"),
+        ] {
+            let json = format!(
+                r#"{{ "diagnostics": [{{"message": "X", "code": "{code}", "severity": "error", "filename": "/tmp/x.ts", "labels": []}}] }}"#
+            );
+            let diagnostics = parse_json_bytes(json.as_bytes(), b"", &remap).expect("must parse");
+            assert_eq!(diagnostics[0].rule_id.as_ref(), id, "{code}");
+        }
     }
 
     #[test]

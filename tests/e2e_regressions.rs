@@ -3177,3 +3177,167 @@ fn fix_builds_a_sqlx_crate_from_its_query_cache() {
     let fixed = fs::read_to_string(dir.path().join("src/lib.rs")).unwrap();
     assert!(fixed.contains("v.is_empty()"), "{fixed}");
 }
+
+/// oxlint 1.90.0's own output on `OXLINT_190_SOURCES`, as comply ran it.
+/// One plain pass, one `--type-aware` pass, both verbatim.
+const OXLINT_190_PLAIN: &str = include_str!("fixtures/oxlint-1.90.0/plain.json");
+const OXLINT_190_TYPE_AWARE: &str = include_str!("fixtures/oxlint-1.90.0/type-aware.json");
+
+/// The files oxlint 1.90.0 linted for those outputs.
+const OXLINT_190_SOURCES: &[(&str, &str)] = &[
+    ("package.json", "{\"name\":\"fx\",\"private\":true}\n"),
+    (
+        "src/app.ts",
+        "export async function load(): Promise<number> {\n  return 1;\n}\n\n\
+         export function fire(): void {\n  load();\n}\n\n\
+         export async function wait(): Promise<number> {\n  const n = 2;\n  return await n;\n}\n\n\
+         export function wrap(): Promise<number> {\n  return load();\n}\n\n\
+         export const pass = (): Promise<number> => load();\n\n\
+         export const list: Array<number> = [1];\nexport const relay = () => load();\n",
+    ),
+    (
+        "src/app.test.ts",
+        "import { load } from \"./app\";\n\nexport const shared = 1;\n\n\
+         it(\"loads\", async () => {\n  const n = 3;\n  await n;\n  expect(await load()).toBe(1);\n});\n",
+    ),
+    (
+        "src/tx-test.ts",
+        "export const helper = 1;\n\ntest(\"wrapped\", () => {\n  expect(helper).toBe(1);\n});\n",
+    ),
+    (
+        "src/state.ts",
+        "export let counter = 0;\n\n\
+         export function sum(values: number[]): number[] {\n  values.forEach((value) => {\n    counter += value;\n  });\n  \
+         return values.reduce((acc, value) => [...acc, value], [] as number[]);\n}\n\n\
+         export function settle(): Promise<number> {\n  \
+         return new Promise((done, fail) => (counter > 0 ? done(counter) : fail(new Error(\"none\"))));\n}\n",
+    ),
+    (
+        "src/view.tsx",
+        "import { useEffect } from \"react\";\n\n\
+         export function View({ id }: { id: string }) {\n  useEffect(() => {\n    console.log(id);\n  }, []);\n  \
+         return <div className={\"view\"}>{id}</div>;\n}\n",
+    ),
+];
+
+/// Stdout of `comply <args>` on `OXLINT_190_SOURCES` and `comply_toml`.
+/// oxlint replays its 1.90.0 output.
+#[cfg(unix)]
+fn oxlint_190_run(args: &[&str], comply_toml: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    for (path, content) in OXLINT_190_SOURCES {
+        let file = dir.path().join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, content).unwrap();
+    }
+    fs::write(dir.path().join("comply.toml"), comply_toml).unwrap();
+    let bin = TempDir::new().unwrap();
+    fs::write(bin.path().join("plain.json"), OXLINT_190_PLAIN).unwrap();
+    fs::write(bin.path().join("type-aware.json"), OXLINT_190_TYPE_AWARE).unwrap();
+    let script = bin.path().join("oxlint");
+    let replay = format!(
+        "#!/bin/sh\ncase \"$*\" in\n*--version*) echo 'Version: 1.90.0'; exit 0;;\n\
+         *--type-aware*) cat '{0}/type-aware.json';;\n*) cat '{0}/plain.json';;\nesac\nexit 1\n",
+        bin.path().display()
+    );
+    fs::write(&script, replay).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![bin.path().to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+    let output = common::comply()
+        .current_dir(dir.path())
+        .env("PATH", std::env::join_paths(dirs).unwrap())
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+// oxlint 1.90.0 names plugins `typescript(…)`, `import(…)`, `jest(…)`.
+// Each finding still carries its comply rule id.
+#[cfg(unix)]
+#[test]
+fn oxlint_190_findings_carry_the_comply_rule_id() {
+    let out = oxlint_190_run(&["."], "");
+    for finding in [
+        "src/app.ts:6:3: error [no-floating-promises]",
+        "src/app.ts:20:20: error [typescript/array-type]",
+        "src/state.ts:1:8: error [import/no-mutable-exports]",
+        "src/state.ts:4:10: error [unicorn/no-array-for-each]",
+        "src/state.ts:11:23: error [promise/param-names]",
+        "src/view.tsx:5:17: error [react-exhaustive-deps]",
+        "src/view.tsx:7:26: error [react-jsx-curly-brace-presence]",
+        "src/app.test.ts:3:14: error [jest-no-export]",
+    ] {
+        assert!(out.contains(finding), "{finding} missing:\n{out}");
+    }
+    // No finding keeps the `plugin(rule)` code oxlint wrote.
+    for line in out.lines() {
+        let id = line
+            .split_once(" [")
+            .and_then(|(_, rest)| rest.split_once(']'));
+        assert!(!id.is_some_and(|(id, _)| id.contains('(')), "{line}");
+    }
+}
+
+// Each rule filter reads the comply rule id.
+// Tests may await plain values.
+// Pass-through arrows need no `async`.
+// jest rules check `.test.` and `.spec.` files.
+// `it` alone is consistent.
+#[cfg(unix)]
+#[test]
+fn oxlint_190_findings_go_through_the_rule_filters() {
+    let out = oxlint_190_run(&["."], "");
+    for kept in [
+        "src/app.ts:11:16: error [await-thenable]",
+        "src/app.ts:14:1: error [promise-function-async]",
+        "src/app.test.ts:3:14: error [jest-no-export]",
+    ] {
+        assert!(out.contains(kept), "{kept} missing:\n{out}");
+    }
+    // A dropped finding shows under no code, old or new.
+    for (place, rule) in [
+        ("src/app.test.ts:7:9:", "await-thenable"),
+        ("src/app.ts:21:22:", "promise-function-async"),
+        ("src/tx-test.ts:1:14:", "no-export"),
+        ("src/app.test.ts:5:1:", "consistent-test-it"),
+    ] {
+        let shown = out
+            .lines()
+            .any(|line| line.contains(place) && line.contains(rule));
+        assert!(!shown, "{place} {rule} kept:\n{out}");
+    }
+}
+
+// comply.toml turns a delegated rule off by its comply id.
+#[cfg(unix)]
+#[test]
+fn oxlint_190_findings_follow_comply_toml() {
+    let toml = "[rules.return-await]\ndisabled = true\n\n\
+                [overrides.\"src/view.tsx\"]\ndisable = [\"react-jsx-curly-brace-presence\"]\n";
+    let out = oxlint_190_run(&["."], toml);
+    for (finding, kept) in [
+        ("src/app.ts:6:3: error [no-floating-promises]", true),
+        ("src/app.ts:11:10: error [return-await]", false),
+        (
+            "src/view.tsx:7:26: error [react-jsx-curly-brace-presence]",
+            false,
+        ),
+    ] {
+        assert_eq!(out.contains(finding), kept, "{finding}:\n{out}");
+    }
+}
+
+// `comply rules` keeps the findings of the rules it names.
+#[cfg(unix)]
+#[test]
+fn oxlint_190_findings_answer_comply_rules() {
+    let out = oxlint_190_run(&["rules", "no-floating-promises", "."], "");
+    assert!(
+        out.contains("src/app.ts:6:3: error [no-floating-promises]"),
+        "{out}"
+    );
+}
