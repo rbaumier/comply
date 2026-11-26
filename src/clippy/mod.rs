@@ -34,7 +34,7 @@ mod schema;
 
 use anyhow::{Context, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -73,6 +73,9 @@ pub fn is_available() -> bool {
 ///
 /// `is_partial` (a git file scope) limits each run to the packages owning
 /// `files`; a plain path scan lints the whole workspace.
+///
+/// A crate outside the workspace members, or a loose file, is named.
+/// A git file scope refuses it; a path scan notes it.
 pub fn lint_files(
     files: &[&SourceFile],
     config: &Config,
@@ -96,6 +99,18 @@ pub fn lint_files(
         let clippy_conf = config_writer::materialize(config, &root, &files_in_ws)?;
         runs.push((root, files_in_ws, clippy_conf));
     }
+    let loose = (!skipped.is_empty()).then(|| {
+        format!(
+            "clippy skipped {} loose file(s) — no Cargo.toml in any \
+             ancestor directory: {}",
+            skipped.len(),
+            skipped.join(", ")
+        )
+    });
+    if is_partial && let Some(what) = &loose {
+        let what = what.clone();
+        return Err(crate::toolchain::ToolchainError::Unusable { what }.into());
+    }
 
     let mut diagnostics = Vec::new();
     for (root, files_in_ws, clippy_conf) in runs {
@@ -103,6 +118,15 @@ pub fn lint_files(
             .iter()
             .map(|f| canonicalize_or_self(&f.path))
             .collect();
+        let members = workspace_members(&root)?;
+        let (files_in_ws, outside) = split_by_membership(&root, &files_in_ws, &members);
+        if !outside.is_empty() {
+            let what = outside_message(&root, &outside);
+            if is_partial {
+                return Err(crate::toolchain::ToolchainError::Unusable { what }.into());
+            }
+            eprintln!("comply: {what}");
+        }
         let packages = if is_partial {
             crate::runner_helpers::cargo_package_args(&root, &files_in_ws)
         } else {
@@ -127,13 +151,8 @@ pub fn lint_files(
         ));
     }
 
-    if !skipped.is_empty() {
-        eprintln!(
-            "comply: clippy skipped {} loose file(s) — no Cargo.toml in any \
-             ancestor directory: {}",
-            skipped.len(),
-            skipped.join(", ")
-        );
+    if let Some(what) = loose {
+        eprintln!("comply: {what}");
     }
 
     Ok(diagnostics)
@@ -406,6 +425,87 @@ fn is_unused_dependency_denied(code: Option<i32>, stderr: &[u8]) -> bool {
         && errors
             .iter()
             .all(|line| line.starts_with(FINDING) || line.starts_with(TALLY))
+}
+
+/// How long `cargo metadata --no-deps` may run.
+const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The manifests of `workspace`'s members, as cargo resolves them.
+/// Globs, path dependencies and `exclude` all count.
+fn workspace_members(workspace: &Path) -> Result<FxHashSet<PathBuf>> {
+    let manifest = workspace.join("Cargo.toml");
+    let child = Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version=1",
+            "--manifest-path",
+        ])
+        .arg(&manifest)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to invoke `cargo metadata`")?;
+    let output = crate::oxlint::drain_and_wait(child, METADATA_TIMEOUT, "cargo metadata")?;
+    let unusable = |detail: String| crate::toolchain::ToolchainError::Unusable {
+        what: format!(
+            "cargo metadata could not read the workspace {}; no Rust file was linted.\n{detail}",
+            workspace.display()
+        ),
+    };
+    let Some(output) = output else {
+        let limit = METADATA_TIMEOUT.as_secs();
+        return Err(unusable(format!("It ran past {limit}s.")).into());
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(unusable(stderr).into());
+    }
+    let metadata: schema::Metadata =
+        serde_json::from_slice(&output.stdout).context("failed to parse `cargo metadata`")?;
+    Ok(metadata
+        .packages
+        .into_iter()
+        .map(|package| canonicalize_or_self(&package.manifest_path))
+        .collect())
+}
+
+/// The files of `members`' packages, then the others by crate.
+/// A file outside every package stays with the first.
+fn split_by_membership<'a>(
+    workspace: &Path,
+    files: &[&'a SourceFile],
+    members: &FxHashSet<PathBuf>,
+) -> (Vec<&'a SourceFile>, BTreeMap<String, Vec<String>>) {
+    let mut inside = Vec::with_capacity(files.len());
+    let mut outside: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for &file in files {
+        match crate::runner_helpers::owning_manifest(workspace, &file.path) {
+            Some((manifest, package)) if !members.contains(&manifest) => outside
+                .entry(package)
+                .or_default()
+                .push(file.path.display().to_string()),
+            _ => inside.push(file),
+        }
+    }
+    (inside, outside)
+}
+
+/// Names the crates cargo leaves out, and their files.
+/// Neither clippy nor cargo-shear sees them.
+fn outside_message(workspace: &Path, outside: &BTreeMap<String, Vec<String>>) -> String {
+    let crates: Vec<String> = outside
+        .iter()
+        .map(|(package, files)| format!("{package}: {}", files.join(", ")))
+        .collect();
+    format!(
+        "cargo clippy and cargo-shear did not analyze {} crate(s) outside the cargo \
+         workspace {}. Make them members, or give them a [workspace] table.\n{}",
+        outside.len(),
+        workspace.display(),
+        crates.join("\n")
+    )
 }
 
 /// Refuse a package of `files` that no clippy pass linted.
@@ -743,6 +843,57 @@ mod tests {
         let refusal = judge_packages(&["a", "b"], &["a"]).unwrap_err().to_string();
         assert!(refusal.contains("did not lint b in"), "{refusal}");
         assert!(refusal.contains("x < 0"), "{refusal}");
+    }
+
+    #[test]
+    fn files_of_a_crate_outside_the_members_are_set_apart() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = canonicalize_or_self(dir.path());
+        for (path, content) in [
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("a/src/lib.rs", ""),
+            ("tools/x/Cargo.toml", "[package]\nname = \"x\"\n"),
+            ("tools/x/src/lib.rs", ""),
+            ("tools/x/src/main.rs", ""),
+            ("scripts/loose.rs", ""),
+        ] {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        }
+        let files: Vec<SourceFile> = [
+            "a/src/lib.rs",
+            "tools/x/src/lib.rs",
+            "scripts/loose.rs",
+            "tools/x/src/main.rs",
+        ]
+        .iter()
+        .map(|path| SourceFile {
+            path: root.join(path),
+            language: crate::files::Language::Rust,
+        })
+        .collect();
+        let files: Vec<&SourceFile> = files.iter().collect();
+        let members = FxHashSet::from_iter([root.join("a/Cargo.toml")]);
+
+        let (inside, outside) = split_by_membership(&root, &files, &members);
+
+        let inside: Vec<&Path> = inside.iter().map(|f| f.path.as_path()).collect();
+        assert_eq!(
+            inside,
+            [root.join("a/src/lib.rs"), root.join("scripts/loose.rs")]
+        );
+        let x = [
+            root.join("tools/x/src/lib.rs").display().to_string(),
+            root.join("tools/x/src/main.rs").display().to_string(),
+        ];
+        assert_eq!(outside, BTreeMap::from([("x".to_owned(), x.to_vec())]));
+        let message = outside_message(&root, &outside);
+        assert!(message.contains("1 crate(s) outside"), "{message}");
+        assert!(
+            message.contains(&format!("x: {}, {}", x[0], x[1])),
+            "{message}"
+        );
     }
 
     #[test]

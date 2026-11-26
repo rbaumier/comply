@@ -366,7 +366,7 @@ fn invoke_oxlint(
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to invoke oxlint — install it with: npm install -g oxlint")?;
-    let Some(output) = drain_and_wait(child, OXLINT_BATCH_TIMEOUT)? else {
+    let Some(output) = drain_and_wait(child, OXLINT_BATCH_TIMEOUT, "oxlint")? else {
         eprintln!(
             "comply: oxlint timed out after {}s on {} file(s); continuing with partial results",
             OXLINT_BATCH_TIMEOUT.as_secs(),
@@ -397,9 +397,10 @@ fn invoke_oxlint(
 /// never reads the pipes, so a child that writes past the OS pipe buffer
 /// (~64 KiB) blocks on `write()` and can never exit — a deadlock that surfaces
 /// as a spurious timeout on any project with enough diagnostics to overflow it.
-fn drain_and_wait(
+pub(crate) fn drain_and_wait(
     mut child: std::process::Child,
     timeout: Duration,
+    tool: &str,
 ) -> Result<Option<std::process::Output>> {
     let mut stdout_pipe = child.stdout.take().expect("child stdout must be piped");
     let mut stderr_pipe = child.stderr.take().expect("child stderr must be piped");
@@ -416,7 +417,7 @@ fn drain_and_wait(
 
     let Some(status) = child
         .wait_timeout(timeout)
-        .context("failed to wait for oxlint")?
+        .with_context(|| format!("failed to wait for {tool}"))?
     else {
         let _ = child.kill();
         let _ = child.wait();
@@ -885,7 +886,7 @@ mod tests {
             .spawn()
             .expect("spawn sh");
 
-        let output = drain_and_wait(child, Duration::from_secs(30))
+        let output = drain_and_wait(child, Duration::from_secs(30), "sh")
             .expect("wait must not error")
             .expect("child must complete, not time out");
 

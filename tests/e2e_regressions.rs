@@ -3118,11 +3118,10 @@ fn a_denied_lint_weighs_the_same_in_any_crate() {
     }
 }
 
-// `x` is no workspace member: no pass lints it.
-// A denied lint of `a` must not pass it unlinted.
-#[test]
-fn a_crate_no_pass_lints_past_a_denied_lint_is_refused() {
-    let dir = rust_crate(&[
+/// The workspace of `a` alone, holding `a_lib`.
+/// Crate `x`, at `tools/x`, is no member.
+fn crate_outside_the_workspace(a_lib: &str) -> TempDir {
+    rust_crate(&[
         (
             "Cargo.toml",
             "[workspace]\nmembers = [\"a\"]\nresolver = \"2\"\n",
@@ -3131,10 +3130,7 @@ fn a_crate_no_pass_lints_past_a_denied_lint_is_refused() {
             "a/Cargo.toml",
             "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         ),
-        (
-            "a/src/lib.rs",
-            "#![deny(clippy::len_zero)]\npub fn is_old(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
-        ),
+        ("a/src/lib.rs", a_lib),
         (
             "tools/x/Cargo.toml",
             "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -3143,15 +3139,141 @@ fn a_crate_no_pass_lints_past_a_denied_lint_is_refused() {
             "tools/x/src/lib.rs",
             "pub fn is_loose(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
         ),
+    ])
+}
+
+// No pass lints `x`. A full scan names it.
+// A denied lint of `a` changes nothing.
+#[test]
+fn a_full_scan_names_the_crates_outside_the_workspace() {
+    for a_lib in [
+        "/// Kept.\npub const KEEP: u8 = 1;\n",
+        "#![deny(clippy::len_zero)]\npub fn is_old(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
+    ] {
+        let dir = crate_outside_the_workspace(a_lib);
+        let output = common::comply()
+            .current_dir(dir.path())
+            .env("CARGO_TARGET_DIR", dir.path().join("target"))
+            .arg(".")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_ne!(output.status.code(), Some(2), "{stderr}");
+        assert!(
+            stderr.contains("1 crate(s) outside the cargo workspace"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("tools/x/src/lib.rs"), "{stderr}");
+    }
+}
+
+// An index mode cannot pass `x` unlinted.
+// It refuses, naming the crate and its files.
+#[test]
+fn index_modes_refuse_a_crate_outside_the_workspace() {
+    let dir = crate_outside_the_workspace("/// Kept.\npub const KEEP: u8 = 1;\n");
+    let root = dir.path();
+    fs::write(root.join(".gitignore"), "target/\n").unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "init"]);
+    let append = |path: &str, line: &str| {
+        let file = root.join(path);
+        let source = fs::read_to_string(&file).unwrap();
+        fs::write(&file, format!("{source}{line}")).unwrap();
+        git(root, &["add", "-A"]);
+    };
+    append("tools/x/src/lib.rs", "/// More.\npub const MORE: u8 = 2;\n");
+    git(root, &["commit", "-qm", "more"]);
+    append("tools/x/src/lib.rs", "/// Most.\npub const MOST: u8 = 3;\n");
+    append("a/src/lib.rs", "/// Less.\npub const LESS: u8 = 0;\n");
+
+    for args in [
+        &["--range", "HEAD~1", "HEAD"][..],
+        &["--staged"][..],
+        &["--staged", "--diff-only"][..],
+    ] {
+        let output = common::comply()
+            .current_dir(root)
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .args(args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        assert!(!stdout.contains("all clear"), "{args:?}: {stdout}");
+        assert!(stderr.contains("x: "), "{args:?}: {stderr}");
+        assert!(stderr.contains("tools/x/src/lib.rs"), "{args:?}: {stderr}");
+    }
+}
+
+// No crate holds a loose Rust file.
+// An index mode refuses it; a full scan notes it.
+#[test]
+fn a_loose_rust_file_is_refused_in_an_index_mode() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fs::write(root.join("loose.rs"), "/// One.\npub const ONE: u8 = 1;\n").unwrap();
+    git(root, &["init", "-q"]);
+    git(root, &["add", "-A"]);
+
+    let staged = common::comply()
+        .current_dir(root)
+        .arg("--staged")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&staged.stderr);
+    assert_eq!(staged.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("1 loose file(s)"), "{stderr}");
+    assert!(stderr.contains("loose.rs"), "{stderr}");
+
+    let full = common::comply()
+        .current_dir(root)
+        .arg(".")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&full.stderr);
+    assert_ne!(full.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("1 loose file(s)"), "{stderr}");
+}
+
+// A fixtures crate nested in `a`, and excluded.
+// A full scan still lints `a`.
+#[test]
+fn a_nested_excluded_fixtures_crate_keeps_a_full_scan() {
+    let dir = rust_crate(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"a\"]\nexclude = [\"a/tests/fixtures/x\"]\nresolver = \"2\"\n",
+        ),
+        (
+            "a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        (
+            "a/src/lib.rs",
+            "/// Empty.\n#[must_use]\npub fn is_none(v: &[u8]) -> bool {\n    v.len() == 0\n}\n",
+        ),
+        (
+            "a/tests/fixtures/x/Cargo.toml",
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        (
+            "a/tests/fixtures/x/src/lib.rs",
+            "/// Kept.\npub const KEEP: u8 = 1;\n",
+        ),
     ]);
     common::comply()
         .current_dir(dir.path())
         .env("CARGO_TARGET_DIR", dir.path().join("target"))
         .arg(".")
         .assert()
-        .code(2)
-        .stdout(predicate::str::contains("all clear").not())
-        .stderr(predicate::str::contains("did not lint x"));
+        .code(1)
+        .stdout(predicate::str::contains("a/src/lib.rs:4:5"))
+        .stdout(predicate::str::contains("clippy::len_zero"));
 }
 
 /// Comply over a crate holding `files`, with its clippy findings.

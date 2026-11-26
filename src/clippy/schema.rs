@@ -112,3 +112,20 @@ pub struct RustcSpanLine {
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,
 }
+
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
+#[derive(Debug, Deserialize)]
+pub struct Metadata {
+    /// Under `--no-deps`, the workspace members alone.
+    pub packages: Vec<MetadataPackage>,
+    #[serde(default, flatten)]
+    pub _extra: IgnoredAny,
+}
+
+/// External wire format mirror — see comply:rust-serde-deny-unknown-fields.
+#[derive(Debug, Deserialize)]
+pub struct MetadataPackage {
+    pub manifest_path: std::path::PathBuf,
+    #[serde(default, flatten)]
+    pub _extra: IgnoredAny,
+}
