@@ -653,31 +653,21 @@ fn compiled_sources(
 }
 
 /// The dep-info files of the unit that wrote `artifact`.
-/// The shared `deps` directory names each after its unit.
-/// Any other directory belongs to the unit alone.
+/// Each is named after the artifact, without its `lib` prefix.
+/// A stale unit's file may share the directory, in any layout.
 fn dep_info_files(artifact: &Path) -> Vec<PathBuf> {
     let Some(dir) = artifact.parent() else {
         return Vec::new();
     };
-    if dir.file_name().is_some_and(|name| name == "deps") {
-        let stem = artifact
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        return [Some(stem.as_str()), stem.strip_prefix("lib")]
-            .into_iter()
-            .flatten()
-            .map(|unit| dir.join(format!("{unit}.d")))
-            .filter(|file| file.is_file())
-            .collect();
-    }
-    std::fs::read_dir(dir)
+    let stem = artifact
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    [Some(stem.as_str()), stem.strip_prefix("lib")]
         .into_iter()
         .flatten()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|file| file.extension().is_some_and(|ext| ext == "d"))
-        .take(DEP_INFO_FILES + 1)
+        .map(|unit| dir.join(format!("{unit}.d")))
+        .filter(|file| file.is_file())
         .collect()
 }
 
@@ -892,6 +882,41 @@ fn canonicalize_or_self(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Create each of `files` under `dir`, empty.
+    fn touch(dir: &Path, files: &[&str]) {
+        for file in files {
+            let path = dir.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+    }
+
+    #[test]
+    fn dep_info_files_name_only_the_unit_of_the_artifact() {
+        // Flat layouts up to 1.99, then the per-unit one.
+        let layouts = [
+            ("deps/libcore_x-1.rmeta", "deps/core_x-1.d"),
+            ("examples/libex-1.rmeta", "examples/ex-1.d"),
+            ("examples/ex-1", "examples/ex-1.d"),
+            ("debug/comply", "debug/comply.d"),
+            (
+                "build/comply/1/out/comply-1",
+                "build/comply/1/out/comply-1.d",
+            ),
+        ];
+        for (artifact, own) in layouts {
+            let dir = tempfile::TempDir::new().unwrap();
+            let artifact = dir.path().join(artifact);
+            // A stale unit of a removed target shares the directory.
+            let stale = artifact.with_file_name("stale-9.d");
+            touch(dir.path(), &[own]);
+            std::fs::write(&stale, "").unwrap();
+            std::fs::write(&artifact, "").unwrap();
+            let found = dep_info_files(&artifact);
+            assert_eq!(found, vec![dir.path().join(own)], "{artifact:?}");
+        }
+    }
 
     #[test]
     fn only_a_denied_unused_dependency_explains_a_cargo_failure() {
