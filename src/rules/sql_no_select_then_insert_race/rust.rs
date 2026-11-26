@@ -13,6 +13,8 @@ struct Collected {
     column: usize,
     byte_start: usize,
     byte_len: usize,
+    /// The start of the enclosing function: one flow of execution.
+    scope: usize,
 }
 
 #[derive(Default)]
@@ -45,6 +47,19 @@ impl AstCheck for Check {
         let Some(state) = state.and_then(|s| s.downcast_mut::<State>()) else {
             return;
         };
+        let is_sql = super::extract_select_from_table(text).is_some()
+            || super::extract_insert_into_table(text).is_some();
+        if !is_sql {
+            return;
+        }
+        // Items at module level never run in sequence.
+        let Some(function) = crate::rules::rust_helpers::enclosing_fn(node) else {
+            return;
+        };
+        // A test hands its literals to independent calls.
+        if crate::rules::rust_helpers::is_test_only(node, ctx) {
+            return;
+        }
         let pos = node.start_position();
         let range = node.byte_range();
         state.nodes.push(Collected {
@@ -53,6 +68,7 @@ impl AstCheck for Check {
             column: pos.column + 1,
             byte_start: range.start,
             byte_len: range.len(),
+            scope: function.start_byte(),
         });
     }
 
@@ -73,6 +89,9 @@ impl AstCheck for Check {
             };
             for (offset, ins) in nodes[i + 1..].iter().enumerate() {
                 let ins_index = i + 1 + offset;
+                if ins.scope != sel.scope {
+                    continue;
+                }
                 let Some(ins_table) = super::extract_insert_into_table(&ins.text) else {
                     continue;
                 };
@@ -172,5 +191,59 @@ mod tests {
             let c = "INSERT INTO users (version) VALUES ($1)";
         }"#;
         assert_eq!(run(src).len(), 1);
+    }
+
+    #[test]
+    fn an_insert_select_is_one_atomic_statement() {
+        let src = r#"fn copy(db: &Db) {
+            db.execute("INSERT INTO pg_depend SELECT * FROM pg_depend WHERE false;");
+            db.execute("INSERT INTO pg_depend SELECT * FROM pg_depend WHERE false;");
+        }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn literals_of_two_assertion_calls_never_run_in_sequence() {
+        let src = r#"#[test]
+        fn denied() {
+            assert_denied("SELECT role_name FROM audit.t;");
+            assert_denied("INSERT INTO audit.t (role_name) VALUES ('x');");
+        }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn two_tables_of_one_schema_are_not_one_table() {
+        let src = r#"fn probe(db: &Db) {
+            db.query("SELECT role_name FROM information_schema.enabled_roles;");
+            db.execute("INSERT INTO information_schema.sql_features (feature_id) VALUES ('x');");
+        }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn a_select_and_an_insert_in_two_functions_never_run_in_sequence() {
+        let src = r#"
+            fn read(db: &Db) { db.query("SELECT id FROM users WHERE email = $1"); }
+            fn write(db: &Db) { db.execute("INSERT INTO users (email) VALUES ($1)"); }
+        "#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
+    fn flags_a_check_then_insert_on_one_qualified_table() {
+        let src = r#"fn upsert(db: &Db) {
+            let row = db.query("SELECT id FROM app.users WHERE email = $1");
+            if row.is_none() {
+                db.execute("INSERT INTO \"app\".\"users\" (email) VALUES ($1)");
+            }
+        }"#;
+        let found = run(src);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].message.contains("`APP.USERS`"),
+            "{}",
+            found[0].message
+        );
     }
 }

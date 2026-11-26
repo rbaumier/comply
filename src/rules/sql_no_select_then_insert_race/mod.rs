@@ -17,7 +17,8 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: false,
+    // A test file hands its literals to independent calls.
+    skip_in_test_dir: true,
     skip_in_relaxed_dir: false,
 };
 
@@ -48,6 +49,9 @@ pub fn register() -> RuleDef {
 /// real table is a runtime value, unknown at lint time, and must not be treated
 /// as a literal name. Leading whitespace between the keyword and the target is
 /// tolerated.
+///
+/// The name keeps its schema, without quotes: `"app" . "users"` is `APP.USERS`.
+/// A Rust literal's escapes go too: `\"app\"` is `APP`.
 fn extract_table_after(upper: &str, keyword: &str) -> Option<String> {
     let idx = upper.find(keyword)?;
     let after = upper[idx + keyword.len()..].trim_start();
@@ -55,22 +59,27 @@ fn extract_table_after(upper: &str, keyword: &str) -> Option<String> {
     if token.contains('{') {
         return None;
     }
-    let mut name = String::new();
-    for ch in after.chars() {
-        if ch.is_alphanumeric() || ch == '_' {
-            name.push(ch);
-        } else if name.is_empty() {
-            continue;
-        } else {
-            break;
-        }
-    }
-    if name.is_empty() { None } else { Some(name) }
+    let unquoted = after.replace(['"', '`', '[', ']', '\\'], "");
+    let qualified = unquoted
+        .split('.')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(".");
+    let is_name_char = |ch: char| ch.is_alphanumeric() || ch == '_';
+    let name: String = qualified
+        .trim_start_matches(|ch: char| !is_name_char(ch))
+        .chars()
+        .take_while(|ch| is_name_char(*ch) || *ch == '.')
+        .collect();
+    let name = name.trim_end_matches('.');
+    (!name.is_empty()).then(|| name.to_string())
 }
 
+/// The table a read selects from.
+/// An `INSERT … SELECT` is one atomic statement, not a read.
 pub(super) fn extract_select_from_table(sql: &str) -> Option<String> {
     let upper = sql.to_ascii_uppercase();
-    if !upper.contains("SELECT") {
+    if !upper.contains("SELECT") || upper.contains("INSERT INTO ") {
         return None;
     }
     extract_table_after(&upper, " FROM ")
