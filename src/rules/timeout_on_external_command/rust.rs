@@ -5,24 +5,19 @@
 //! - A `.spawn()` with no output capture (`.output()`/`.stdout(`/`.stderr(`):
 //!   stdio is inherited, so it is an interactive foreground process (editor,
 //!   shell, user script) where a timeout would be wrong.
-//! - `build.rs` build scripts and test contexts (a `#[cfg(test)]` module /
-//!   `#[test]` fn, or a file under a `tests/` integration directory): they
-//!   never run in production, so the timeout requirement does not apply.
+//! - `build.rs` build scripts never run in production.
+//! - Nor does code outside the release, per `is_outside_release`.
+//!   That is test-only code, and the package's `tests/` target.
+//!   The `benches/` and `examples/` targets are outside too.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
 crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node, source, ctx, diagnostics|
     if ctx.path.file_name() == Some(std::ffi::OsStr::new("build.rs")) { return; }
-    // `Command::new()` inside a `#[cfg(test)]` module / `#[test]` fn, or under a
-    // `tests/` integration directory, is compile-time test setup that never runs
-    // in production, so the timeout requirement does not apply.
-    if crate::rules::rust_helpers::is_test_code(node, source, ctx)
-    {
-        return;
-    }
     let Some(func_node) = node.child_by_field_name("function") else { return };
     let Ok(func_text) = func_node.utf8_text(source) else { return };
-    if func_text != "Command::new" { return; }
+    // The path may name its module: `std::process::Command::new`.
+    if func_text != "Command::new" && !func_text.ends_with("::Command::new") { return; }
 
     let row = node.start_position().row;
     let src_str = std::str::from_utf8(source).unwrap_or("");
@@ -53,6 +48,9 @@ crate::ast_check! { on ["call_expression"] prefilter = ["Command::new"] => |node
     if !context_str.contains(".output()") && !context_str.contains(".spawn()") && !context_str.contains(".status()") {
         return;
     }
+    // Test setup and examples never run in production.
+    // A module named after tests ships.
+    if crate::rules::rust_helpers::is_outside_release(node, ctx) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -146,7 +144,7 @@ fn invalid_justfile() {
     .unwrap();
   assert!(!output.status.success());
 }"#;
-        let diags = crate::rules::test_helpers::run_rule_gated(&Check, src, "tests/edit.rs");
+        let diags = run_in_crate("tests/edit.rs", src);
         assert!(
             diags.is_empty(),
             "Command::new without a timeout in an integration test file is a false positive"
@@ -182,9 +180,22 @@ mod t {
     fn skips_command_under_tests_dir() {
         let src = r#"fn f() { Command::new("git").output().ok(); }"#;
         assert!(
-            crate::rules::test_helpers::run_rule(&Check, src, "tests/integration.rs").is_empty(),
+            run_in_crate("tests/integration.rs", src).is_empty(),
             "Command::new under a tests/ directory is a false positive"
         );
+        // A `src/` module named after tests or docs ships.
+        for path in ["src/git_test.rs", "src/docs/git.rs"] {
+            assert_eq!(run_in_crate(path, src).len(), 1, "{path}");
+        }
+    }
+
+    fn run_in_crate(path: &str, src: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            crate::rules::test_helpers::LIB_CARGO_TOML,
+            src,
+            path,
+        )
     }
 
     #[test]
@@ -202,5 +213,13 @@ mod t {
             1,
             "production Command::new outside a test context must still fire"
         );
+    }
+
+    #[test]
+    fn flags_command_named_by_its_module_path() {
+        for call in ["std::process::Command::new", "tokio::process::Command::new"] {
+            let src = format!("fn f() {{ {call}(\"git\").output(); }}");
+            assert_eq!(run_in_crate("src/git.rs", &src).len(), 1, "{call}");
+        }
     }
 }

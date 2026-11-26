@@ -14,6 +14,11 @@ use super::rust::check_string_content;
 pub struct Check;
 
 impl TextCheck for Check {
+    /// The rationale is a comment.
+    fn reads_sql_comments(&self) -> bool {
+        true
+    }
+
     fn check(&self, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let min_rationale_words = ctx
             .config
@@ -23,6 +28,7 @@ impl TextCheck for Check {
             .threshold("sql-index-needs-rationale-comment", "lookback_lines", ctx.lang);
         check_string_content(
             ctx.source,
+            &crate::rules::sql_helpers::mask_sql_comments(ctx.source),
             0,
             0,
             ctx.path,
@@ -44,6 +50,12 @@ mod tests {
     #[test]
     fn flags_create_index_without_comment() {
         assert_eq!(run("CREATE INDEX idx_foo ON bar(baz);").len(), 1);
+    }
+
+    #[test]
+    fn ignores_create_index_in_a_comment() {
+        let src = "-- CREATE INDEX idx_old ON bar(baz);\n/* CREATE INDEX idx_b ON bar(qux); */";
+        assert!(run(src).is_empty());
     }
 
     #[test]

@@ -1,14 +1,14 @@
 //! Remap table: oxlint's reported diagnostic `code` → comply's RuleMeta.
 //!
-//! Oxlint emits rule ids in the format `plugin-name(rule-name)` — the
-//! plugin name depends on the plugin: `typescript-eslint(foo)` for ts rules,
-//! `eslint-plugin-import(foo)` for import rules, etc. comply's config uses
-//! the shorter plugin prefix `typescript/foo`. This module translates
-//! between the two.
+//! oxlint reports a rule as `plugin(rule)`, like `typescript(foo)`.
+//! comply's config names it `typescript/foo`.
+//! This module translates between the two.
 //!
 //! Without the remap, user-facing diagnostics would show oxlint's verbose
 //! code and oxlint's generic message instead of comply's stable rule id
 //! and our remediation wording.
+
+use std::borrow::Cow;
 
 use rustc_hash::FxHashMap;
 
@@ -27,53 +27,25 @@ pub fn build_table(
     table
 }
 
-/// Translate a comply oxlint config key into oxlint's reported diagnostic code.
-/// Plugin prefix translations verified empirically against oxlint 1.59:
-/// - `typescript/*` → `typescript-eslint(*)`
-/// - `import/*` → `eslint-plugin-import(*)`
-/// - `unicorn/*` → `eslint-plugin-unicorn(*)`
-/// - `promise/*` → `eslint-plugin-promise(*)`
-/// - `vue/*` → `eslint-plugin-vue(*)`
-/// - `nextjs/*` → `eslint-plugin-next(*)`
-/// - `react/exhaustive-deps` → `eslint-plugin-react-hooks(exhaustive-deps)`
-/// - `react/*` → `eslint-plugin-react(*)`
-/// - `jest/*` → `eslint-plugin-jest(*)`
-/// - `oxc/*` → `oxc(*)`
-/// - bare eslint core → `eslint(*)`
+/// The code oxlint 1.90 reports for a comply config key.
+/// `nextjs/` reports as `next(…)`, `react/exhaustive-deps` as `react-hooks(…)`.
+/// A key without a plugin is an eslint core rule.
 pub fn config_key_to_oxlint_code(config_key: &str) -> String {
-    if let Some(rest) = config_key.strip_prefix("typescript/") {
-        return format!("typescript-eslint({rest})");
+    match config_key.split_once('/') {
+        Some(("nextjs", rule)) => format!("next({rule})"),
+        Some(("react", "exhaustive-deps")) => "react-hooks(exhaustive-deps)".to_string(),
+        Some((plugin, rule)) => format!("{plugin}({rule})"),
+        None => format!("eslint({config_key})"),
     }
-    if let Some(rest) = config_key.strip_prefix("import/") {
-        return format!("eslint-plugin-import({rest})");
+}
+
+/// `code` as oxlint 1.90 writes it.
+/// oxlint 1.59 wrote `typescript-eslint(…)` and `eslint-plugin-<plugin>(…)`.
+pub fn current_code(code: &str) -> Cow<'_, str> {
+    match code.strip_prefix("typescript-eslint(") {
+        Some(rule) => Cow::Owned(format!("typescript({rule}")),
+        None => Cow::Borrowed(code.strip_prefix("eslint-plugin-").unwrap_or(code)),
     }
-    if let Some(rest) = config_key.strip_prefix("unicorn/") {
-        return format!("eslint-plugin-unicorn({rest})");
-    }
-    if let Some(rest) = config_key.strip_prefix("promise/") {
-        return format!("eslint-plugin-promise({rest})");
-    }
-    if let Some(rest) = config_key.strip_prefix("vue/") {
-        return format!("eslint-plugin-vue({rest})");
-    }
-    if let Some(rest) = config_key.strip_prefix("nextjs/") {
-        return format!("eslint-plugin-next({rest})");
-    }
-    // React Hooks rules live under `react/` in comply's config namespace but
-    // oxlint reports them under the `eslint-plugin-react-hooks` plugin code.
-    if config_key == "react/exhaustive-deps" {
-        return "eslint-plugin-react-hooks(exhaustive-deps)".to_string();
-    }
-    if let Some(rest) = config_key.strip_prefix("react/") {
-        return format!("eslint-plugin-react({rest})");
-    }
-    if let Some(rest) = config_key.strip_prefix("jest/") {
-        return format!("eslint-plugin-jest({rest})");
-    }
-    if let Some(rest) = config_key.strip_prefix("oxc/") {
-        return format!("oxc({rest})");
-    }
-    format!("eslint({config_key})")
 }
 
 #[cfg(test)]
@@ -84,39 +56,39 @@ mod tests {
     fn config_key_transforms_match_oxlint_codes() {
         assert_eq!(
             config_key_to_oxlint_code("typescript/no-explicit-any"),
-            "typescript-eslint(no-explicit-any)"
+            "typescript(no-explicit-any)"
         );
         assert_eq!(
             config_key_to_oxlint_code("import/no-default-export"),
-            "eslint-plugin-import(no-default-export)"
+            "import(no-default-export)"
         );
         assert_eq!(
             config_key_to_oxlint_code("unicorn/no-array-for-each"),
-            "eslint-plugin-unicorn(no-array-for-each)"
+            "unicorn(no-array-for-each)"
         );
         assert_eq!(
             config_key_to_oxlint_code("promise/catch-or-return"),
-            "eslint-plugin-promise(catch-or-return)"
+            "promise(catch-or-return)"
         );
         assert_eq!(
             config_key_to_oxlint_code("vue/no-import-compiler-macros"),
-            "eslint-plugin-vue(no-import-compiler-macros)"
+            "vue(no-import-compiler-macros)"
         );
         assert_eq!(
             config_key_to_oxlint_code("nextjs/no-before-interactive-script-outside-document"),
-            "eslint-plugin-next(no-before-interactive-script-outside-document)"
+            "next(no-before-interactive-script-outside-document)"
         );
         assert_eq!(
             config_key_to_oxlint_code("react/jsx-curly-brace-presence"),
-            "eslint-plugin-react(jsx-curly-brace-presence)"
+            "react(jsx-curly-brace-presence)"
         );
         assert_eq!(
             config_key_to_oxlint_code("react/exhaustive-deps"),
-            "eslint-plugin-react-hooks(exhaustive-deps)"
+            "react-hooks(exhaustive-deps)"
         );
         assert_eq!(
             config_key_to_oxlint_code("jest/no-export"),
-            "eslint-plugin-jest(no-export)"
+            "jest(no-export)"
         );
         assert_eq!(
             config_key_to_oxlint_code("oxc/no-barrel-file"),

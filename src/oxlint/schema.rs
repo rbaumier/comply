@@ -17,7 +17,11 @@ use serde::de::IgnoredAny;
 pub struct OxlintOutput {
     #[serde(default)]
     pub diagnostics: Vec<OxlintDiag>,
-    /// Catches all other top-level fields (number_of_files, threads_count, etc.)
+    /// How many of the files it was given oxlint linted.
+    /// An ignore file can drop some without a word.
+    #[serde(default)]
+    pub number_of_files: Option<usize>,
+    /// Catches all other top-level fields (threads_count, etc.)
     /// so future oxlint additions don't break parsing.
     #[serde(default, flatten)]
     pub _extra: IgnoredAny,

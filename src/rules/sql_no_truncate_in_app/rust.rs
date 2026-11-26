@@ -2,6 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::{is_cargo_bench_target, is_test_only, string_literal_decoded};
 use crate::rules::sql_helpers::RUST_STRING_KINDS;
 
 #[derive(Debug)]
@@ -19,17 +20,17 @@ impl AstCheck for Check {
         _state: Option<&mut dyn std::any::Any>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.in_benchmark_dir() {
-            return;
-        }
-        let source_bytes = ctx.source.as_bytes();
-        let Ok(text) = node.utf8_text(source_bytes) else {
+        let Some(text) = string_literal_decoded(node, ctx.source.as_bytes()) else {
             return;
         };
-        if !super::sql_uses_truncate(text) {
+        if super::truncate_statements(&text).is_empty() {
             return;
         }
-        if !super::looks_like_sql_truncate(text) {
+        if !super::looks_like_sql_truncate(&text) {
+            return;
+        }
+        // Only `cargo bench` builds the `benches/` of the package.
+        if is_test_only(node, ctx) || is_cargo_bench_target(ctx.path, ctx.project) {
             return;
         }
         diagnostics.push(Diagnostic::at_node(
@@ -82,6 +83,15 @@ mod tests {
     }
 
     #[test]
+    fn allows_truncate_privilege_and_trigger_event() {
+        let src = r#"fn f() {
+            let a = "REVOKE TRUNCATE ON audit_log FROM writer;";
+            let b = "CREATE TRIGGER g BEFORE DELETE OR TRUNCATE ON audit_log FOR EACH STATEMENT EXECUTE FUNCTION g();";
+        }"#;
+        assert!(run(src).is_empty());
+    }
+
+    #[test]
     fn allows_truncate_in_benchmark_dir_issue1497() {
         // Issue #1497: benchmark cleanup uses TRUNCATE to reset state fast.
         let src = r#"
@@ -91,13 +101,35 @@ mod tests {
                 "TRUNCATE TABLE users",
             ];
         "#;
-        assert!(run_at(src, "diesel_bench/benches/consts.rs").is_empty());
+        assert!(run_in_crate(src, "benches/consts.rs").is_empty());
+        // A `src/` module named after benchmarks ships.
+        assert_eq!(run_in_crate(src, "src/reports/cpu_bench.rs").len(), 3);
+        assert_eq!(run_in_crate(src, "src/benches/consts.rs").len(), 3);
+    }
+
+    #[test]
+    fn allows_truncate_in_cfg_test_code() {
+        let src = r#"#[cfg(test)]
+mod tests {
+    #[test]
+    fn resets() { let q = "TRUNCATE TABLE users"; }
+}"#;
+        assert!(run(src).is_empty());
+    }
+
+    fn run_in_crate(src: &str, path: &str) -> Vec<Diagnostic> {
+        crate::rules::test_helpers::run_rule_with_cargo(
+            &Check,
+            crate::rules::test_helpers::LIB_CARGO_TOML,
+            src,
+            path,
+        )
     }
 
     #[test]
     fn allows_truncate_in_test_dir_issue1497() {
         let src = r#"fn cleanup() { let q = "TRUNCATE TABLE users"; }"#;
-        assert!(run_at(src, "tests/db/cleanup.rs").is_empty());
+        assert!(run_in_crate(src, "tests/db/cleanup.rs").is_empty());
     }
 
     #[test]
@@ -105,5 +137,8 @@ mod tests {
         // Negative-space guard: ordinary production code is still flagged.
         let src = r#"fn cleanup() { let q = "TRUNCATE TABLE users"; }"#;
         assert_eq!(run_at(src, "src/db/cleanup.rs").len(), 1);
+        // A name about tests does not make a test target.
+        assert_eq!(run_in_crate(src, "src/speed_test.rs").len(), 1);
+        assert_eq!(run_in_crate(src, "src/ab_test/reset.rs").len(), 1);
     }
 }

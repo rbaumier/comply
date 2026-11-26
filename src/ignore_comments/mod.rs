@@ -1,7 +1,8 @@
 //! Suppression parser — scans source for suppression comments + filters diagnostics.
 //!
 //! comply's own format is `// comply-ignore: <rule-id> — <justification>`
-//! (em-dash or ` -- `):
+//! (em-dash or ` -- `), or the same marker in a comment of a language without
+//! `//` comments (`-- comply-ignore:` in SQL, see `line`):
 //! - **Above-line:** marker is the only thing on the line → suppresses next line.
 //! - **Trailing:** marker comes after code on the same line → suppresses current line.
 //! - **String literals:** markers inside `"..."`, `'...'`, or `` `...` `` are ignored.
@@ -14,6 +15,7 @@
 //! suppresses nothing.
 
 mod eslint_config;
+mod language_comments;
 mod line;
 mod payload;
 
@@ -60,18 +62,31 @@ struct ScannedDirectives {
     last_line: usize,
 }
 
-fn scan_directives(path: &Path, source: &str) -> ScannedDirectives {
+/// A directive counts where `in_comment` answers true for its offset.
+fn scan_directives(
+    path: &Path,
+    source: &str,
+    in_comment: &dyn Fn(usize) -> bool,
+) -> ScannedDirectives {
     let mut parses = Vec::new();
     let mut marker_lines = FxHashSet::default();
     let mut last_line = 0;
+    let comments = line::marker_comments(path);
+    let mut line_start = 0usize;
     for (idx, raw_line) in source.lines().enumerate() {
         last_line = idx + 1;
-        if let Some(parsed) = line::parse(path, raw_line, last_line) {
+        let is_comment = |at: usize| in_comment(line_start.saturating_add(at));
+        if let Some(parsed) = line::parse(path, comments, raw_line, last_line, &is_comment) {
             if parsed.is_comment_only_line {
                 marker_lines.insert(last_line);
             }
             parses.push((last_line, parsed));
         }
+        line_start = source[line_start..]
+            .find('\n')
+            .map_or(source.len(), |newline| {
+                line_start.saturating_add(newline).saturating_add(1)
+            });
     }
     ScannedDirectives {
         parses,
@@ -107,11 +122,19 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // a line-1 ignore in a BOM-prefixed file would never apply otherwise.
     let source = source.strip_prefix('\u{FEFF}').unwrap_or(source);
 
+    // A string or a block scalar can span lines.
+    // So the file's own grammar tells its comments apart.
+    let language_comments = language_comments::bytes(path, source);
+    let in_comment = |at: usize| {
+        language_comments
+            .as_ref()
+            .is_none_or(|comment| comment.get(at) == Some(&true))
+    };
     let ScannedDirectives {
         parses,
         marker_lines,
         last_line,
-    } = scan_directives(path, source);
+    } = scan_directives(path, source, &in_comment);
     let jsdoc_lines = jsdoc_lines(source);
 
     // Apply each parse. An above-line marker whose immediate target is itself
@@ -149,7 +172,7 @@ pub fn parse_ignores(path: &Path, source: &str) -> IgnoreResult {
     // ESLint inline config comments (`/* eslint <rule>: 0 */`) turn a rule off
     // for the file. Treat each off-severity rule as a file-level suppression,
     // honoring the same syntax codegen output (AWS SDK Smithy, etc.) relies on.
-    for rule in eslint_config::off_rules(source) {
+    for rule in eslint_config::off_rules(source, &in_comment) {
         insert_suppressed_name(&mut file_suppressions, rule);
     }
 

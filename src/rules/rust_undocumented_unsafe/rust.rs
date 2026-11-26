@@ -11,14 +11,15 @@
 //! via comply means consuming crates don't have to opt in — every
 //! `unsafe` block in the project must carry its safety justification.
 //!
-//! Test code is exempt: both by a `tests/` directory (`skip_in_test_dir`)
-//! and by an inline `#[test]` / `#[cfg(test)]` context detected via
-//! `is_in_test_context`, so unit tests written next to the code they
-//! exercise are treated the same as tests under `tests/`.
+//! Code outside the release is exempt, per `is_outside_release`.
+//! It reads inline `#[test]` and `#[cfg(test)]` code.
+//! It reads a `#[cfg(test)] mod …;` chain too.
+//! It reads the package's `tests/`, `benches/` and `examples/`.
+//! A module named after tests or docs is checked.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{is_safety_marker, is_test_code};
+use crate::rules::rust_helpers::{is_outside_release, is_safety_marker};
 
 const KINDS: &[&str] = &["unsafe_block"];
 
@@ -40,12 +41,12 @@ impl AstCheck for Check {
         if inside_unsafe_fn(node, ctx.source.as_bytes()) {
             return;
         }
-        if is_test_code(node, ctx.source.as_bytes(), ctx) {
-            return;
-        }
         if has_safety_comment_above(node, ctx.source)
             || has_safety_comment_inside_block(node, ctx.source)
         {
+            return;
+        }
+        if is_outside_release(node, ctx) {
             return;
         }
         let pos = node.start_position();
@@ -314,18 +315,21 @@ mod tests {
     #[test]
     fn exempt_in_test_dir_issue_1011() {
         // Issue #1011: sled tests/test_crash_recovery.rs — bare unsafe in a
-        // test file. skip_in_test_dir suppresses the rule under tests/.
+        // test file. The package's `tests/` target is exempt.
         let source = "fn f() { unsafe { env::set_var(\"K\", \"v\"); } }";
-        // Bare unsafe block still flags on a normal source path.
-        assert_eq!(
-            crate::rules::test_helpers::run_rule_gated(&Check, source, "src/lib.rs").len(),
-            1
-        );
-        // …but is exempt under a tests/ directory.
-        assert!(
-            crate::rules::test_helpers::run_rule_gated(&Check, source, "tests/test_crash_recovery.rs")
-                .is_empty()
-        );
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                source,
+                path,
+            )
+        };
+        assert!(run("tests/test_crash_recovery.rs").is_empty());
+        // A `src/` module named after tests or docs ships.
+        for path in ["src/lib.rs", "src/crash_test.rs", "src/docs/recovery.rs"] {
+            assert_eq!(run(path).len(), 1, "{path}");
+        }
     }
 
     #[test]
@@ -491,8 +495,8 @@ mod tests {
 
     #[test]
     fn exempt_inline_cfg_test_mod_issue_3890() {
-        // The other `is_in_test_context` form: a `#[cfg(test)] mod tests`
-        // in a src/ file. A bare unsafe block inside it is exempt.
+        // An inline `#[cfg(test)] mod tests` is test-only.
+        // A bare unsafe block inside it is exempt.
         let source = "#[cfg(test)]\n\
                       mod tests {\n\
                       fn helper(p: *const u8) {\n\

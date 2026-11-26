@@ -8,7 +8,7 @@
 //
 // Request:  { "tsconfig": string, "files": string[], "rules": string[],
 //             "config"?: { [ruleId: string]: { [key: string]: number } } }
-// Response: { "diagnostics": Diag[], "error"?: string }
+// Response: { "diagnostics": Diag[], "error"?: string, "files"?: string[] }
 //   Diag:   { "file": string, "line": number, "column": number,
 //             "rule": string, "message": string }
 //
@@ -26,10 +26,16 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
-function fail(error) {
-  process.stdout.write(JSON.stringify({ diagnostics: [], error }));
+function fail(error, files = []) {
+  process.stdout.write(JSON.stringify({ diagnostics: [], error, files }));
   process.exit(0);
+}
+
+/** The message of a thrown value. */
+function cause(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function readStdin() {
@@ -469,23 +475,113 @@ function ruleNoTypeofOperator(sourceFile, checker, text, lineStarts, file) {
   });
 }
 
-const duplicateCandidates = [];
-
-for (const file of files) {
-  // `getDefaultProjectForFile` throws (rather than returning null) when `file`
-  // belongs to no opened project — e.g. a repo with split tsconfigs (root +
-  // e2e + scripts) where the discovered project covers only a subset of the
-  // fed files. Treat a throw exactly like a missing project: skip type-aware
-  // for this file instead of crashing the whole run.
-  let project;
+/** `call()`, or `onThrow(error)`: typescript-go's API reports by throwing. */
+function attempt(call, onThrow) {
+  // comply-ignore: no-try-statements — typescript-go's API reports by throwing.
   try {
-    project = snapshot.getDefaultProjectForFile(file);
-  } catch {
-    continue;
+    return call();
+  } catch (error) {
+    return onThrow(error);
   }
+}
+
+/** Whether `file` exists on disk. */
+function exists(file) {
+  // comply-ignore: node-no-sync, security-detect-non-literal-fs-filename — a synchronous script over comply's paths.
+  return fs.existsSync(file);
+}
+
+/** The project of `snap` whose program holds `file`. */
+function holder(snap, file) {
+  // It throws for a file no opened project holds.
+  const project = attempt(() => snap.getDefaultProjectForFile(file), () => undefined);
+  return project && project.program.getSourceFile(file) ? project : undefined;
+}
+
+/** The nearest tsconfig.json above `file`, or "". */
+function nearestTsconfig(file) {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "tsconfig.json");
+    if (exists(candidate)) return candidate;
+    if (path.dirname(dir) === dir) return "";
+  }
+}
+
+/** Opens the virtual tsconfigs in a session of their own. */
+function openInferred() {
+  const api = new API({
+    cwd: path.dirname(tsconfig),
+    fs: {
+      readFile: (file) => served.get(file),
+      fileExists: (file) => (served.has(file) ? true : undefined),
+    },
+  });
+  const snap = api.updateSnapshot({ openProjects: [...served.keys()] });
+  return { api, byConfig: new Map(Array.from(served.keys(), (virtual) => [virtual, snap.getProject(virtual)])) };
+}
+
+// Each file joins the first program that holds it.
+// The order: the sent project, its `references`, a virtual tsconfig.
+// TypeScript left out of all three fails as "unplaced".
+const projects = new Map();
+const outside = files.filter((file) => !holder(snapshot, file));
+if (outside.length > 0) {
+  snapshot = attempt(
+    () => session.updateSnapshot({ openFiles: outside }),
+    (error) => fail(`snapshot-failed: ${cause(error)}`),
+  );
+}
+// typescript-go's fallback inferred project has no tsconfig on disk.
+for (const file of files) {
+  const project = holder(snapshot, file);
+  if (project && exists(project.configFileName)) projects.set(file, project);
+}
+
+// One virtual tsconfig per nearest tsconfig.json.
+// Its own session serves it, leaving the real projects untouched.
+const VIRTUAL = "tsconfig.comply-inferred.json";
+const SCRIPT = /\.[cm]?jsx?$/;
+const listed = new Map();
+for (const file of files) {
+  const base = projects.has(file) ? "" : nearestTsconfig(file);
+  if (base === "") continue;
+  const virtual = path.join(path.dirname(base), VIRTUAL);
+  listed.set(virtual, [...(listed.get(virtual) || []), file]);
+}
+const served = new Map(
+  Array.from(listed, ([virtual, own]) => [
+    virtual,
+    JSON.stringify({ extends: "./tsconfig.json", include: [], files: own }),
+  ]),
+);
+const inferred =
+  served.size === 0
+    ? { api: undefined, byConfig: new Map() }
+    : attempt(openInferred, (error) => fail(`snapshot-failed: ${cause(error)}`));
+for (const [virtual, own] of listed) {
+  const project = inferred.byConfig.get(virtual);
   if (!project) continue;
+  for (const file of own) {
+    if (project.program.getSourceFile(file)) projects.set(file, project);
+  }
+}
+
+// JavaScript outside `allowJs` is not analyzed.
+const unplaced = files.filter((file) => {
+  if (projects.has(file)) return false;
+  if (!SCRIPT.test(file)) return true;
+  const base = nearestTsconfig(file);
+  const project = base === "" ? undefined : inferred.byConfig.get(path.join(path.dirname(base), VIRTUAL));
+  return Boolean(project && project.compilerOptions.allowJs);
+});
+if (unplaced.length > 0) fail("unplaced", unplaced);
+
+const duplicateCandidates = [];
+const placed = files.filter((file) => projects.has(file));
+
+for (const file of placed) {
+  const project = projects.get(file);
   const sourceFile = project.program.getSourceFile(file);
-  if (!sourceFile) continue;
   const checker = project.checker;
   let text;
   try {
@@ -514,4 +610,5 @@ if (enabled.has("no-duplicate-type-definition")) {
 }
 
 session.close?.();
+if (inferred.api) inferred.api.close();
 process.stdout.write(JSON.stringify({ diagnostics }));

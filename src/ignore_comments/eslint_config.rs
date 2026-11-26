@@ -18,22 +18,21 @@
 /// `/* eslint ... */` config comment anywhere in `source`. A rule set to a
 /// non-zero severity is not returned, so an active rule is never suppressed.
 ///
-/// The scan is purely lexical and not string-literal aware: a verbatim
-/// `/* eslint <rule>: 0 */` byte sequence sitting inside a string literal would
-/// be read as a config comment. The only consequence is under-reporting that
-/// rule in that file (never a false positive), and an off-severity config
-/// comment embedded in a string is not a shape real code produces.
-pub fn off_rules(source: &str) -> Vec<String> {
+/// A comment opens where `in_comment` answers true.
+/// The same text in a string turns no rule off.
+pub fn off_rules(source: &str, in_comment: &dyn Fn(usize) -> bool) -> Vec<String> {
     let mut off = Vec::new();
-    let mut rest = source;
-    while let Some(start) = rest.find("/*") {
-        let after_open = &rest[start + 2..];
-        let Some(close) = after_open.find("*/") else {
-            break;
-        };
-        let body = &after_open[..close];
-        collect_off_rules_from_comment(body, &mut off);
-        rest = &after_open[close + 2..];
+    let mut from = 0usize;
+    while let Some(start) = source[from..].find("/*") {
+        let open = from.saturating_add(start);
+        from = open.saturating_add(2);
+        let body = in_comment(open)
+            .then(|| source[from..].split_once("*/"))
+            .flatten();
+        if let Some((body, _)) = body {
+            collect_off_rules_from_comment(body, &mut off);
+            from = from.saturating_add(body.len()).saturating_add(2);
+        }
     }
     off
 }
@@ -109,34 +108,42 @@ fn split_top_level_commas(config: &str) -> Vec<&str> {
 mod tests {
     use super::*;
 
+    /// What [`off_rules`] reads in a `source` it takes for comments.
+    fn off_in_comment(source: &str) -> Vec<String> {
+        off_rules(source, &|_| true)
+    }
+
     #[test]
     fn numeric_zero_severity_disables_rule() {
-        assert_eq!(off_rules("/* eslint no-var: 0 */"), vec!["no-var"]);
+        assert_eq!(off_in_comment("/* eslint no-var: 0 */"), vec!["no-var"]);
     }
 
     #[test]
     fn off_string_severity_disables_rule() {
-        assert_eq!(off_rules("/* eslint no-var: \"off\" */"), vec!["no-var"]);
-        assert_eq!(off_rules("/* eslint no-var: 'off' */"), vec!["no-var"]);
+        assert_eq!(
+            off_in_comment("/* eslint no-var: \"off\" */"),
+            vec!["no-var"]
+        );
+        assert_eq!(off_in_comment("/* eslint no-var: 'off' */"), vec!["no-var"]);
     }
 
     #[test]
     fn non_zero_severity_does_not_disable() {
-        assert!(off_rules("/* eslint no-var: 2 */").is_empty());
-        assert!(off_rules("/* eslint no-var: 1 */").is_empty());
-        assert!(off_rules("/* eslint no-var: \"error\" */").is_empty());
-        assert!(off_rules("/* eslint no-var: \"warn\" */").is_empty());
+        assert!(off_in_comment("/* eslint no-var: 2 */").is_empty());
+        assert!(off_in_comment("/* eslint no-var: 1 */").is_empty());
+        assert!(off_in_comment("/* eslint no-var: \"error\" */").is_empty());
+        assert!(off_in_comment("/* eslint no-var: \"warn\" */").is_empty());
     }
 
     #[test]
     fn multiple_rules_in_one_comment() {
-        let off = off_rules("/* eslint no-var: 0, no-magic-numbers: 0 */");
+        let off = off_in_comment("/* eslint no-var: 0, no-magic-numbers: 0 */");
         assert_eq!(off, vec!["no-var", "no-magic-numbers"]);
     }
 
     #[test]
-    fn mixed_severities_only_returns_off_rules() {
-        let off = off_rules("/* eslint no-var: 0, no-console: 2 */");
+    fn mixed_severities_only_returns_off_in_comment() {
+        let off = off_in_comment("/* eslint no-var: 0, no-console: 2 */");
         assert_eq!(off, vec!["no-var"]);
     }
 
@@ -145,32 +152,40 @@ mod tests {
         // The nested object's comma must not split the entry, and `"error"`
         // first element keeps the rule active.
         assert!(
-            off_rules("/* eslint no-magic-numbers: [\"error\", { \"ignore\": [0] }] */").is_empty()
+            off_in_comment("/* eslint no-magic-numbers: [\"error\", { \"ignore\": [0] }] */")
+                .is_empty()
         );
     }
 
     #[test]
     fn options_array_with_off_severity_disables() {
-        let off = off_rules("/* eslint no-magic-numbers: [\"off\", { \"ignore\": [0] }] */");
+        let off = off_in_comment("/* eslint no-magic-numbers: [\"off\", { \"ignore\": [0] }] */");
         assert_eq!(off, vec!["no-magic-numbers"]);
     }
 
     #[test]
     fn eslint_disable_directive_is_not_a_config_comment() {
         // `eslint-disable` has a hyphen after `eslint`, not whitespace.
-        assert!(off_rules("/* eslint-disable no-var */").is_empty());
-        assert!(off_rules("/* eslint-enable */").is_empty());
-        assert!(off_rules("/* eslint-env browser */").is_empty());
+        assert!(off_in_comment("/* eslint-disable no-var */").is_empty());
+        assert!(off_in_comment("/* eslint-enable */").is_empty());
+        assert!(off_in_comment("/* eslint-env browser */").is_empty());
     }
 
     #[test]
     fn unrelated_block_comment_is_ignored() {
-        assert!(off_rules("/* this file uses var on purpose */").is_empty());
+        assert!(off_in_comment("/* this file uses var on purpose */").is_empty());
     }
 
     #[test]
     fn line_comment_form_is_not_honored() {
         // ESLint config comments are block comments only.
-        assert!(off_rules("// eslint no-var: 0").is_empty());
+        assert!(off_in_comment("// eslint no-var: 0").is_empty());
+    }
+
+    #[test]
+    fn config_outside_a_comment_turns_no_rule_off() {
+        let source = "'/* eslint no-var: 0 */'; /* eslint no-console: 0 */";
+        let comment = source.rfind("/*").expect("a comment");
+        assert_eq!(off_rules(source, &|at| at == comment), vec!["no-console"]);
     }
 }

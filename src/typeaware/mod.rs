@@ -21,6 +21,9 @@
 //! non-zero exit, and the remedy comply knows. A missing tsconfig (nothing to type-check) and a sidecar timeout (a
 //! hang, not a toolchain gap) stay graceful: a one-line stderr notice and no
 //! diagnostics.
+//!
+//! A file no TypeScript program holds is refused.
+//! Skipping it would pass code nothing type-checked.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -50,7 +53,16 @@ struct SidecarResponse {
     diagnostics: Vec<SidecarDiag>,
     #[serde(default)]
     error: Option<String>,
+    /// The files no program held, when `error` is [`UNPLACED`].
+    #[serde(default)]
+    files: Vec<String>,
 }
+
+/// The sidecar `error` for files it placed in no program.
+const UNPLACED: &str = "unplaced";
+
+/// How many such files a refusal names.
+const QUOTED_UNPLACED: usize = 20;
 
 #[derive(Deserialize)]
 struct SidecarDiag {
@@ -132,8 +144,10 @@ pub fn lint_files(files: &[&SourceFile], config: &Config) -> Result<Vec<Diagnost
         None => return Ok(vec![]),
     };
 
-    if let Some(err) = response.error.as_deref() {
-        return Err(sidecar_error(err).into());
+    match response.error.as_deref() {
+        Some(UNPLACED) => return Err(unplaced_error(&response.files, &canon_to_orig).into()),
+        Some(err) => return Err(sidecar_error(err).into()),
+        None => {}
     }
 
     Ok(map_diagnostics(
@@ -154,17 +168,18 @@ fn node_available() -> bool {
     })
 }
 
-/// Path to the nearest `tsconfig.json` walking up from the first file's
-/// directory. `walk_up_finding` yields the containing directory, so the
-/// filename is appended.
+/// The nearest `tsconfig.json` above the first file that has one.
+/// The sidecar places the other files itself.
+/// `walk_up_finding` yields the directory, so the filename is appended.
 fn find_tsconfig(files: &[&SourceFile]) -> Option<PathBuf> {
-    let first = files.first()?;
-    let start = std::fs::canonicalize(&first.path)
-        .ok()?
-        .parent()?
-        .to_path_buf();
-    let dir = crate::project::walk_up_finding(&start, "tsconfig.json")?;
-    Some(dir.join("tsconfig.json"))
+    files.iter().find_map(|file| {
+        let start = std::fs::canonicalize(&file.path)
+            .ok()?
+            .parent()?
+            .to_path_buf();
+        let dir = crate::project::walk_up_finding(&start, "tsconfig.json")?;
+        Some(dir.join("tsconfig.json"))
+    })
 }
 
 /// Write the sidecar to a temp file, run it with the request on stdin, and
@@ -254,6 +269,43 @@ fn sidecar_error(err: &str) -> ToolchainError {
             ),
         }
     }
+}
+
+/// The refusal for `files`, which no TypeScript program holds.
+/// Each is named by the path comply discovered.
+fn unplaced_error(
+    files: &[String],
+    canon_to_orig: &rustc_hash::FxHashMap<String, PathBuf>,
+) -> ToolchainError {
+    let paths: Vec<String> = files
+        .iter()
+        .map(|file| {
+            canon_to_orig
+                .get(file)
+                .map_or_else(|| file.clone(), |path| path.display().to_string())
+        })
+        .collect();
+    ToolchainError::Unusable {
+        what: format!(
+            "type-aware analysis found no TypeScript program for {}: no tsconfig.json \
+             includes it, directly or through `references`, and none sits above it — add it \
+             to a tsconfig.json",
+            quoted_files(paths)
+        ),
+    }
+}
+
+/// `paths`, sorted, the first [`QUOTED_UNPLACED`] named.
+fn quoted_files(mut paths: Vec<String>) -> String {
+    paths.sort();
+    let more = paths.len().saturating_sub(QUOTED_UNPLACED);
+    paths.truncate(QUOTED_UNPLACED);
+    let tail = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    format!("{}{tail}", paths.join(", "))
 }
 
 /// Map sidecar diagnostics into comply diagnostics at the rule's severity,
@@ -366,6 +418,30 @@ mod tests {
         }];
         let out = map_diagnostics(diags, &[m], &canon);
         assert_eq!(out[0].path.to_string_lossy(), "/abs/unmapped.ts");
+    }
+
+    // An unplaced file is refused under its discovered path.
+    #[test]
+    fn unplaced_files_are_refused_by_their_discovered_path() {
+        let mut canon = rustc_hash::FxHashMap::default();
+        canon.insert(
+            "/private/tmp/p/y.ts".to_string(),
+            PathBuf::from("/tmp/p/y.ts"),
+        );
+        let err = unplaced_error(&["/private/tmp/p/y.ts".to_string()], &canon);
+        assert!(matches!(err, ToolchainError::Unusable { .. }), "{err:?}");
+        assert!(err.to_string().contains("for /tmp/p/y.ts:"), "{err}");
+    }
+
+    // The refusal names at most `QUOTED_UNPLACED` files.
+    #[test]
+    fn an_unplaced_refusal_counts_the_files_it_does_not_name() {
+        let files: Vec<String> = (0..=QUOTED_UNPLACED)
+            .map(|n| format!("/p/{n:02}.ts"))
+            .collect();
+        let msg = unplaced_error(&files, &rustc_hash::FxHashMap::default()).to_string();
+        assert!(msg.contains("/p/19.ts and 1 more:"), "{msg}");
+        assert!(!msg.contains("/p/20.ts"), "{msg}");
     }
 
     // ── fail-loud sidecar errors (#5941, #8109) ─────────────────────────────

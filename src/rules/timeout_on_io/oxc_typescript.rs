@@ -135,7 +135,9 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
-        if ctx.file.path_segments.in_test_dir || is_test_path(ctx.path) {
+        let segments = &ctx.file.path_segments;
+        let outside_release = segments.in_test_dir || segments.is_relaxed_dir;
+        if outside_release || is_test_path(ctx.path) {
             return;
         }
 
@@ -207,6 +209,15 @@ mod tests {
     #[test]
     fn flags_bare_fetch() {
         assert_eq!(run("async function f() { await fetch(url); }").len(), 1);
+    }
+
+    // TypeScript names its demos by directory.
+    #[test]
+    fn skips_relaxed_directories() {
+        let src = "async function f() { await fetch(url); }";
+        let run_at = |path| crate::rules::test_helpers::run_rule_gated(&Check, src, path);
+        assert!(run_at("examples/fetch.ts").is_empty());
+        assert_eq!(run_at("src/fetch.ts").len(), 1);
     }
 
     #[test]

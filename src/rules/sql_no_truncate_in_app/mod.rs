@@ -18,7 +18,10 @@ pub const META: RuleMeta = RuleMeta {
     doc_url: None,
     categories: &["database", "sql"],
 
-    skip_in_test_dir: true,
+    // The Rust backend reads `is_test_only`.
+    // A Rust file named after tests still ships.
+    // The other backends skip `in_test_dir` themselves.
+    skip_in_test_dir: false,
     skip_in_relaxed_dir: false,
 };
 
@@ -44,10 +47,32 @@ pub fn register() -> RuleDef {
     }
 }
 
-/// True if the string contains the SQL `TRUNCATE` statement (whole word).
-pub(super) fn sql_uses_truncate(sql: &str) -> bool {
-    let lower = sql.to_ascii_lowercase();
-    crate::rules::sql_helpers::contains_word(&lower, "truncate")
+/// Byte offsets of the `TRUNCATE` statements in SQL `source`.
+/// Its comments are left out.
+/// A statement's next word is `TABLE`, `ONLY` or a table.
+pub(super) fn truncate_statements(source: &str) -> Vec<usize> {
+    use crate::rules::sql_helpers::{find_word, mask_sql_comments};
+    let code = mask_sql_comments(source).to_ascii_lowercase();
+    let mut offsets = Vec::new();
+    let mut from = 0;
+    while let Some((start, end)) = find_word(&code, "truncate", from) {
+        let next = code[end..].trim_start();
+        let next_word = next
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or_default();
+        // `ON`, `OR` and `,` follow a privilege or a trigger event.
+        // `(` follows MySQL's `TRUNCATE(x, 2)` function.
+        // A `-` before it joins a name such as `sql-no-truncate-in-app`.
+        // No statement starts right after a `-`.
+        let in_name = code[..start].ends_with('-');
+        let privilege_or_call = next.starts_with([',', '(']) || matches!(next_word, "on" | "or");
+        if !in_name && !privilege_or_call {
+            offsets.push(start);
+        }
+        from = end;
+    }
+    offsets
 }
 
 /// True if the string looks like an actual SQL `TRUNCATE` statement.

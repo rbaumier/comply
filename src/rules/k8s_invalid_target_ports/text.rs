@@ -18,10 +18,7 @@ fn is_valid_iana_name(name: &str) -> bool {
         }
     }
     // Must contain at least one letter (IANA: not all digits).
-    if !bytes.iter().any(|b| b.is_ascii_lowercase()) {
-        return false;
-    }
-    true
+    bytes.iter().any(|b| b.is_ascii_lowercase())
 }
 
 crate::ast_check! { prefilter = ["apiVersion"] => |node, source, ctx, diagnostics|

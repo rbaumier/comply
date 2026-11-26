@@ -6274,10 +6274,10 @@ impl RustModuleGraph {
             if seg == "*" {
                 return None;
             }
-            match self.children.get(&(current.clone(), seg.to_string())) {
-                Some(next) => current = next.clone(),
-                None => return None,
-            }
+            current = self
+                .children
+                .get(&(current.clone(), seg.to_string()))?
+                .clone();
         }
         Some(current)
     }

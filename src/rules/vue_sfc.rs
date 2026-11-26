@@ -193,7 +193,7 @@ fn root_template_open(bytes: &[u8]) -> Option<usize> {
 /// Byte offset of the `>` that terminates the opening tag starting at `from`,
 /// skipping any `>` inside a quoted attribute value. Mirrors the quote-aware
 /// scan in `vue_template_helpers::extract_elements`.
-fn tag_close_offset(bytes: &[u8], from: usize) -> Option<usize> {
+pub(crate) fn tag_close_offset(bytes: &[u8], from: usize) -> Option<usize> {
     let mut in_string: Option<u8> = None;
     for (offset, &b) in bytes.iter().enumerate().skip(from) {
         match in_string {
@@ -349,7 +349,7 @@ fn script_block_from_element<'src>(
 /// grammar exposes a typed node only for langs it special-cases and emits an
 /// error node for others (e.g. `jsx`), whereas the attribute is always present
 /// verbatim in the tag text.
-fn tag_lang(tag_text: &str) -> Option<&str> {
+pub(crate) fn tag_lang(tag_text: &str) -> Option<&str> {
     let bytes = tag_text.as_bytes();
     let mut from = 0;
     while let Some(rel) = tag_text[from..].find("lang") {

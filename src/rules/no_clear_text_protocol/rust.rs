@@ -20,10 +20,7 @@ impl AstCheck for Check {
         diagnostics: &mut Vec<Diagnostic>,
     ) {
         let source_bytes = ctx.source.as_bytes();
-        if ctx.file.path_segments.in_test_dir
-            || crate::rules::rust_helpers::is_test_code(node, source_bytes, ctx)
-            || crate::rules::rust_helpers::is_in_doc_attribute(node, source_bytes)
-        {
+        if crate::rules::rust_helpers::is_in_doc_attribute(node, source_bytes) {
             return;
         }
         let Ok(text) = node.utf8_text(source_bytes) else {
@@ -32,6 +29,10 @@ impl AstCheck for Check {
         let Some(prefix) = super::is_clear_text_url(text) else {
             return;
         };
+        // Tests and examples open no connection a user relies on.
+        if crate::rules::rust_helpers::is_outside_release(node, ctx) {
+            return;
+        }
         let pos = node.start_position();
         diagnostics.push(Diagnostic {
             path: std::sync::Arc::clone(&ctx.path_arc),
@@ -111,18 +112,26 @@ mod tests {
         assert!(run(src).is_empty());
     }
 
-    // #1260 — axum's `test_helpers/test_client.rs` interpolates a loopback
-    // `SocketAddr` into `http://{addr}`. TLS is not viable for in-process test
-    // servers, so the whole test-helper file is exempt.
+    // #1260 — axum declares `#[cfg(test)] mod test_helpers;`.
+    // Its test client runs under `cargo test` only.
+    // Declared without the gate, the same module ships.
+    // Its name alone exempts nothing.
     #[test]
     fn does_not_flag_http_in_test_helpers_dir() {
-        let src = r#"fn get(&self) { self.client.get(format!("http://{}{url}", self.addr)); }"#;
-        let diags = crate::rules::test_helpers::run_rule(
-            &Check,
-            src,
-            "axum/src/test_helpers/test_client.rs",
-        );
-        assert!(diags.is_empty());
+        let src = r#"fn get(&self) { self.client.get("http://feeds.acme.io/v1"); }"#;
+        let run = |lib: &str| {
+            crate::rules::test_helpers::run_rule_in_module_tree(
+                &Check,
+                &[
+                    ("Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                    ("src/lib.rs", lib),
+                    ("src/test_helpers/mod.rs", "mod test_client;\n"),
+                    ("src/test_helpers/test_client.rs", src),
+                ],
+            )
+        };
+        assert!(run("#[cfg(test)]\nmod test_helpers;\n").is_empty());
+        assert_eq!(run("pub mod test_helpers;\n").len(), 1);
     }
 
     // #5031 — ureq's `src/proxy.rs` builds a proxy URL from the Windows

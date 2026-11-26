@@ -14,6 +14,7 @@
 //! - skip if the static is compiled only into a test binary (see
 //!   [`is_test_only`]): the address it reserves never reaches a shipped
 //!   artifact, so the codegen argument has nothing to bite on.
+//!   Cargo builds `tests/` support modules only for tests.
 //! - skip if the static's address is taken (`&NAME`) in scope — a stable,
 //!   unique address is being relied upon (e.g. an FFI pointer handed to C),
 //!   which a `const` inlined at each use site would not provide.
@@ -31,10 +32,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::{
-    cfg_gates_compilation, has_const_incompatible_attribute, is_in_test_macro_fn,
-    is_test_only_rust_file,
-};
+use crate::rules::rust_helpers::{has_const_incompatible_attribute, is_test_only};
 
 const KINDS: &[&str] = &["static_item"];
 
@@ -123,31 +121,6 @@ impl AstCheck for Check {
             Severity::Error,
         ));
     }
-}
-
-/// True when `node` is compiled only into a test binary, so a shipped artifact
-/// reserves no address for it.
-///
-/// Three gates, in cost order: `cfg_gates_compilation` (the static itself,
-/// an enclosing scope, or the file), an enclosing `#[test]` function, then
-/// `is_test_only_rust_file` — the whole file being a Cargo integration-test
-/// target or reached through a `#[cfg(test)] mod …;` declaration. The first two
-/// read the static's own ancestry, so a `#[cfg(test)] mod tests` elsewhere in
-/// the file leaves the production code beside it in scope.
-///
-/// The file gate is what covers a `tests/` support module: Cargo compiles it
-/// only as a test target, so it carries neither a `#[cfg(test)]` attribute nor a
-/// `#[test]` function of its own for the first two gates to find.
-///
-/// Not `is_in_test_context`: it misses `#[cfg(test)]` on the static itself, and
-/// it counts `#[cfg_attr(test, …)]`, which leaves the item in the release build.
-/// Conservative in the same direction as `cfg_gates_compilation`: a
-/// `cfg(any(test, feature = "x"))` static counts.
-fn is_test_only(node: tree_sitter::Node, ctx: &CheckCtx) -> bool {
-    let source = ctx.source.as_bytes();
-    cfg_gates_compilation(node, source, "test")
-        || is_in_test_macro_fn(node, source)
-        || is_test_only_rust_file(ctx.path, ctx.project)
 }
 
 fn is_literal_value(node: tree_sitter::Node) -> bool {
@@ -563,6 +536,15 @@ mod tests {
     fn flags_production_static_gated_on_not_test() {
         let src = r#"#[cfg(not(test))] static NAME: &str = "comply";"#;
         assert_eq!(run_on(src).len(), 1);
+    }
+
+    #[test]
+    fn flags_static_that_a_feature_alone_builds() {
+        // `any(test, feature = "seed")` builds the static with the feature alone.
+        let src = r#"#[cfg(any(test, feature = "seed"))] static SEED: &str = "a";"#;
+        assert_eq!(run_on(src).len(), 1);
+        let src = r#"#[cfg(all(test, unix))] static SEED: &str = "a";"#;
+        assert!(run_on(src).is_empty());
     }
 
     #[test]

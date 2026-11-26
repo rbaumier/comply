@@ -269,6 +269,331 @@ pub(crate) fn find_word(haystack: &str, needle: &str, from: usize) -> Option<(us
     None
 }
 
+/// `source` with SQL comments blanked to spaces, byte for byte.
+/// A blanked byte is a comment to every reading.
+/// Comments inside a `$$` body are blanked too.
+pub(crate) fn mask_sql_comments(source: &str) -> String {
+    let comment = sql_comment_bytes(source, DollarBody::Code);
+    let masked: Vec<u8> = source
+        .bytes()
+        .zip(comment)
+        .map(|(byte, is_comment)| {
+            if is_comment && byte != b'\n' {
+                b' '
+            } else {
+                byte
+            }
+        })
+        .collect();
+    // Comments start and end on ASCII bytes: no character splits.
+    String::from_utf8_lossy(&masked).into_owned()
+}
+
+/// How PostgreSQL takes a `$$ … $$` body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DollarBody {
+    /// Every body runs as code, like a `DO` block.
+    Code,
+    /// Only a body right after `DO` or `AS` runs.
+    /// It runs as SQL or PL/pgSQL.
+    /// Other dollar strings are text.
+    /// So are `COPY … FROM stdin` data lines.
+    Routine,
+}
+
+/// Marks the bytes of `source` all readings call comments.
+/// Readings: MySQL, and PostgreSQL with `standard_conforming_strings` on or off.
+/// With [`DollarBody::Routine`], a dollar string holds no comment.
+pub(crate) fn sql_comment_bytes(source: &str, dollar_body: DollarBody) -> Vec<bool> {
+    let bytes = source.as_bytes();
+    let readings = [Dialect::Postgres, Dialect::PostgresLegacy, Dialect::MySql]
+        .map(|dialect| SqlLexer::comments(bytes, dialect, dollar_body));
+    (0..bytes.len())
+        .map(|i| readings.iter().all(|comment| comment[i]))
+        .collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialect {
+    Postgres,
+    /// PostgreSQL with `standard_conforming_strings` off.
+    /// A backslash escapes in every `'…'` string.
+    PostgresLegacy,
+    MySql,
+}
+
+/// Marks the bytes one SQL dialect reads as a comment.
+struct SqlLexer<'a> {
+    bytes: &'a [u8],
+    dialect: Dialect,
+    dollar_body: DollarBody,
+    comment: Vec<bool>,
+    /// Where the current statement starts.
+    statement: usize,
+}
+
+impl<'a> SqlLexer<'a> {
+    fn comments(bytes: &'a [u8], dialect: Dialect, dollar_body: DollarBody) -> Vec<bool> {
+        let mut lexer = Self {
+            bytes,
+            dialect,
+            dollar_body,
+            comment: vec![false; bytes.len()],
+            statement: 0,
+        };
+        lexer.code(0, None);
+        lexer.comment
+    }
+
+    /// Lex code from `i`, and return where it stops.
+    /// A dollar body is code, up to its `close` tag.
+    /// That tag ends any quote or comment still open.
+    fn code(&mut self, mut i: usize, close: Option<&'a [u8]>) -> usize {
+        let bytes = self.bytes;
+        while i < bytes.len() {
+            if let Some(tag) = close.filter(|tag| bytes[i..].starts_with(tag)) {
+                return i.saturating_add(tag.len());
+            }
+            let postgres = self.dialect != Dialect::MySql;
+            let next = i.saturating_add(1);
+            i = match (bytes[i], bytes.get(next).copied()) {
+                (b'\'', _) => self.quoted(i, self.has_backslash_escapes(i), close),
+                (b'"', _) => self.quoted(i, !postgres, close),
+                (b'`', _) if !postgres => self.quoted(i, false, close),
+                (b'$', _) if postgres => match (dollar_tag(bytes, i), close) {
+                    (Some(tag), None) if !self.runs_body_at(i, tag) => {
+                        self.dollar_string(i.saturating_add(tag.len()), tag, None)
+                    }
+                    (Some(tag), None) => self.code(i.saturating_add(tag.len()), Some(tag)),
+                    (Some(tag), Some(_)) => {
+                        self.dollar_string(i.saturating_add(tag.len()), tag, close)
+                    }
+                    (None, _) => next,
+                },
+                (b'-', Some(b'-'))
+                    if postgres || ends_mysql_dashes(bytes.get(i.saturating_add(2))) =>
+                {
+                    self.line_comment(i, close)
+                }
+                (b'#', _) if !postgres => self.line_comment(i, close),
+                (b'/', Some(b'*')) => self.block_comment(i, close),
+                (b';', _) if close.is_none() => {
+                    self.statement = self.after_copy_data(i);
+                    self.statement
+                }
+                _ => next,
+            };
+        }
+        i
+    }
+
+    /// Where the text after the `;` at `semicolon` starts.
+    /// The data of a `COPY … FROM stdin` ends at a `\.` line.
+    fn after_copy_data(&self, semicolon: usize) -> usize {
+        let next = semicolon.saturating_add(1);
+        if self.dollar_body == DollarBody::Code {
+            return next;
+        }
+        let statement = self.words(self.statement, semicolon);
+        let is_copy = statement.iter().any(|word| word == "copy")
+            && statement.windows(2).any(|pair| pair == ["from", "stdin"]);
+        if !is_copy {
+            return next;
+        }
+        let mut at = next;
+        for line in self.bytes[next..].split_inclusive(|byte| *byte == b'\n') {
+            at = at.saturating_add(line.len());
+            if line.trim_ascii_end() == b"\\." {
+                break;
+            }
+        }
+        at
+    }
+
+    /// The lowercase words from `start` to `end`, outside comments.
+    fn words(&self, start: usize, end: usize) -> Vec<String> {
+        let code: Vec<u8> = (start..end)
+            .map(|i| if self.comment[i] { b' ' } else { self.bytes[i] })
+            .collect();
+        code.split(|byte| !is_ident_byte(*byte))
+            .filter(|word| !word.is_empty())
+            .map(|word| String::from_utf8_lossy(word).to_lowercase())
+            .collect()
+    }
+
+    /// Whether the body opening at `dollar` runs as SQL.
+    /// PL/pgSQL counts as SQL.
+    /// A routine body follows `DO` or `AS`.
+    /// Blanks and comments may sit between.
+    fn runs_body_at(&self, dollar: usize, tag: &[u8]) -> bool {
+        if self.dollar_body == DollarBody::Code {
+            return true;
+        }
+        let before = &self.bytes[..dollar];
+        let word_end = (0..dollar)
+            .rev()
+            .find(|&i| !before[i].is_ascii_whitespace() && !self.comment[i])
+            .map_or(0, |i| i.saturating_add(1));
+        let word_start = before[..word_end]
+            .iter()
+            .rposition(|byte| !is_ident_byte(*byte))
+            .map_or(0, |i| i.saturating_add(1));
+        let word = &before[word_start..word_end];
+        let is_do = word.eq_ignore_ascii_case(b"do");
+        (is_do || word.eq_ignore_ascii_case(b"as"))
+            && self.is_sql_body(dollar, tag).unwrap_or(is_do)
+    }
+
+    /// Whether the body opening at `dollar` is SQL or PL/pgSQL.
+    /// `None` when its statement names no language.
+    /// An unclear end of statement is another language.
+    fn is_sql_body(&self, dollar: usize, tag: &[u8]) -> Option<bool> {
+        let body = dollar.saturating_add(tag.len());
+        let end = self.bytes[body..]
+            .windows(tag.len())
+            .position(|window| window == tag)
+            .map(|len| body.saturating_add(len).saturating_add(tag.len()));
+        let Some(end) = end else {
+            return Some(false);
+        };
+        let tail = self.bytes[end..].split(|byte| *byte == b';').next();
+        let tail = tail.unwrap_or_default();
+        let has_comment = tail.windows(2).any(|pair| pair == b"--" || pair == b"/*");
+        let quotes = tail.iter().filter(|byte| **byte == b'\'').count();
+        if has_comment || quotes % 2 == 1 {
+            return Some(false);
+        }
+        let language = |words: Vec<String>| {
+            let mut named = words.windows(2).filter(|pair| pair[0] == "language");
+            named.next_back().map(|pair| pair[1].clone())
+        };
+        language(self.words(end, end.saturating_add(tail.len())))
+            .or_else(|| language(self.words(self.statement, dollar)))
+            .map(|language| language == "sql" || language == "plpgsql")
+    }
+
+    fn closes(&self, i: usize, close: Option<&[u8]>) -> bool {
+        close.is_some_and(|tag| self.bytes[i..].starts_with(tag))
+    }
+
+    /// PostgreSQL reads a backslash escape only in an `E'…'` string.
+    /// With `standard_conforming_strings` off, it reads one in any string.
+    fn has_backslash_escapes(&self, quote: usize) -> bool {
+        if self.dialect != Dialect::Postgres {
+            return true;
+        }
+        let mut before = self.bytes[..quote].iter().rev();
+        let is_prefixed = before
+            .next()
+            .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'e'));
+        is_prefixed && !before.next().is_some_and(|byte| is_ident_byte(*byte))
+    }
+
+    /// Skip the quoted text opening at `open`.
+    /// Stops after its closing quote, or at the `close` tag.
+    fn quoted(&self, open: usize, has_escapes: bool, close: Option<&[u8]>) -> usize {
+        let bytes = self.bytes;
+        let quote = bytes[open];
+        let mut i = open.saturating_add(1);
+        while i < bytes.len() && !self.closes(i, close) {
+            let next = i.saturating_add(1);
+            let step = match bytes[i] {
+                b'\\' if has_escapes => 2,
+                byte if byte == quote && bytes.get(next) == Some(&quote) => 2,
+                byte if byte == quote => return next,
+                _ => 1,
+            };
+            i = i.saturating_add(step);
+        }
+        i.min(bytes.len())
+    }
+
+    /// Skip a dollar string nested in a dollar body.
+    /// It stops after its `tag`, or at the body's `close`.
+    fn dollar_string(&self, mut i: usize, tag: &[u8], close: Option<&[u8]>) -> usize {
+        while i < self.bytes.len() && !self.closes(i, close) {
+            if self.bytes[i..].starts_with(tag) {
+                return i.saturating_add(tag.len());
+            }
+            i = i.saturating_add(1);
+        }
+        i
+    }
+
+    fn line_comment(&mut self, start: usize, close: Option<&[u8]>) -> usize {
+        let mut i = start;
+        while i < self.bytes.len() && self.bytes[i] != b'\n' && !self.closes(i, close) {
+            self.comment[i] = true;
+            i = i.saturating_add(1);
+        }
+        i
+    }
+
+    /// Mark the `/* … */` comment opening at `start`.
+    /// Returns the position after it.
+    /// One that never closes marks nothing.
+    /// Nor do MySQL's `/*!` and MariaDB's `/*M!`, whose content runs.
+    fn block_comment(&mut self, start: usize, close: Option<&[u8]>) -> usize {
+        let bytes = self.bytes;
+        let opened = start.saturating_add(2);
+        let runs = |marker: &[u8]| {
+            bytes
+                .get(opened..)
+                .is_some_and(|rest| rest.starts_with(marker))
+        };
+        let versioned = runs(b"!") || runs(b"M!");
+        if self.dialect == Dialect::MySql && versioned {
+            return opened;
+        }
+        let mut depth = 1usize;
+        let mut i = opened;
+        while !self.closes(i, close) {
+            let step = match bytes.get(i..i.saturating_add(2)) {
+                Some([b'*', b'/']) if depth == 1 => {
+                    let end = i.saturating_add(2);
+                    self.comment[start..end].fill(true);
+                    return end;
+                }
+                Some([b'*', b'/']) => {
+                    depth = depth.saturating_sub(1);
+                    2
+                }
+                // PostgreSQL nests comments, MySQL does not.
+                Some([b'/', b'*']) if self.dialect != Dialect::MySql => {
+                    depth = depth.saturating_add(1);
+                    2
+                }
+                Some(_) => 1,
+                None => return opened,
+            };
+            i = i.saturating_add(step);
+        }
+        opened
+    }
+}
+
+/// In MySQL, `--` opens a comment only before a blank.
+/// The end of input counts as a blank.
+fn ends_mysql_dashes(next: Option<&u8>) -> bool {
+    next.is_none_or(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+}
+
+/// The `$tag$` (or `$$`) opening a PostgreSQL dollar string at `i`.
+fn dollar_tag(bytes: &[u8], i: usize) -> Option<&[u8]> {
+    let (head, tag) = bytes.split_at(i);
+    if head.last().is_some_and(|byte| is_ident_byte(*byte)) {
+        return None;
+    }
+    let after_dollar = tag.get(1..)?;
+    let name_len = after_dollar
+        .iter()
+        .take_while(|byte| is_ident_byte(**byte))
+        .count();
+    let starts_with_digit = after_dollar.first().is_some_and(u8::is_ascii_digit);
+    let is_closed = after_dollar.get(name_len) == Some(&b'$');
+    (is_closed && !starts_with_digit).then(|| &tag[..name_len.saturating_add(2)])
+}
+
 /// Whether the text between a DML verb and its companion clause is shaped like
 /// a SQL projection/target rather than English prose.
 ///
@@ -558,6 +883,130 @@ pub const RUST_STRING_KINDS: &[&str] = &["string_literal", "raw_string_literal"]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The words `mask_sql_comments` leaves of `sql`, blanks collapsed.
+    fn unmasked(sql: &str) -> String {
+        mask_sql_comments(sql)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn mask_sql_comments_blanks_what_postgres_and_mysql_both_read_as_a_comment() {
+        assert_eq!(
+            unmasked("SELECT 1; -- x\nTRUNCATE t;"),
+            "SELECT 1; TRUNCATE t;"
+        );
+        assert_eq!(unmasked("-- don't\nTRUNCATE t;"), "TRUNCATE t;");
+        assert_eq!(unmasked("/* x */ TRUNCATE t;"), "TRUNCATE t;");
+        assert_eq!(unmasked("/* a /* b */ TRUNCATE t; -- */"), "TRUNCATE t;");
+        assert_eq!(unmasked("SELECT 'it''s'; -- x"), "SELECT 'it''s';");
+        assert_eq!(
+            unmasked("AS $$\n  -- x\n  TRUNCATE t;\n$$;"),
+            "AS $$ TRUNCATE t; $$;"
+        );
+    }
+
+    #[test]
+    fn sql_comment_bytes_can_read_a_dollar_body_as_text() {
+        let sql = "SELECT $$ -- x $$; -- y";
+        let comments = |dollar_body| {
+            let comment = sql_comment_bytes(sql, dollar_body);
+            sql.char_indices()
+                .filter(|&(i, _)| comment[i])
+                .map(|(_, c)| c)
+                .collect::<String>()
+        };
+        assert_eq!(comments(DollarBody::Code), "-- x -- y");
+        assert_eq!(comments(DollarBody::Routine), "-- y");
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_a_routine_body_as_code() {
+        let comments = |sql: &str| {
+            let comment = sql_comment_bytes(sql, DollarBody::Routine);
+            sql.char_indices()
+                .filter(|&(i, _)| comment[i])
+                .map(|(_, c)| c)
+                .collect::<String>()
+        };
+        assert_eq!(comments("DO $$ -- x $$;"), "-- x ");
+        assert_eq!(comments("do /* y */ $b$ -- x $b$;"), "/* y */-- x ");
+        let function = "CREATE FUNCTION f(language text) RETURNS void";
+        for (before, after) in [
+            ("LANGUAGE plpgsql", ""),
+            ("", "LANGUAGE 'sql' SET search_path = ''"),
+            ("LANGUAGE /* y */ SQL", "STABLE"),
+        ] {
+            let sql = format!("{function} {before} AS $$ -- x $$ {after};");
+            assert!(comments(&sql).ends_with("-- x "), "{sql}");
+        }
+        assert_eq!(comments("SELECT 'as' $$ -- x $$;"), "");
+        assert_eq!(comments("SELECT alias $$ -- x $$;"), "");
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_another_language_as_text() {
+        let function = "CREATE FUNCTION f() RETURNS text";
+        for sql in [
+            format!("{function} LANGUAGE plperl AS $$ -- x $$;"),
+            format!("{function} AS $$ -- x $$ LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$ SET a = ';' LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$ /* ; */ LANGUAGE plperl;"),
+            format!("{function} AS $$ -- x $$;"),
+            "SELECT 1; DO $$ -- x $$ LANGUAGE plperl;".to_owned(),
+        ] {
+            let comment = sql_comment_bytes(&sql, DollarBody::Routine);
+            let at = sql.find("-- x").expect("the body");
+            assert!(!comment[at], "{sql}");
+        }
+    }
+
+    #[test]
+    fn sql_comment_bytes_reads_copy_data_as_text() {
+        let sql = "COPY t (a) FROM stdin;\n-- it's data\n\\.\n-- real\n";
+        let comment = sql_comment_bytes(sql, DollarBody::Routine);
+        assert!(!comment[sql.find("-- it's").expect("the data")]);
+        assert!(comment[sql.find("-- real").expect("the comment")]);
+        let masked = mask_sql_comments(sql);
+        assert!(!masked.contains("it's"), "a rule still skips such a line");
+    }
+
+    #[test]
+    fn mask_sql_comments_keeps_newlines_and_byte_offsets() {
+        assert_eq!(
+            mask_sql_comments("-- é\r\nX\n/* a\nb */Y"),
+            "      \nX\n    \n    Y"
+        );
+    }
+
+    #[test]
+    fn mask_sql_comments_keeps_text_postgres_or_mysql_runs() {
+        for sql in [
+            // A `/*` that never closes is an error to both engines.
+            "SELECT 1; /* forgot\nTRUNCATE t;",
+            // PostgreSQL: `\'` escapes the quote of an `E'…'` string.
+            "SELECT E'it\\'s -- x'; TRUNCATE t;",
+            // MySQL: a backslash escapes the quote of a `'…'` string.
+            "SELECT 'it\\'s -- x'; TRUNCATE t;",
+            // PostgreSQL: the closing tag ends what opened in a `$$` string.
+            "SELECT $$ /* $$;\nTRUNCATE t;",
+            "SELECT $$--$$; TRUNCATE t;",
+            "SELECT $c$it's$c$, '-- x'; TRUNCATE t;",
+            // MySQL runs the content of `/*! … */`.
+            "/*!40000 TRUNCATE TABLE t */;",
+            // MySQL: `--` opens a comment only before a blank.
+            // PostgreSQL reads `#` as XOR.
+            "SELECT 5--1; TRUNCATE t;",
+            "SELECT 1 # 2;\nTRUNCATE t;",
+            // Quoted text opens no comment.
+            // That holds for strings, identifiers and MySQL backtick names.
+            "SELECT '--', \"a--b\", `c-- d`; TRUNCATE t;",
+        ] {
+            assert_eq!(mask_sql_comments(sql), sql, "{sql}");
+        }
+    }
 
     #[test]
     fn detects_basic_select() {

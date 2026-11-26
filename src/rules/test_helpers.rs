@@ -324,7 +324,11 @@ pub fn run_rule_by_id(id: &str, src: &str, path: impl AsRef<Path>) -> Vec<Diagno
     match backend {
         Backend::TreeSitter(check) => run_ast_check(check.as_ref(), src, path, project, file),
         Backend::Oxc(check) => run_oxc_check(check.as_ref(), src, path, project, file),
-        Backend::Text(check) => check.check(&CheckCtx::for_test(path, src)),
+        Backend::Text(check) => {
+            let code = (lang == Language::Sql && !check.reads_sql_comments())
+                .then(|| crate::rules::sql_helpers::mask_sql_comments(src));
+            check.check(&CheckCtx::for_test(path, code.as_deref().unwrap_or(src)))
+        }
         _ => vec![],
     }
 }

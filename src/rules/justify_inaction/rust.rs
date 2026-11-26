@@ -210,10 +210,7 @@ fn pattern_needs_justification(node: tree_sitter::Node, source: &[u8]) -> bool {
             // a standalone arm) is deliberately not run on the sub-patterns here.
             // The exception is a catch-all alternative (`A | _ => {}`,
             // `A | other => {}`) that hides the remaining cases — that still flags.
-            if or_pattern_has_wildcard(node, source) {
-                return true;
-            }
-            false
+            or_pattern_has_wildcard(node, source)
         }
         "tuple_struct_pattern" => {
             let Ok(text) = node.utf8_text(source) else {

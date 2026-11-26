@@ -29,7 +29,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
-use crate::rules::rust_helpers::is_test_code;
+use crate::rules::rust_helpers::is_test_only;
 
 #[derive(Debug)]
 pub struct Check;
@@ -66,11 +66,6 @@ impl AstCheck for Check {
         if is_safe_pattern_arg(first_arg, source_bytes) {
             return;
         }
-        // Test code has no external attack surface: the developer controls
-        // both the program and the pattern, so ReDoS does not apply.
-        if is_test_code(node, source_bytes, ctx) {
-            return;
-        }
         let ctor_type = fn_text.strip_suffix("::new").map(base_segment).unwrap_or("");
         if is_conversion_impl_for_ctor_type(node, source_bytes, ctor_type) {
             return;
@@ -79,6 +74,11 @@ impl AstCheck for Check {
         // backtrack, so a crafted pattern can't trigger the exponential blow-up
         // this rule guards against.
         if is_linear_time_engine(fn_text, ctx.source) {
+            return;
+        }
+        // Test-only code has no external attack surface.
+        // Its developer controls both the program and the pattern.
+        if is_test_only(node, ctx) {
             return;
         }
         let pos = node.start_position();
@@ -401,15 +401,20 @@ mod tests {
     #[test]
     fn allows_regex_with_variable_in_tests_dir() {
         // Issue #3287: ripgrep's crates/matcher/tests/test_matcher.rs.
+        // The package's `tests/` target is exempt.
+        // A `src/` module of that name ships.
         let source = "fn matcher(pattern: &str) { let r = Regex::new(pattern).unwrap(); }";
-        assert!(
-            crate::rules::test_helpers::run_rule(
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_in_module_tree(
                 &Check,
-                source,
-                "crates/matcher/tests/test_matcher.rs"
+                &[
+                    ("crates/matcher/Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                    (path, source),
+                ],
             )
-            .is_empty()
-        );
+        };
+        assert!(run("crates/matcher/tests/test_matcher.rs").is_empty());
+        assert_eq!(run("crates/matcher/src/test_matcher.rs").len(), 1);
     }
 
     #[test]

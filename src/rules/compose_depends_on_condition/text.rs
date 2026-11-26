@@ -30,10 +30,7 @@ fn is_short_form(value: tree_sitter::Node<'_>) -> bool {
         }
     }
     // Block sequence form.
-    if as_sequence(value).is_some() {
-        return true;
-    }
-    false
+    as_sequence(value).is_some()
 }
 
 crate::ast_check! { on ["block_mapping_pair"] => |node, source, ctx, diagnostics|

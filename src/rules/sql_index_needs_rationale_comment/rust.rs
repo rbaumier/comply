@@ -17,6 +17,7 @@ use regex::Regex;
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::{AstCheck, CheckCtx};
+use crate::rules::rust_helpers::is_test_only;
 
 const KINDS: &[&str] = &["string_literal", "raw_string_literal"];
 
@@ -79,14 +80,20 @@ impl AstCheck for Check {
             // trailing quote length matches leading quote length
             raw.len().saturating_sub(content.len()) / 2,
         );
-        diagnostics.extend(check_string_content(
+        let found = check_string_content(
+            content,
             content,
             start.row,
             start.column + delimiter_len,
             ctx.path,
             min_rationale_words,
             lookback_lines,
-        ));
+        );
+        // An index in test code is a fixture.
+        if found.is_empty() || is_test_only(node, ctx) {
+            return;
+        }
+        diagnostics.extend(found);
     }
 }
 
@@ -114,6 +121,8 @@ fn strip_rust_string_delimiters(raw: &str) -> &str {
 /// Scan `content` for `CREATE INDEX` occurrences and return a diagnostic
 /// for each one that lacks a nearby `-- ...` SQL rationale comment.
 ///
+/// - `code`: `content` with the comments a caller blanks.
+///   Statements are read in `code`, rationales in `content`.
 /// - `node_start_line` / `node_start_col`: the 0-based start position of
 ///   the string literal node in the source file. Diagnostic line/column
 ///   are computed relative to these so the squiggle lands on the actual
@@ -125,6 +134,7 @@ fn strip_rust_string_delimiters(raw: &str) -> &str {
 ///   are scanned for an explanatory comment.
 pub(super) fn check_string_content(
     content: &str,
+    code: &str,
     node_start_line: usize,
     node_start_col: usize,
     path: &Path,
@@ -135,10 +145,12 @@ pub(super) fn check_string_content(
     let lines: Vec<&str> = content.split('\n').collect();
     let re = create_index_re();
 
-    for (idx, line) in lines.iter().enumerate() {
-        let Some(m) = re.find(line) else {
-            continue;
-        };
+    let statements = lines
+        .iter()
+        .zip(code.split('\n'))
+        .enumerate()
+        .filter_map(|(idx, (line, code_line))| Some((idx, *line, re.find(code_line)?)));
+    for (idx, line, m) in statements {
         if has_rationale_before(&lines, idx, lookback_lines, min_rationale_words)
             || has_trailing_rationale(line, m.start(), min_rationale_words)
         {
@@ -230,6 +242,26 @@ mod tests {
 
     fn run_on(source: &str) -> Vec<Diagnostic> {
         crate::rules::test_helpers::run_rule(&Check, source, "t.rs")
+    }
+
+    #[test]
+    fn allows_create_index_in_test_code() {
+        let src = "#[cfg(test)]\nmod tests {\n    const M: &str = \"CREATE INDEX idx_x ON t(c);\";\n}";
+        assert!(run_on(src).is_empty());
+        let flagged = r#"fn f() { let m = "CREATE INDEX idx_x ON t(c);"; }"#;
+        assert_eq!(run_on(flagged).len(), 1);
+        let in_crate = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                flagged,
+                path,
+            )
+        };
+        assert!(in_crate("tests/schema.rs").is_empty());
+        // A name about tests does not make a test target.
+        assert_eq!(in_crate("src/speed_test.rs").len(), 1);
+        assert_eq!(in_crate("src/m20250101_000001_drop_test_mode.rs").len(), 1);
     }
 
     #[test]

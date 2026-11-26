@@ -11,10 +11,12 @@
 //! instruction), or when either operand is a string / char literal (a public
 //! compile-time constant baked into the binary, not a runtime secret).
 //!
-//! Test code is out of scope — it is no attack surface. That covers the gates
-//! the file itself carries (`#[cfg(test)]`, `#[test]`) and the ones it cannot:
-//! a Cargo `tests/` target and a module gated by its parent's
-//! `#[cfg(test)] mod …;` (`rust_helpers::is_test_only_rust_file`).
+//! Code outside the release is no attack surface.
+//! `is_outside_release` reads `#[cfg(test)]` and `#[test]`.
+//! It reads a parent's `#[cfg(test)] mod …;` too.
+//! It reads the package's `tests/`, `benches/` and `examples/`.
+//! A name or `cfg_attr(test, …)` gates no build.
+//! That code ships.
 
 use crate::diagnostic::{Diagnostic, Severity};
 
@@ -45,13 +47,9 @@ crate::ast_check! { on ["binary_expression"] => |node, source, ctx, diagnostics|
     if !left_hit && !right_hit {
         return;
     }
-    // Test code is no attack surface: it runs under `cargo test` and never ships.
-    // The gate can sit on the comparison's own ancestors, on the `mod`
-    // declaration in a parent file, or nowhere at all (a Cargo `tests/` target).
-    // Both lookups are far costlier than the name match, so they run last.
-    if crate::rules::rust_helpers::is_in_test_context(node, source)
-        || crate::rules::rust_helpers::is_test_only_rust_file(ctx.path, ctx.project)
-    {
+    // Code outside the release is no attack surface.
+    // These lookups cost the most, so they run last.
+    if crate::rules::rust_helpers::is_outside_release(node, ctx) {
         return;
     }
     // A scalar-integer comparison is a single constant-time machine instruction,
@@ -751,5 +749,41 @@ fn validate(dist: &Dist) -> Result<(), LockError> {
             ],
         );
         assert_eq!(diagnostics.len(), 1);
+    }
+
+    /// A `src/` module named after docs, demos or benchmarks ships.
+    /// The package's `examples/` and `benches/` targets do not.
+    /// Nor does a fuzz crate.
+    #[test]
+    fn flags_shipped_modules_named_like_relaxed_directories() {
+        let fuzz_manifest = "[package]\nname = \"auth-fuzz\"\nversion = \"0.0.0\"\n\n[package.metadata]\ncargo-fuzz = true\n";
+        let cases = [
+            ("src/docs/auth.rs", 1),
+            ("src/demo/auth.rs", 1),
+            ("src/benches/auth.rs", 1),
+            ("src/fuzz_targets/auth.rs", 1),
+            ("tools/examples/auth.rs", 1),
+            ("examples/auth.rs", 0),
+            ("benches/auth.rs", 0),
+        ];
+        for (path, expected) in cases {
+            let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+                &Check,
+                &[
+                    ("Cargo.toml", crate::rules::test_helpers::LIB_CARGO_TOML),
+                    ("src/lib.rs", ""),
+                    (path, PASSWORD_COMPARISON),
+                ],
+            );
+            assert_eq!(diagnostics.len(), expected, "{path}");
+        }
+        let diagnostics = crate::rules::test_helpers::run_rule_in_module_tree(
+            &Check,
+            &[
+                ("fuzz/Cargo.toml", fuzz_manifest),
+                ("fuzz/fuzz_targets/auth.rs", PASSWORD_COMPARISON),
+            ],
+        );
+        assert!(diagnostics.is_empty());
     }
 }

@@ -27,8 +27,9 @@
 //! shape instead would report functions that do guard themselves, which is the
 //! expensive kind of false positive here.
 //!
-//! Test code is exempt: a panicking `extern "C"` callback in a test is usually
-//! the thing under test.
+//! Code outside the release is exempt, per `is_outside_release`.
+//! There, a panicking `extern "C"` callback is under test.
+//! A module named after tests or docs is checked.
 //!
 //! Known limitation: a crate built with `panic = "abort"` aborts on every panic
 //! anyway, so `catch_unwind` buys it nothing. That setting lives in the
@@ -38,7 +39,7 @@
 use tree_sitter::Node;
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::rules::rust_helpers::{fn_extern_abi, is_test_code};
+use crate::rules::rust_helpers::{fn_extern_abi, is_outside_release};
 
 /// Binary operators that panic on overflow or on a zero divisor. The comparison
 /// and bitwise operators sharing the `binary_expression` kind cannot panic, so
@@ -52,12 +53,12 @@ crate::ast_check! { on ["function_item"] prefilter = ["extern"] => |node, source
     // `"C-unwind"` defines unwinding across the boundary; every other ABI is
     // outside this rule's premise.
     if fn_extern_abi(node, source) != Some("C") { return; }
-    if is_test_code(node, source, ctx) { return; }
 
     let Some(body) = node.child_by_field_name("body") else { return; };
     let Ok(body_text) = body.utf8_text(source) else { return; };
     if body_text.contains("catch_unwind") { return; }
     if !subtree_can_panic(body, source) { return; }
+    if is_outside_release(node, ctx) { return; }
 
     diagnostics.push(Diagnostic::at_node(
         ctx.path,
@@ -215,6 +216,16 @@ mod tests {
     #[test]
     fn allows_extern_c_fn_in_tests_directory() {
         let source = "pub extern \"C\" fn cb(v: &[u8]) -> u8 { v[0] }";
-        assert!(crate::rules::test_helpers::run_rule(&Check, source, "tests/ffi.rs").is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(
+                &Check,
+                crate::rules::test_helpers::LIB_CARGO_TOML,
+                source,
+                path,
+            )
+        };
+        assert!(run("tests/ffi.rs").is_empty());
+        // A `src/` module named after tests ships.
+        assert_eq!(run("src/ffi_test.rs").len(), 1);
     }
 }

@@ -93,19 +93,14 @@ pub(super) fn contains_sql_type_keyword(upper: &str) -> bool {
 /// nullable column without an inline `--` comment or a `--` comment on
 /// the preceding line. Skips lines that already carry `NOT NULL`,
 /// `PRIMARY KEY`, `CREATE`, `ALTER`, or are themselves comments.
-pub(super) fn nullable_lines_without_comment(text: &str) -> Vec<usize> {
+///
+/// Columns are read in `code`, comments in `text`.
+/// `code` is `text` with the comments a caller blanks.
+pub(super) fn nullable_lines_without_comment(text: &str, code: &str) -> Vec<usize> {
     let lines: Vec<&str> = text.lines().collect();
     let mut offsets = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        let upper = line.to_ascii_uppercase();
-        let t = upper.trim();
-        if !contains_sql_type_keyword(t) {
-            continue;
-        }
-        if t.contains("NOT NULL") || t.contains("PRIMARY KEY") {
-            continue;
-        }
-        if t.starts_with("CREATE") || t.starts_with("ALTER") || t.starts_with("--") {
+    for (i, (line, code_line)) in lines.iter().zip(code.lines()).enumerate() {
+        if !declares_nullable_column(code_line.to_ascii_uppercase().trim()) {
             continue;
         }
         let prev_is_comment = i > 0 && lines[i - 1].trim().starts_with("--");
@@ -115,6 +110,13 @@ pub(super) fn nullable_lines_without_comment(text: &str) -> Vec<usize> {
         }
     }
     offsets
+}
+
+/// True when `line`, uppercased, declares a column that accepts NULL.
+fn declares_nullable_column(line: &str) -> bool {
+    let refuses_null = line.contains("NOT NULL") || line.contains("PRIMARY KEY");
+    let is_head = line.starts_with("CREATE") || line.starts_with("ALTER") || line.starts_with("--");
+    contains_sql_type_keyword(line) && !refuses_null && !is_head
 }
 
 #[cfg(test)]
@@ -146,14 +148,14 @@ create table teams (
 );
 insert into teams (id, name) values (1, 'a');
 insert into teams (id, name) values (2, 'b');";
-        assert!(nullable_lines_without_comment(sql).is_empty());
+        assert!(nullable_lines_without_comment(sql, sql).is_empty());
     }
 
     #[test]
     fn genuine_nullable_column_still_flagged() {
         // Negative-space guard: a real nullable column with no NOT NULL and
         // no `--` comment must still be reported.
-        assert_eq!(nullable_lines_without_comment("  age INT,").len(), 1);
-        assert_eq!(nullable_lines_without_comment("  score INTEGER").len(), 1);
+        assert_eq!(nullable_lines_without_comment("  age INT,", "  age INT,").len(), 1);
+        assert_eq!(nullable_lines_without_comment("  score INTEGER", "  score INTEGER").len(), 1);
     }
 }

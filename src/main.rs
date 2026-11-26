@@ -908,6 +908,7 @@ fn collect_all_diagnostics(
                     timings,
                     type_aware,
                     &type_program_ts,
+                    is_partial,
                 )?);
             }
             if !by_lang.rs.is_empty() {
@@ -1162,6 +1163,7 @@ fn lint_typescript(
     timings: &mut Timings,
     type_aware: bool,
     type_program_ts: &[&SourceFile],
+    is_partial: bool,
 ) -> Result<Vec<Diagnostic>> {
     // oxlint is not optional: it backs comply's TS/JS lints, so a missing
     // oxlint would silently under-report. Refuse to run rather than report a
@@ -1180,11 +1182,23 @@ fn lint_typescript(
         Some(type_program_ts)
     };
 
+    let unanalyzed = if is_partial {
+        crate::toolchain::Unanalyzed::Refuse
+    } else {
+        crate::toolchain::Unanalyzed::Note
+    };
     let project2 = std::sync::Arc::clone(project);
     let oxlint_phase = || -> PhaseOut {
         let t = Instant::now();
         (
-            oxlint::lint_files(ts_files, config, project, type_aware, type_program_opt),
+            oxlint::lint_files(
+                ts_files,
+                config,
+                project,
+                type_aware,
+                type_program_opt,
+                unanalyzed,
+            ),
             t.elapsed(),
         )
     };

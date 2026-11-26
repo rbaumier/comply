@@ -32,14 +32,15 @@
 //! Inline `#[cfg(test)]` modules are exempt: parametrized tests routinely
 //! create a fresh in-memory datastore per loop iteration and run one query
 //! against it, which is not the N+1 antipattern (each iteration has isolated
-//! storage and cannot be batched). Path-based test files are handled by
-//! `skip_in_test_dir`; this covers tests embedded in production `src/` files.
+//! storage and cannot be batched). A Cargo `tests/` target is exempt too.
+//! A file named after tests still ships.
+//! So does code under `cfg_attr(test, …)`.
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::backend::CheckCtx;
 use crate::rules::rust_helpers::{
     TypeOrigin, file_references_db_crate, import_source_references_db_crate, is_db_crate,
-    is_test_code, receiver_type_origins,
+    is_test_only, receiver_type_origins,
 };
 use crate::rules::sql_helpers::contains_word;
 
@@ -291,10 +292,6 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
         return;
     };
 
-    if is_test_code(node, source, ctx) {
-        return;
-    }
-
     let Some(inner) = node.named_child(0) else { return };
     if !is_db_call(inner, source, ctx) {
         return;
@@ -305,6 +302,10 @@ crate::ast_check! { on ["await_expression"] => |node, source, ctx, diagnostics|
     // strategy, the opposite of an N+1 — so it is not flagged. A `for` binds
     // each element of a collection and stays flagged.
     if matches!(loop_kind, EnclosingLoop::WhileOrLoop) && awaited_query_has_limit(inner, source) {
+        return;
+    }
+
+    if is_test_only(node, ctx) {
         return;
     }
 
@@ -389,15 +390,18 @@ mod tests {
         assert!(run_on(src).is_empty());
     }
 
-    // Issue #1470: a `tests/`-dir path is suppressed by `skip_in_test_dir`.
-    // Gated run honours the production `applies_to_file` gate.
+    // Issue #1470: the Cargo `tests/` target of the package is exempt.
+    // A `src/` module named after tests ships: it is flagged.
     #[test]
     fn allows_query_in_loop_in_tests_dir() {
         let src = "use sqlx::PgPool;
             async fn f(ids: Vec<i32>) { for id in ids { db.query(id).await; } }";
-        let diags =
-            crate::rules::test_helpers::run_rule_gated(&Check, src, "crate/tests/signin.rs");
-        assert!(diags.is_empty());
+        let run = |path| {
+            crate::rules::test_helpers::run_rule_with_cargo(&Check, APP_CARGO_TOML, src, path)
+        };
+        assert!(run("tests/signin.rs").is_empty());
+        assert_eq!(run("src/ab_test/signin.rs").len(), 1);
+        assert_eq!(run("tools/tests/signin.rs").len(), 1);
     }
 
     // Negative space: the same loop query in a production (non-test) path still

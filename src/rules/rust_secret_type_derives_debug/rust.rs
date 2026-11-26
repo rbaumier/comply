@@ -42,8 +42,8 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::rules::rust_helpers::{
-    collect_top_level_derives, file_impls_trait_for_type, has_attribute_option, is_test_code,
-    last_type_argument, strip_type_borrows,
+    collect_top_level_derives, file_impls_trait_for_type, has_attribute_option,
+    is_outside_release, last_type_argument, strip_type_borrows,
 };
 
 /// Secret-bearing phrases, each written as the token sequence a struct name
@@ -155,9 +155,6 @@ const FFI_REPR_KINDS: &[&str] = &["C", "packed"];
 const SERDE_PROTECTIONS: &[&str] = &["skip", "skip_serializing", "serialize_with"];
 
 crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, ctx, diagnostics|
-    if ctx.file.path_segments.in_test_dir { return; }
-    if is_test_code(node, source, ctx) { return; }
-
     let Some(name_node) = node.child_by_field_name("name") else { return; };
     let Ok(name) = name_node.utf8_text(source) else { return; };
     if !name_carries_secret(name) { return; }
@@ -173,6 +170,9 @@ crate::ast_check! { on ["struct_item"] prefilter = ["struct"] => |node, source, 
     // A hand-written `Debug`/`Display` is the author's own rendering decision;
     // the struct is not relying on a derive to print itself.
     if file_impls_trait_for_type(node, source, &["Debug", "Display"], name) { return; }
+    // Tests and examples hold fake secrets.
+    // The release never logs them.
+    if is_outside_release(node, ctx) { return; }
 
     // Anchor on the `#[derive(…)]` rather than the struct: that attribute is
     // the line the reader has to change.
