@@ -1081,7 +1081,7 @@ fn lint_rust(
     let clippy_phase = || -> PhaseOut {
         let t = Instant::now();
         (
-            clippy::lint_files(rs_files, config, is_partial),
+            clippy::lint_files(rs_files, config, project.import_index(), is_partial),
             t.elapsed(),
         )
     };

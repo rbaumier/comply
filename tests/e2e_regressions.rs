@@ -3227,7 +3227,7 @@ fn a_loose_rust_file_is_refused_in_an_index_mode() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&staged.stderr);
     assert_eq!(staged.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("1 loose file(s)"), "{stderr}");
+    assert!(stderr.contains(".complyignore"), "{stderr}");
     assert!(stderr.contains("loose.rs"), "{stderr}");
 
     let full = common::comply()
@@ -3237,7 +3237,60 @@ fn a_loose_rust_file_is_refused_in_an_index_mode() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&full.stderr);
     assert_ne!(full.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("1 loose file(s)"), "{stderr}");
+    assert!(stderr.contains(".complyignore"), "{stderr}");
+}
+
+// `a` reaches `shared/s.rs` through `#[path]`; no Cargo.toml sits above it.
+// Changing it alone still lints it, through `a`.
+#[test]
+fn a_file_a_crate_reaches_through_path_is_linted_with_it() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    for (path, content) in [
+        (
+            "a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        ),
+        (
+            "a/src/main.rs",
+            "//! Fixture.\n#[path = \"../../shared/s.rs\"]\nmod s;\nfn main() {\n    println!(\"{}\", s::ONE);\n}\n",
+        ),
+        ("shared/s.rs", "/// One.\npub const ONE: u8 = 1;\n"),
+        (".gitignore", "target/\n"),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "init"]);
+    fs::write(
+        root.join("shared/s.rs"),
+        "/// Two.\npub const ONE: u8 = 2;\n",
+    )
+    .unwrap();
+    git(root, &["add", "shared/s.rs"]);
+    // The full scan also judges `a`, whose fixture draws findings.
+    for (args, code) in [(&["--staged"][..], 0), (&["."][..], 1)] {
+        let output = common::comply()
+            .current_dir(root)
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .args(args)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{args:?}: {stdout}{stderr}"
+        );
+        assert!(!stderr.contains("shared/s.rs"), "{args:?}: {stderr}");
+        assert!(!stdout.contains("shared/s.rs"), "{args:?}: {stdout}");
+    }
 }
 
 // No `mod` item reads `src/orphan.rs`, so clippy never sees it.
@@ -3275,6 +3328,9 @@ fn a_rust_file_no_target_compiles_is_unanalyzed() {
         }
         assert!(stderr.contains("src/orphan.rs"), "{args:?}: {stderr}");
         assert!(!stderr.contains("extra/x.rs"), "{args:?}: {stderr}");
+        // Remedies: a cfg this host disables, or .complyignore.
+        assert!(stderr.contains("#[cfg(target_os = "), "{args:?}: {stderr}");
+        assert!(stderr.contains(".complyignore"), "{args:?}: {stderr}");
     }
 }
 

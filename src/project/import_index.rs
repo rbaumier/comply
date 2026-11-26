@@ -1112,6 +1112,15 @@ impl ImportIndex {
         self.rust_mod_children.contains(self.canonical_key(path))
     }
 
+    /// The indexed files whose `mod` declarations resolve to `path`.
+    pub fn rust_mod_declarers(&self, path: &Path) -> impl Iterator<Item = &Path> {
+        let key = self.canonical(path);
+        self.mod_edges
+            .iter()
+            .filter(move |(_, children)| children.contains(&key))
+            .map(|(declarer, _)| declarer.as_path())
+    }
+
     /// True when a `mod <name>;` declaration matched no indexed file.
     #[must_use]
     pub fn has_unresolved_rust_mod(&self, name: &str) -> bool {
