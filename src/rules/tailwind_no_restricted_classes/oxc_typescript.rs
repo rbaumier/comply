@@ -136,7 +136,7 @@ impl Entry {
         let in_context = match self.context {
             None => true,
             Some(Context::IterationCallback) => string.in_iteration_callback,
-            Some(Context::Conditional) => string.in_conditional,
+            Some(Context::Conditional) => string.branch.is_some(),
         };
         in_context
             && !self

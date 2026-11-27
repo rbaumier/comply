@@ -125,7 +125,7 @@ impl Entry {
         if let Some(pattern) = &self.when_class
             && !strings
                 .iter()
-                .filter(|string| !string.in_conditional)
+                .filter(|string| string.branch.is_none())
                 .flat_map(|string| &string.classes)
                 .any(|class| pattern.is_match(class.utility))
         {
