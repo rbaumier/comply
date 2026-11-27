@@ -207,6 +207,14 @@ pub fn file_uses_fake_timers(source: &str) -> bool {
     FAKE_TIMER_MARKERS.iter().any(|marker| source_contains(source, marker))
 }
 
+/// True when `call` is `vi.useFakeTimers()` or `jest.useFakeTimers()`.
+pub fn is_use_fake_timers(call: &oxc_ast::ast::CallExpression) -> bool {
+    use oxc_ast::ast::Expression;
+    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
+    let Expression::Identifier(obj) = &member.object else { return false };
+    matches!(obj.name.as_str(), "vi" | "jest") && member.property.name.as_str() == "useFakeTimers"
+}
+
 /// Collect every property key destructured from a `<expr>.groups` object
 /// pattern anywhere in `source`, e.g. `code`/`openingFence` from
 /// `const {code, openingFence} = match.groups ?? {}`.
@@ -2831,6 +2839,27 @@ pub fn locally_owned_binding_init<'a>(
             _ => None,
         })
         .flatten()
+}
+
+/// Initializer of the `const` that `ident` resolves to, any scope.
+#[must_use]
+pub fn const_init<'a>(
+    ident: &oxc_ast::ast::IdentifierReference,
+    semantic: &oxc_semantic::Semantic<'a>,
+) -> Option<&'a oxc_ast::ast::Expression<'a>> {
+    use oxc_ast::AstKind;
+
+    let scoping = semantic.scoping();
+    let symbol = scoping.get_reference(ident.reference_id.get()?).symbol_id()?;
+    let AstKind::VariableDeclarator(declarator) =
+        semantic.nodes().kind(scoping.symbol_declaration(symbol))
+    else {
+        return None;
+    };
+    if declarator.kind != oxc_ast::ast::VariableDeclarationKind::Const {
+        return None;
+    }
+    declarator.init.as_ref()
 }
 
 /// True when `ident` resolves to a `VariableDeclarator` binding declared in an

@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
-use oxc_ast::ast::{
-    Argument, Expression, IdentifierReference, ObjectPropertyKind, VariableDeclarationKind,
-    VariableDeclarator,
-};
+use oxc_ast::ast::{Argument, Expression, ObjectPropertyKind};
 use oxc_semantic::{ReferenceFlags, Semantic};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::oxc_helpers::{
-    byte_offset_to_line_col, import_source_of, object_literal_property_value,
+    byte_offset_to_line_col, const_init, import_source_of, object_literal_property_value,
 };
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 
@@ -138,22 +135,6 @@ fn is_lenient_value(value: &Expression, semantic: &Semantic) -> bool {
         other => Some(other),
     };
     matches!(resolved, Some(Expression::StringLiteral(lit)) if matches!(lit.value.as_str(), "warn" | "bypass"))
-}
-
-fn const_init<'a>(
-    id: &IdentifierReference,
-    semantic: &'a Semantic<'a>,
-) -> Option<&'a Expression<'a>> {
-    let scoping = semantic.scoping();
-    let symbol = scoping.get_reference(id.reference_id.get()?).symbol_id()?;
-    match semantic.nodes().kind(scoping.symbol_declaration(symbol)) {
-        AstKind::VariableDeclarator(VariableDeclarator {
-            kind: VariableDeclarationKind::Const,
-            init,
-            ..
-        }) => init.as_ref(),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

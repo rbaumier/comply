@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2095 rules across 153 categories.
+2096 rules across 153 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [tanstack-query](#tanstack-query) (17 rules)
 - [tanstack-start](#tanstack-start) (11 rules)
 - [tanstack-start > security](#tanstack-start-security) (3 rules)
-- [testing](#testing) (90 rules)
+- [testing](#testing) (91 rules)
 - [testing > jest](#testing-jest) (2 rules)
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
@@ -2458,6 +2458,7 @@
 | `test-check-exception` | `.toThrow()` without specifying what to check. | Specify the expected error: `.toThrow(TypeError)`, `.toThrow('message')`, or `.toThrow(/regex/)`. Bare `.toThrow()` passes for any error, hiding bugs. |
 | `testing-no-concurrent-without-context-expect` | test.concurrent must destructure { expect } from the test context — the module-level expect is not scoped per concurrent test. | Destructure expect from the test context: test.concurrent('...', ({ expect }) => { ... }) |
 | `testing-no-conditional-assertion` | Assertions gated by if, &&, \|\|, ??, a statement ternary or a catch clause silently skip when that branch does not run — the test passes but checks nothing. | Make the assertion unconditional. If the branch depends on input, split into separate tests or use expect.soft / describe.each. |
+| `testing-no-elapsed-time-bound` | No upper bound on measured wall-clock time inside JS/TS tests. | A wall-clock budget fails on a loaded CI machine. Assert the order of events or count the steps taken, drive time with fake timers, or keep a margin wide enough to catch only a pathological slowdown. |
 | `testing-no-mocking-internal-modules` | Mocking a relative internal module (or any package, under `include_packages`) couples tests to implementation details. | Mock only external boundaries (HTTP, DB, third-party SDKs). Refactor so the collaborator is injected, or rely on the real internal module. |
 | `testing-no-mocktimers-without-restore` | useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests. | Call vi.useRealTimers() (or jest.useRealTimers()) in afterEach/afterAll to restore the real timers. |
 | `testing-no-real-external-service` | Test makes a real network call to an external service — intercept it with MSW instead. | Mock the external service with MSW (or equivalent) — never hit the real endpoint from tests. |

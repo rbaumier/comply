@@ -1,21 +1,13 @@
 //! testing-no-mocktimers-without-restore — OXC backend.
-//! Flags `vi.useFakeTimers()` / `jest.useFakeTimers()` calls in files that
-//! never pair them with `useRealTimers()` in an afterEach/afterAll.
+//! Flags `useFakeTimers()` in a file with no restore hook.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::{byte_offset_to_line_col, file_uses_fake_timers};
+use crate::oxc_helpers::{byte_offset_to_line_col, file_uses_fake_timers, is_use_fake_timers};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
 
 pub struct Check;
-
-/// Check if a call expression is `vi.useFakeTimers()` or `jest.useFakeTimers()`.
-fn is_use_fake_timers(call: &oxc_ast::ast::CallExpression) -> bool {
-    let Expression::StaticMemberExpression(member) = &call.callee else { return false };
-    let Expression::Identifier(obj) = &member.object else { return false };
-    matches!(obj.name.as_str(), "vi" | "jest") && member.property.name.as_str() == "useFakeTimers"
-}
 
 /// Check if a call expression is `vi.useRealTimers()` or `jest.useRealTimers()`.
 fn is_use_real_timers(call: &oxc_ast::ast::CallExpression) -> bool {
@@ -40,18 +32,12 @@ fn is_inside_after_hook(
     false
 }
 
-/// Does the file contain a `useRealTimers()` call inside an `afterEach` / `afterAll`?
+/// A `useRealTimers()` call inside `afterEach` or `afterAll`.
 fn has_scoped_real_timer_restore(semantic: &oxc_semantic::Semantic) -> bool {
-    for node in semantic.nodes().iter() {
-        let AstKind::CallExpression(call) = node.kind() else { continue };
-        if !is_use_real_timers(call) {
-            continue;
-        }
-        if is_inside_after_hook(node.id(), semantic) {
-            return true;
-        }
-    }
-    false
+    semantic.nodes().iter().any(|node| {
+        matches!(node.kind(), AstKind::CallExpression(call) if is_use_real_timers(call))
+            && is_inside_after_hook(node.id(), semantic)
+    })
 }
 
 impl OxcCheck for Check {
@@ -71,25 +57,27 @@ impl OxcCheck for Check {
             return Vec::new();
         }
 
-        let mut diagnostics = Vec::new();
-        for node in semantic.nodes().iter() {
-            let AstKind::CallExpression(call) = node.kind() else { continue };
-            if !is_use_fake_timers(call) {
-                continue;
-            }
-            let (line, column) =
-                byte_offset_to_line_col(ctx.source, call.span.start as usize);
-            diagnostics.push(Diagnostic {
-                path: Arc::clone(&ctx.path_arc),
-                line,
-                column,
-                rule_id: super::META.id.into(),
-                message: "useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests.".into(),
-                severity: Severity::Error,
-                span: None,
-            });
-        }
-        diagnostics
+        semantic
+            .nodes()
+            .iter()
+            .filter_map(|node| match node.kind() {
+                AstKind::CallExpression(call) if is_use_fake_timers(call) => Some(call),
+                _ => None,
+            })
+            .map(|call| {
+                let (line, column) =
+                    byte_offset_to_line_col(ctx.source, call.span.start as usize);
+                Diagnostic {
+                    path: Arc::clone(&ctx.path_arc),
+                    line,
+                    column,
+                    rule_id: super::META.id.into(),
+                    message: "useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests.".into(),
+                    severity: Severity::Error,
+                    span: None,
+                }
+            })
+            .collect()
     }
 }
 
