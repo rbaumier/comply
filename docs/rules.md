@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2090 rules across 153 categories.
+2091 rules across 153 categories.
 
 ## Categories
 
@@ -129,7 +129,7 @@
 - [sql > indexing](#sql-indexing) (2 rules)
 - [sql > migrations](#sql-migrations) (8 rules)
 - [style](#style) (2 rules)
-- [tailwind](#tailwind) (23 rules)
+- [tailwind](#tailwind) (24 rules)
 - [tailwind > accessibility](#tailwind-accessibility) (6 rules)
 - [tailwind > i18n](#tailwind-i18n) (1 rules)
 - [tailwind > mobile](#tailwind-mobile) (1 rules)
@@ -2263,6 +2263,7 @@
 | `tailwind-no-manual-dark-variants` | Forbid manual `dark:` color variants paired with raw palette colors. | Replace `bg-white dark:bg-zinc-900` with a semantic token like `bg-background` that already resolves per theme. |
 | `tailwind-no-raw-color-utilities` | Forbid raw palette color utilities (text-gray-900, bg-blue-500) in every class string; opt-in keys add arbitrary colors (bg-[#fff]), white/black and color literals in `style` objects. | Use semantic design tokens (bg-background, text-foreground, bg-primary, text-muted-foreground) so theming and dark mode stay centralized. |
 | `tailwind-no-restricted-classes` | User-configured policy over Tailwind classes in every class string (`className`, `cn`, `cva`, `clsx`, constants): an exact blocklist plus regex entries with allow-lists, variant and context conditions, each with its own message. | Use the project-approved equivalent. If the class is needed for a one-off, escape via the project's design-token override mechanism. |
+| `tailwind-no-self-container-query` | A container query variant never matches the element that declares `@container`. | Move `@container` to a parent element, or name the target container. |
 | `tailwind-no-tailwindcss-animate` | Forbid imports from `tailwindcss-animate`; use `tw-animate-css` instead. | Uninstall `tailwindcss-animate` and install `tw-animate-css`, then replace the import / plugin entry accordingly. |
 | `tailwind-no-unnecessary-whitespace` | Multiple consecutive spaces in className/class attributes are unnecessary. | Remove extra whitespace in class strings |
 | `tailwind-prefer-cn-utility` | Ternary or concatenation in `className` should use `cn()` or `clsx()` for readability. | Replace `className={x ? 'a' : 'b'}` with `className={cn('a', { b: x })}`. |

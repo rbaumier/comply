@@ -6,7 +6,7 @@ use oxc_ast::ast::{
     JSXOpeningElement, ObjectPropertyKind, TemplateLiteral,
 };
 use oxc_semantic::{NodeId, Semantic};
-use oxc_span::Span;
+use oxc_span::{GetSpan, Span};
 
 /// Callees whose string arguments are Tailwind class lists.
 pub const CLASS_HELPERS: &[&str] = &[
@@ -24,7 +24,8 @@ pub const CLASS_HELPERS: &[&str] = &[
 pub struct ClassString<'a> {
     pub span: Span,
     pub classes: Vec<Class<'a>>,
-    pub in_conditional: bool,
+    /// Innermost `?:` arm or `&&`/`||` operand; `None` when unconditional.
+    pub branch: Option<Span>,
     pub in_iteration_callback: bool,
 }
 
@@ -96,11 +97,11 @@ fn collect_entry_point<'a>(
             }
             match &attr.value {
                 Some(JSXAttributeValue::StringLiteral(lit)) => {
-                    strings.push(class_string(lit.span, &[lit.value.as_str()], false));
+                    strings.push(class_string(lit.span, &[lit.value.as_str()], None));
                 }
                 Some(JSXAttributeValue::ExpressionContainer(container)) => {
                     if let Some(expr) = container.expression.as_expression() {
-                        collect(expr, false, true, semantic, strings, nested);
+                        collect(expr, None, true, semantic, strings, nested);
                     }
                 }
                 _ => {}
@@ -108,7 +109,7 @@ fn collect_entry_point<'a>(
         }
         AstKind::CallExpression(call) if is_class_helper(call) => {
             for expr in call.arguments.iter().filter_map(|arg| arg.as_expression()) {
-                collect(expr, false, true, semantic, strings, nested);
+                collect(expr, None, true, semantic, strings, nested);
             }
         }
         _ => {}
@@ -127,7 +128,7 @@ fn is_class_helper(call: &CallExpression) -> bool {
 /// Walks down to the literals. Constants resolve one level only.
 fn collect<'a>(
     expr: &'a Expression<'a>,
-    in_conditional: bool,
+    branch: Option<Span>,
     can_resolve: bool,
     semantic: &'a Semantic<'a>,
     strings: &mut Vec<ClassString<'a>>,
@@ -135,18 +136,19 @@ fn collect<'a>(
 ) {
     match expr.get_inner_expression() {
         Expression::StringLiteral(lit) => {
-            strings.push(class_string(
-                lit.span,
-                &[lit.value.as_str()],
-                in_conditional,
-            ));
+            strings.push(class_string(lit.span, &[lit.value.as_str()], branch));
         }
         Expression::TemplateLiteral(template) => {
-            strings.push(template_string(template, in_conditional));
+            strings.push(template_string(template, branch));
             for inner in &template.expressions {
+                collect(inner, branch, can_resolve, semantic, strings, nested);
+            }
+        }
+        Expression::ConditionalExpression(cond) => {
+            for arm in [&cond.consequent, &cond.alternate] {
                 collect(
-                    inner,
-                    in_conditional,
+                    arm,
+                    Some(arm.span()),
                     can_resolve,
                     semantic,
                     strings,
@@ -154,45 +156,28 @@ fn collect<'a>(
                 );
             }
         }
-        Expression::ConditionalExpression(cond) => {
-            collect(
-                &cond.consequent,
-                true,
-                can_resolve,
-                semantic,
-                strings,
-                nested,
-            );
-            collect(
-                &cond.alternate,
-                true,
-                can_resolve,
-                semantic,
-                strings,
-                nested,
-            );
-        }
         Expression::LogicalExpression(logical) => {
-            collect(&logical.left, true, can_resolve, semantic, strings, nested);
-            collect(&logical.right, true, can_resolve, semantic, strings, nested);
-        }
-        Expression::ArrayExpression(array) => {
-            for element in array.elements.iter().filter_map(|e| e.as_expression()) {
+            for operand in [&logical.left, &logical.right] {
                 collect(
-                    element,
-                    in_conditional,
+                    operand,
+                    Some(operand.span()),
                     can_resolve,
                     semantic,
                     strings,
                     nested,
                 );
+            }
+        }
+        Expression::ArrayExpression(array) => {
+            for element in array.elements.iter().filter_map(|e| e.as_expression()) {
+                collect(element, branch, can_resolve, semantic, strings, nested);
             }
         }
         // A resolved constant's helper call is its own entry point.
         Expression::CallExpression(call) if can_resolve && is_class_helper(call) => {
             nested.push(call.span);
             for arg in call.arguments.iter().filter_map(|arg| arg.as_expression()) {
-                collect(arg, in_conditional, can_resolve, semantic, strings, nested);
+                collect(arg, branch, can_resolve, semantic, strings, nested);
             }
         }
         Expression::ObjectExpression(object) => {
@@ -200,7 +185,7 @@ fn collect<'a>(
                 if let ObjectPropertyKind::ObjectProperty(property) = property {
                     collect(
                         &property.value,
-                        in_conditional,
+                        branch,
                         can_resolve,
                         semantic,
                         strings,
@@ -211,7 +196,7 @@ fn collect<'a>(
         }
         Expression::Identifier(ident) if can_resolve => {
             if let Some(init) = constant_init(ident, semantic) {
-                collect(init, in_conditional, false, semantic, strings, nested);
+                collect(init, branch, false, semantic, strings, nested);
             }
         }
         _ => {}
@@ -250,16 +235,16 @@ fn in_iteration_callback(id: NodeId, semantic: &Semantic) -> bool {
         })
 }
 
-fn template_string<'a>(template: &'a TemplateLiteral<'a>, in_conditional: bool) -> ClassString<'a> {
+fn template_string<'a>(template: &'a TemplateLiteral<'a>, branch: Option<Span>) -> ClassString<'a> {
     let pieces: Vec<&'a str> = template
         .quasis
         .iter()
         .map(|q| q.value.raw.as_str())
         .collect();
-    class_string(template.span, &pieces, in_conditional)
+    class_string(template.span, &pieces, branch)
 }
 
-fn class_string<'a>(span: Span, pieces: &[&'a str], in_conditional: bool) -> ClassString<'a> {
+fn class_string<'a>(span: Span, pieces: &[&'a str], branch: Option<Span>) -> ClassString<'a> {
     ClassString {
         span,
         classes: pieces
@@ -267,7 +252,7 @@ fn class_string<'a>(span: Span, pieces: &[&'a str], in_conditional: bool) -> Cla
             .flat_map(|piece| piece.split_whitespace())
             .map(parse_class)
             .collect(),
-        in_conditional,
+        branch,
         in_iteration_callback: false,
     }
 }
@@ -311,7 +296,7 @@ mod tests {
                 .flat_map(|s| {
                     s.classes
                         .iter()
-                        .map(|c| (c.utility.to_string(), s.in_conditional))
+                        .map(|c| (c.utility.to_string(), s.branch.is_some()))
                 })
                 .collect::<Vec<_>>()
         });
