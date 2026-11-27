@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2093 rules across 153 categories.
+2094 rules across 153 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [tanstack-query](#tanstack-query) (17 rules)
 - [tanstack-start](#tanstack-start) (11 rules)
 - [tanstack-start > security](#tanstack-start-security) (3 rules)
-- [testing](#testing) (88 rules)
+- [testing](#testing) (89 rules)
 - [testing > jest](#testing-jest) (2 rules)
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
@@ -2463,6 +2463,7 @@
 | `testing-no-real-external-service` | Test makes a real network call to an external service — intercept it with MSW instead. | Mock the external service with MSW (or equivalent) — never hit the real endpoint from tests. |
 | `testing-no-shared-signal` | An AbortSignal timeout or AbortController created once is shared by several tests or requests — later ones inherit a spent or aborted signal. | Create the signal where the request is made, and the controller inside the test or in beforeEach(). |
 | `testing-no-shared-state` | Top-level let/var or imported object mutated in test() blocks without being reset in beforeEach/afterEach/afterAll — tests become order-dependent. | Move the variable inside each test, or reset the binding or path in beforeEach(), afterEach() or afterAll(). Prefer fresh state per test over shared mutable state. |
+| `testing-no-sleep-in-test` | No fixed-delay sleep inside JS/TS tests. | A fixed wait makes the test slow and flaky. Wait on the condition itself (`waitFor`, `expect.poll`, an event or a promise), or drive time with fake timers (`vi.useFakeTimers()` + `vi.advanceTimersByTime(ms)`). |
 | `testing-no-stubglobal-without-restore` | stubGlobal/stubEnv without unstubAllGlobals/unstubAllEnvs leaks mocked globals into sibling tests. | Call vi.unstubAllGlobals() (or vi.unstubAllEnvs()) in afterEach/afterAll — or enable unstubGlobals/unstubEnvs in the Vitest config. |
 | `testing-no-try-catch-swallow` | Empty catch around the act phase masks the very errors the test is meant to surface. | Either let the error propagate, or assert on it with expect(() => fn()).toThrow(...) / expect(promise).rejects.toThrow(...). |
 | `testing-no-undefined-mock-var` | `jest.fn()` / `vi.fn()` stored in a variable but never configured with `mockReturnValue` / `mockResolvedValue` / `mockImplementation` always returns `undefined`. | Configure the mock with `.mockReturnValue(...)`, `.mockResolvedValue(...)` or `.mockImplementation(...)`, or pass an implementation to `jest.fn(impl)`. |

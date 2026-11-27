@@ -3,7 +3,7 @@
 //! never pair them with `useRealTimers()` in an afterEach/afterAll.
 
 use crate::diagnostic::{Diagnostic, Severity};
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, file_uses_fake_timers};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::Expression;
 use std::sync::Arc;
@@ -64,7 +64,7 @@ impl OxcCheck for Check {
         semantic: &'a oxc_semantic::Semantic<'a>,
         ctx: &CheckCtx,
     ) -> Vec<Diagnostic> {
-        if !ctx.source_contains("useFakeTimers") {
+        if !file_uses_fake_timers(ctx.source) {
             return Vec::new();
         }
         if has_scoped_real_timer_restore(semantic) {

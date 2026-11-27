@@ -1,24 +1,11 @@
 use crate::diagnostic::Diagnostic;
-use crate::oxc_helpers::byte_offset_to_line_col;
+use crate::oxc_helpers::{byte_offset_to_line_col, file_uses_fake_timers};
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use oxc_ast::ast::{Expression, ImportDeclarationSpecifier};
 use oxc_span::GetSpan;
 use std::sync::Arc;
 
 const TEST_MARKERS: &[&str] = &[".test.", ".spec.", "__tests__", "_test."];
-
-/// Substrings that signal the file drives fake timers. When present,
-/// `fireEvent` (synchronous) is the correct tool — `userEvent` is async and
-/// flushes microtasks/pointer events, which breaks deterministic interleaving
-/// with `vi.advanceTimersByTimeAsync(...)` and friends. `advanceTimersByTime`
-/// also matches its `...Async` variant.
-const FAKE_TIMER_MARKERS: &[&str] = &[
-    "useFakeTimers",
-    "advanceTimersByTime",
-    "advanceTimersToNextTimer",
-    "runOnlyPendingTimers",
-    "runAllTimers",
-];
 
 /// True when the `fireEvent` binding in this file is imported from a relative
 /// module specifier (starts with `.` / `..`), i.e. the file tests a *local*
@@ -106,10 +93,7 @@ impl OxcCheck for Check {
         // Files driving fake timers rely on `fireEvent` being synchronous to
         // interleave precisely with timer advancement; `userEvent` would break
         // that, so leave them alone.
-        if FAKE_TIMER_MARKERS
-            .iter()
-            .any(|m| ctx.source_contains(m))
-        {
+        if file_uses_fake_timers(ctx.source) {
             return;
         }
         // The source repository of a library that exports `fireEvent` imports it
