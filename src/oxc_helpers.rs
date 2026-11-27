@@ -192,6 +192,21 @@ pub fn source_contains(source: &str, needle: &str) -> bool {
     })
 }
 
+/// Substrings that signal a file drives fake timers. `advanceTimersByTime`
+/// also matches its `...Async` variant.
+const FAKE_TIMER_MARKERS: &[&str] = &[
+    "useFakeTimers",
+    "advanceTimersByTime",
+    "advanceTimersToNextTimer",
+    "runOnlyPendingTimers",
+    "runAllTimers",
+];
+
+/// True when `source` mentions a fake-timer API, comments and strings included.
+pub fn file_uses_fake_timers(source: &str) -> bool {
+    FAKE_TIMER_MARKERS.iter().any(|marker| source_contains(source, marker))
+}
+
 /// Collect every property key destructured from a `<expr>.groups` object
 /// pattern anywhere in `source`, e.g. `code`/`openingFence` from
 /// `const {code, openingFence} = match.groups ?? {}`.
@@ -2438,7 +2453,7 @@ const FRESH_OBJECT_CALL_MAX_DEPTH: usize = 4;
 ///
 /// A parameter, an imported binding, a method, or a callee any write reassigns
 /// resolves to no readable body, so the caller treats the call as foreign.
-fn local_callee_body<'a>(
+pub fn local_callee_body<'a>(
     callee: &oxc_ast::ast::IdentifierReference,
     semantic: &oxc_semantic::Semantic<'a>,
 ) -> Option<(&'a oxc_ast::ast::FunctionBody<'a>, oxc_span::Span, bool)> {
