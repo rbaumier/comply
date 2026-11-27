@@ -1,16 +1,15 @@
 //! testing-no-conditional-assertion OXC backend.
 //!
-//! Flag the `if` chain inside a `test()` / `it()` callback that holds the
-//! test's only assertions: when no arm runs, the test passes having checked
-//! nothing. One diagnostic per chain, anchored on the `if`.
+//! Flag a test's only assertions behind a skippable branch.
+//! Branches: `if`, logical operator, statement ternary, `catch`.
 
 use crate::diagnostic::Diagnostic;
 use crate::oxc_helpers::byte_offset_to_line_col;
 use crate::rules::backend::{AstKind, AstType, CheckCtx, OxcCheck};
 use crate::rules::test_guard_helpers::{is_narrowing_guard, is_type_narrowing, test_scope_statements};
 use oxc_ast::ast::{
-    BinaryOperator, Expression, IdentifierReference, IfStatement, Statement, TSLiteral, TSType,
-    TSTypeName,
+    BinaryOperator, BlockStatement, Expression, IdentifierReference, IfStatement, Statement,
+    TSLiteral, TSType, TSTypeName,
 };
 use oxc_semantic::{NodeId, Semantic};
 use oxc_span::{GetSpan, Span};
@@ -220,6 +219,49 @@ fn if_is_exempt<'a>(
     is_narrowing_guard(if_stmt, scope, source)
 }
 
+/// True when `try` ends in `throw`, `fail()` or `expect.unreachable()`.
+fn try_ends_unreachable(block: &BlockStatement) -> bool {
+    match block.body.last() {
+        Some(Statement::ThrowStatement(_)) => true,
+        Some(Statement::ExpressionStatement(es)) => {
+            let Expression::CallExpression(call) = es.expression.without_parentheses() else {
+                return false;
+            };
+            match &call.callee {
+                Expression::Identifier(id) => id.name.as_str() == "fail",
+                Expression::StaticMemberExpression(m) => {
+                    m.property.name.as_str() == "unreachable"
+                        && matches!(&m.object, Expression::Identifier(id) if id.name.as_str() == "expect")
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Span of the logical, statement ternary or `catch` gating `call`.
+fn expression_hazard(kind: AstKind, parent: AstKind, call: Span) -> Option<Span> {
+    match kind {
+        AstKind::LogicalExpression(logical) => (span_contains(logical.right.span(), call)
+            && is_expect_chain(&logical.right))
+        .then_some(logical.span),
+        AstKind::ConditionalExpression(ternary) => {
+            let in_arm = span_contains(ternary.consequent.span(), call)
+                || span_contains(ternary.alternate.span(), call);
+            (in_arm && matches!(parent, AstKind::ExpressionStatement(_))).then_some(ternary.span)
+        }
+        AstKind::TryStatement(try_stmt) => {
+            let in_catch = try_stmt
+                .handler
+                .as_ref()
+                .is_some_and(|handler| span_contains(handler.span, call));
+            (in_catch && !try_ends_unreachable(&try_stmt.block)).then_some(try_stmt.span)
+        }
+        _ => None,
+    }
+}
+
 pub struct Check;
 
 impl OxcCheck for Check {
@@ -240,13 +282,15 @@ impl OxcCheck for Check {
         if ident.name.as_str() != "expect" {
             return;
         }
+        // playwright-no-conditional-expect owns these files.
+        if crate::rules::playwright::is_playwright_context(ctx) {
+            return;
+        }
 
-        // Walk ancestors up to the enclosing `it()`/`test()` call, tracking the
-        // outermost `if` that can silently skip this assertion. An `if` reached
-        // after the test call wraps the registration itself (dialect filtering
-        // around `describe()`) — test selection, not a conditional assertion.
+        // Keep the outermost branch below the enclosing `it()`/`test()` call.
+        // An `if` above it selects tests, it gates no assertion.
         let nodes = semantic.nodes();
-        let mut chain: Option<&IfStatement> = None;
+        let mut hazard: Option<Span> = None;
         let mut in_test = false;
         let mut scope: Option<Vec<&Statement>> = None;
         let mut cur_id = nodes.parent_id(node.id());
@@ -265,22 +309,14 @@ impl OxcCheck for Check {
                         && !is_else_if(nodes.kind(nodes.parent_id(cur_id)), if_stmt)
                         && !if_is_exempt(if_stmt, node.id(), semantic, ctx.source, &mut scope)
                     {
-                        chain = Some(if_stmt);
+                        hazard = Some(if_stmt.span);
                     }
                 }
                 AstKind::BlockStatement(block) => {
-                    if let Some(guarded) = chain
-                        && asserts_beside(&block.body, guarded.span)
-                    {
-                        chain = None;
-                    }
+                    hazard = hazard.filter(|guarded| !asserts_beside(&block.body, *guarded));
                 }
                 AstKind::FunctionBody(body) => {
-                    if let Some(guarded) = chain
-                        && asserts_beside(&body.statements, guarded.span)
-                    {
-                        chain = None;
-                    }
+                    hazard = hazard.filter(|guarded| !asserts_beside(&body.statements, *guarded));
                 }
                 AstKind::CallExpression(ancestor_call) => {
                     if let Expression::Identifier(id) = &ancestor_call.callee
@@ -290,7 +326,12 @@ impl OxcCheck for Check {
                         break;
                     }
                 }
-                _ => {}
+                kind => {
+                    let parent = nodes.kind(nodes.parent_id(cur_id));
+                    if let Some(span) = expression_hazard(kind, parent, call.span) {
+                        hazard = Some(span);
+                    }
+                }
             }
             cur_id = nodes.parent_id(cur_id);
         }
@@ -298,10 +339,9 @@ impl OxcCheck for Check {
         if !in_test {
             return;
         }
-        let Some(chain) = chain else { return };
-        let (line, column) = byte_offset_to_line_col(ctx.source, chain.span.start as usize);
-        // The hazard belongs to the chain, not to each `expect` it holds: the
-        // first assertion reached reports it for all of them.
+        let Some(hazard) = hazard else { return };
+        let (line, column) = byte_offset_to_line_col(ctx.source, hazard.start as usize);
+        // One report per branch construct, whatever its `expect` count.
         if diagnostics
             .iter()
             .any(|d| d.line == line && d.column == column)
@@ -313,7 +353,7 @@ impl OxcCheck for Check {
             line,
             column,
             rule_id: super::META.id.into(),
-            message: "Assertions inside this if-branch are silently skipped when the branch is not taken \u{2014} make them unconditional.".into(),
+            message: "Assertions inside this conditional are silently skipped when their branch does not run \u{2014} make them unconditional.".into(),
             severity: super::META.severity,
             span: None,
         });
@@ -649,5 +689,84 @@ mod tests {
                      if (dataset.typed) { expect(dataset.typed).toBe(true); }\n\
                    });";
         assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn flags_expect_gated_by_logical_operator() {
+        for op in ["&&", "||", "??"] {
+            let src = format!("it('x', () => {{\n  ok {op} expect(v).toBe(1);\n}});");
+            assert_eq!(run(&src).len(), 1, "{op}: {:?}", run(&src));
+        }
+    }
+
+    fn assert_each_yields(sources: &[String], expected: usize) {
+        for src in sources {
+            assert_eq!(run(src).len(), expected, "{src}: {:?}", run(src));
+        }
+    }
+
+    fn catch_test(prelude: &str, try_tail: &str) -> String {
+        format!(
+            "it('x', async () => {{\n  {prelude}\n  try {{ await run(); {try_tail} }} catch (e) {{ expect(e).toBeInstanceOf(Err); }}\n}});"
+        )
+    }
+
+    #[test]
+    fn flags_expect_in_statement_ternary() {
+        let src = "it('x', () => {\n  cond ? expect(a).toBe(1) : expect(b).toBe(2);\n});";
+        assert_eq!(run(src).len(), 1, "{:?}", run(src));
+    }
+
+    #[test]
+    fn allows_value_position_ternary() {
+        let sources = [
+            "it('x', () => {\n  const v = cond ? a : b;\n  expect(v).toBe(1);\n});".to_string(),
+            "it('x', () => {\n  const r = cond ? expect(a) : null;\n});".to_string(),
+        ];
+        assert_each_yields(&sources, 0);
+    }
+
+    #[test]
+    fn flags_expect_in_catch_clause() {
+        let src = catch_test("", "");
+        assert_eq!(run(&src).len(), 1, "{:?}", run(&src));
+    }
+
+    #[test]
+    fn allows_catch_when_test_declares_assertion_count() {
+        let sources = [
+            catch_test("expect.assertions(1);", ""),
+            catch_test("expect.hasAssertions();", ""),
+        ];
+        assert_each_yields(&sources, 0);
+    }
+
+    #[test]
+    fn allows_catch_when_try_ends_unreachable() {
+        let sources = [
+            catch_test("", "throw new Error(\"unreachable\");"),
+            catch_test("", "fail();"),
+            catch_test("", "expect.unreachable();"),
+        ];
+        assert_each_yields(&sources, 0);
+    }
+
+    #[test]
+    fn skips_playwright_test_files() {
+        let src = "import { test, expect } from '@playwright/test';\n\
+                   test('a', async ({ page }) => {\n\
+                     if (x) { expect(a).toBe(1); }\n\
+                     ok && expect(v).toBe(2);\n\
+                     cond ? expect(a).toBe(1) : expect(b).toBe(2);\n\
+                     try { await run(); } catch (e) { expect(e).toBeInstanceOf(Err); }\n\
+                   });";
+        let diagnostics = crate::rules::test_helpers::run_rule(&Check, src, "e2e/a.spec.ts");
+        assert_eq!(diagnostics.len(), 0, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn allows_logical_beside_unconditional_assertion() {
+        let src = "it('x', () => {\n  expect(x).toBe(1);\n  ok && expect(v).toBe(2);\n});";
+        assert_eq!(run(src).len(), 0, "{:?}", run(src));
     }
 }
