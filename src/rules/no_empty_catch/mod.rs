@@ -1,7 +1,10 @@
-//! no-empty-catch — flag empty catch blocks that silently swallow errors.
+//! no-empty-catch — flag silently swallowed errors.
+//! Covers empty catch blocks and discarded promise rejection handlers.
 
 mod oxc_typescript;
 mod rust;
+#[cfg(test)]
+mod tests;
 
 use crate::diagnostic::Severity;
 use crate::files::Language;
@@ -11,7 +14,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "no-empty-catch",
-    description: "Disallow empty catch blocks that silently swallow errors.",
+    description: "Disallow empty catch blocks and discarded promise rejection handlers \
+                  that silently swallow errors.",
     remediation: "Handle the error explicitly — log it, rethrow, or add a comment \
                   explaining why swallowing is intentional.",
     severity: Severity::Error,

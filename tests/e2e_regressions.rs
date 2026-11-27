@@ -842,3 +842,15 @@ fn fix_reads_the_clippy_table_of_comply_toml_issue_8614() {
     assert!(fixed.contains("is_empty()"), "{fixed}");
     assert!(fixed.contains("x >= 1 && x < 10"), "{fixed}");
 }
+
+#[test]
+fn discarded_silent_catch_yields_one_diagnostic_issue_8679() {
+    // rbaumier/comply#8679: one silent handler, exactly one report.
+    let source = "declare const p: Promise<number>;\np.catch(() => undefined);\n";
+    let (_dir, path) = write_ts_file("silent.ts", source);
+    common::comply()
+        .arg(&path)
+        .assert()
+        .stdout(predicate::str::contains("no-empty-catch"))
+        .stderr(predicate::str::contains("comply: 1 violation found"));
+}
