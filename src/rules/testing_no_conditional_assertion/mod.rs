@@ -1,5 +1,4 @@
-//! testing-no-conditional-assertion — flag the `if` chain inside a `test()` /
-//! `it()` callback whose branches hold the test's only assertions.
+//! testing-no-conditional-assertion — flag a test's only assertions behind a skippable branch.
 
 mod oxc_typescript;
 
@@ -11,7 +10,7 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-no-conditional-assertion",
-    description: "Assertions inside if-branches silently skip when the branch is not taken — the test passes but checks nothing.",
+    description: "Assertions gated by if, &&, ||, ??, a statement ternary or a catch clause silently skip when that branch does not run — the test passes but checks nothing.",
     remediation: "Make the assertion unconditional. If the branch depends on input, split into separate tests or use expect.soft / describe.each.",
     severity: Severity::Error,
     doc_url: None,
