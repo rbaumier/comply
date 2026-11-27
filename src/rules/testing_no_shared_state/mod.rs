@@ -1,5 +1,4 @@
-//! testing-no-shared-state — flag top-level `let`/`var` in test files that
-//! are mutated inside `test(...)` blocks without being reset in `beforeEach`.
+//! testing-no-shared-state — shared state mutated in tests without a hook reset.
 
 mod oxc_typescript;
 
@@ -11,8 +10,8 @@ use crate::rules::meta::RuleMeta;
 
 pub const META: RuleMeta = RuleMeta {
     id: "testing-no-shared-state",
-    description: "Top-level let/var mutated across test() blocks without being reset in beforeEach — tests become order-dependent.",
-    remediation: "Move the variable inside each test, or reset it in beforeEach(). Prefer fresh state per test over shared mutable state.",
+    description: "Top-level let/var or imported object mutated in test() blocks without being reset in beforeEach/afterEach/afterAll — tests become order-dependent.",
+    remediation: "Move the variable inside each test, or reset the binding or path in beforeEach(), afterEach() or afterAll(). Prefer fresh state per test over shared mutable state.",
     severity: Severity::Error,
     doc_url: None,
     categories: &["testing"],
