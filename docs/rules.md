@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2091 rules across 153 categories.
+2092 rules across 153 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [tanstack-query](#tanstack-query) (17 rules)
 - [tanstack-start](#tanstack-start) (11 rules)
 - [tanstack-start > security](#tanstack-start-security) (3 rules)
-- [testing](#testing) (86 rules)
+- [testing](#testing) (87 rules)
 - [testing > jest](#testing-jest) (2 rules)
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
@@ -2468,6 +2468,7 @@
 | `testing-prefer-msw` | Mocking HTTP clients directly is brittle — use MSW to intercept at the network layer. | Replace `vi.mock('axios')` / `jest.mock('node-fetch')` / `global.fetch = vi.fn()` with an MSW request handler. |
 | `testing-prefer-test-each` | Looping over `test` / `it` hides failures — use `test.each` so each row is its own named case. | Replace `for (const row of cases) { test(..., () => {...}) }` with `test.each(cases)(..., (row) => {...})`. |
 | `testing-require-testid-kebab-case` | data-testid / data-test values must be kebab-case for consistent, selector-safe querying. | Use lowercase letters, digits, and hyphens only (e.g. 'submit-button', 'user-card-name'). |
+| `testing-strict-msw` | An MSW server or worker that warns on or bypasses unhandled requests lets tests reach the real network. | Pass `{ onUnhandledRequest: "error" }` (msw 3: `onUnhandledFrame: "error"`) to `server.listen()` / `worker.start()`. |
 | `valid-describe-callback` | `describe` callback must be a synchronous function with no parameters and no return value. | describe callback must be sync function with no parameters and no return |
 | `valid-expect` | `expect()` must be called with at least one argument. | Pass the value under test to `expect(value)` before the matcher. |
 | `valid-expect-in-promise` | Assertions in Promise `.then()`/`.catch()` must be returned or awaited. | Return or await the Promise chain containing the `expect()` call. |
