@@ -2206,4 +2206,9 @@ mod tests {
         let diags = run_on("function f() {\n  const x = this;\n  Reflect.apply(x, ctx, args);\n}");
         assert_eq!(diags.len(), 1);
     }
+
+    #[test]
+    fn allows_this_retries_in_mocha_describe_callback() {
+        assert!(run_on("describe('x', function () { this.retries(3) })").is_empty());
+    }
 }

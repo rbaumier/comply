@@ -2,7 +2,7 @@
 
 # comply rule catalog
 
-2094 rules across 153 categories.
+2095 rules across 153 categories.
 
 ## Categories
 
@@ -139,7 +139,7 @@
 - [tanstack-query](#tanstack-query) (17 rules)
 - [tanstack-start](#tanstack-start) (11 rules)
 - [tanstack-start > security](#tanstack-start-security) (3 rules)
-- [testing](#testing) (89 rules)
+- [testing](#testing) (90 rules)
 - [testing > jest](#testing-jest) (2 rules)
 - [testing > playwright](#testing-playwright) (2 rules)
 - [testing > testing-library](#testing-testing-library) (3 rules)
@@ -2461,6 +2461,7 @@
 | `testing-no-mocking-internal-modules` | Mocking a relative internal module (or any package, under `include_packages`) couples tests to implementation details. | Mock only external boundaries (HTTP, DB, third-party SDKs). Refactor so the collaborator is injected, or rely on the real internal module. |
 | `testing-no-mocktimers-without-restore` | useFakeTimers() without a matching useRealTimers() in afterEach/afterAll leaks mocked timers into sibling tests. | Call vi.useRealTimers() (or jest.useRealTimers()) in afterEach/afterAll to restore the real timers. |
 | `testing-no-real-external-service` | Test makes a real network call to an external service — intercept it with MSW instead. | Mock the external service with MSW (or equivalent) — never hit the real endpoint from tests. |
+| `testing-no-retry` | A test retry count above zero hides flaky tests instead of fixing them. | Remove the retry and fix the flakiness, or keep retries CI-only with a conditional such as `process.env.CI ? 2 : 0`. |
 | `testing-no-shared-signal` | An AbortSignal timeout or AbortController created once is shared by several tests or requests — later ones inherit a spent or aborted signal. | Create the signal where the request is made, and the controller inside the test or in beforeEach(). |
 | `testing-no-shared-state` | Top-level let/var or imported object mutated in test() blocks without being reset in beforeEach/afterEach/afterAll — tests become order-dependent. | Move the variable inside each test, or reset the binding or path in beforeEach(), afterEach() or afterAll(). Prefer fresh state per test over shared mutable state. |
 | `testing-no-sleep-in-test` | No fixed-delay sleep inside JS/TS tests. | A fixed wait makes the test slow and flaky. Wait on the condition itself (`waitFor`, `expect.poll`, an event or a promise), or drive time with fake timers (`vi.useFakeTimers()` + `vi.advanceTimersByTime(ms)`). |
