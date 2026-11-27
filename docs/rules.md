@@ -463,7 +463,7 @@
 | `no-duplicate-string` | String literal appears 3+ times — extract to a constant. | Extract the repeated string into a named constant and reference it everywhere. Reduces typo risk and makes future changes a single-line edit. |
 | `no-duplicated-branches` | Two branches of an if/else have identical bodies. | Merge the conditions or remove the duplicate branch. |
 | `no-element-overwrite` | A collection element is written and immediately overwritten on the next line. | Remove the first assignment or use a different key/index. |
-| `no-empty-catch` | Disallow empty catch blocks that silently swallow errors. | Handle the error explicitly — log it, rethrow, or add a comment explaining why swallowing is intentional. |
+| `no-empty-catch` | Disallow empty catch blocks and discarded promise rejection handlers that silently swallow errors. | Handle the error explicitly — log it, rethrow, or add a comment explaining why swallowing is intentional. |
 | `no-empty-file` | Empty files are not allowed — they add noise without value. | Add meaningful content or delete the file. |
 | `no-equals-in-for-termination` | `for` loop uses `==` or `===` in the termination condition. | Use `<`, `<=`, `>`, or `>=` instead. Equality checks in `for` termination either never execute the body or loop forever if the counter skips the target value. |
 | `no-for-in-iterable` | `for...in` iterates over object keys, not values — use `for...of` for arrays. | Replace `for (x in arr)` with `for (x of arr)`. `for...in` enumerates property names (strings), including inherited ones, which is almost never the intent for arrays or iterables. |
